@@ -1167,12 +1167,19 @@
       margin-bottom: 4px;
     }
     .overview + .overview { margin-bottom: 16px; color: var(--muted); font-size: 13px; }
+    .digest-group {
+      margin-bottom: 16px;
+    }
+    .digest-heading {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+    }
 
     .camps {
       display: flex;
       flex-direction: column;
       gap: 10px;
-      margin-bottom: 16px;
     }
     .camp-card {
       padding: 14px 16px;
@@ -1198,8 +1205,18 @@
       font-style: italic;
       border-left: 3px solid var(--border);
       padding-left: 10px;
-      margin: 0;
+      margin: 8px 0 0;
       line-height: 1.55;
+    }
+    .camp-stance {
+      font-size: 13.5px;
+      line-height: 1.6;
+      margin: 0;
+    }
+    .camp-stance + .camp-stance {
+      color: var(--muted);
+      font-size: 12.5px;
+      margin-top: 3px;
     }
 
     .consensus-block {
@@ -1211,6 +1228,30 @@
     }
     .consensus-block strong { display: block; margin-bottom: 6px; }
     .consensus-block p { font-size: 13.5px; line-height: 1.65; }
+
+    .disputes-block {
+      background: #EFF6FF;
+      border: 1px solid #BFDBFE;
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 14px;
+    }
+    .disputes-block strong { display: block; margin-bottom: 8px; }
+    .dispute-list {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .dispute-list li {
+      font-size: 13.5px;
+      line-height: 1.65;
+      margin-bottom: 6px;
+    }
+    .dispute-list li:last-child { margin-bottom: 0; }
+    .dispute-list .bi-en {
+      color: var(--muted);
+      font-size: 12.5px;
+      margin-top: 2px;
+    }
 
     .corrections-block,
     .spicy-block {
@@ -1248,6 +1289,20 @@
       margin-bottom: 6px;
     }
     .spicy-card p { font-size: 12.5px; color: var(--muted); }
+    .hn-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      margin-left: 6px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-style: normal;
+      font-weight: 700;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .hn-link:hover { text-decoration: underline; }
 
     /* ── Knowledge Base Drawer ───────────────────────────────────────────── */
     .kb-overlay {

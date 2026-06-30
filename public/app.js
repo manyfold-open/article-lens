@@ -880,48 +880,80 @@ function renderCommentDigest(d, itemId, flags) {
   }
   const wl = { majority: '主流', 'vocal-minority': '少數派', fringe: '邊緣觀點' };
   const wc = { majority: 'badge-green', 'vocal-minority': 'badge-amber', fringe: 'badge-muted' };
-  const hnLink = id => id ? `<a href="https://news.ycombinator.com/item?id=${id}" target="_blank" rel="noopener" class="hn-link">HN ↗</a>` : '';
+  const weightLabel = weight => wl[weight] || weight || '觀點';
+  const camps = (d.camps || []).filter(c => biText(c?.label) || biText(c?.stance) || c?.quote);
+  const disputes = (d.disputes || []).filter(biText);
+  const corrections = (d.expert_corrections || []).filter(ec => biText(ec?.correction));
+  const spicy = (d.spicy || []).filter(s => s?.quote || s?.zh);
+  const hnLink = (id, label = '看原留言') => {
+    const n = Number(id);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return `<a href="https://news.ycombinator.com/item?id=${n}" target="_blank" rel="noopener" class="hn-link">${esc(label)} ↗</a>`;
+  };
+  const emptyDiscussion = !camps.length && !disputes.length && !corrections.length && !spicy.length && !biText(d.consensus);
 
   document.getElementById('comments-content').innerHTML = `
     ${sectionTrustNote('comments')}
     ${flags?.comments_sampled ? '<p class="trust-line">只分析高訊號留言串，沒有逐字看完整留言區。</p>' : ''}
     <p class="overview bi-zh">${esc(d.overview?.zh || '')}</p>
     <p class="overview bi-en">${esc(d.overview?.en || '')}</p>
+    ${emptyDiscussion ? '<p class="muted">小潛沒有抓到明確派別、爭議或可引用留言。</p>' : ''}
 
-    ${(d.camps || []).length ? `<div class="camps">
-      ${d.camps.map(c => `<div class="camp-card">
+    ${camps.length ? `<div class="digest-group">
+      <strong class="small mono digest-heading">主要派別 Camps</strong>
+      <div class="camps">
+      ${camps.map(c => `<div class="camp-card">
         <div class="camp-header">
-          <span class="bi-zh camp-label">${esc(c.label.zh)}</span>
-          <span class="bi-en camp-label">${esc(c.label.en)}</span>
-          <span class="badge ${wc[c.weight] || 'badge-muted'}">${wl[c.weight] || c.weight}</span>
+          <span class="bi-zh camp-label">${esc(c.label?.zh || '')}</span>
+          <span class="bi-en camp-label">${esc(c.label?.en || '')}</span>
+          <span class="badge ${wc[c.weight] || 'badge-muted'}">${esc(weightLabel(c.weight))}</span>
         </div>
-        <blockquote class="camp-quote">"${esc(c.quote)}" ${hnLink(c.comment_id)}</blockquote>
+        <p class="camp-stance bi-zh">${esc(c.stance?.zh || '')}</p>
+        <p class="camp-stance bi-en">${esc(c.stance?.en || '')}</p>
+        ${c.quote ? `<blockquote class="camp-quote">"${esc(c.quote)}" ${hnLink(c.comment_id)}</blockquote>` : hnLink(c.comment_id)}
       </div>`).join('')}
+      </div>
     </div>` : ''}
 
-    ${d.consensus ? `<div class="consensus-block">
+    ${biText(d.consensus) ? `<div class="consensus-block">
       <strong class="small mono">共識 Consensus</strong>
-      <p class="bi-zh">${esc(d.consensus.zh)}</p>
-      <p class="bi-en">${esc(d.consensus.en)}</p>
+      <p class="bi-zh">${esc(d.consensus?.zh || '')}</p>
+      <p class="bi-en">${esc(d.consensus?.en || '')}</p>
     </div>` : ''}
 
-    ${(d.expert_corrections || []).length ? `<div class="corrections-block">
-      <strong class="small mono red">⚠️ 專家糾錯 Expert Corrections</strong>
-      ${d.expert_corrections.map(ec => `<div class="correction-card">
-        <p class="bi-zh">${esc(ec.correction.zh)}</p>
-        <p class="bi-en">${esc(ec.correction.en)}</p>
+    ${disputes.length ? `<div class="disputes-block">
+      <strong class="small mono">爭議點 Disputes</strong>
+      <ul class="dispute-list">
+        ${disputes.map(x => `<li>
+          <span class="bi-zh">${esc(x.zh || '')}</span>
+          <span class="bi-en">${esc(x.en || '')}</span>
+        </li>`).join('')}
+      </ul>
+    </div>` : ''}
+
+    ${corrections.length ? `<div class="corrections-block">
+      <strong class="small mono red">專家糾錯 Expert Corrections</strong>
+      ${corrections.map(ec => `<div class="correction-card">
+        <p class="bi-zh">${esc(ec.correction?.zh || '')}</p>
+        <p class="bi-en">${esc(ec.correction?.en || '')}</p>
         ${hnLink(ec.comment_id)}
       </div>`).join('')}
     </div>` : ''}
 
-    ${(d.spicy || []).length ? `<div class="spicy-block">
-      <strong class="small mono amber">🌶️ 辣評 Spicy Take</strong>
-      ${d.spicy.map(s => `<div class="spicy-card">
-        <blockquote>"${esc(s.quote)}"</blockquote>
+    ${spicy.length ? `<div class="spicy-block">
+      <strong class="small mono amber">辣評 Spicy Takes</strong>
+      ${spicy.map(s => `<div class="spicy-card">
+        ${s.quote ? `<blockquote>"${esc(s.quote)}"</blockquote>` : ''}
         <p class="bi-zh">${esc(s.zh)}</p>
         ${hnLink(s.comment_id)}
       </div>`).join('')}
     </div>` : ''}`;
+}
+
+function biText(v) {
+  if (!v) return '';
+  if (typeof v === 'string') return v.trim();
+  return String(v.zh || v.en || '').trim();
 }
 
 function renderMetaBar(r) {
