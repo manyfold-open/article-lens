@@ -138,6 +138,10 @@ async function handleAnalyze(url: URL, env: Env): Promise<Response> {
       if (g && typeof g.v === 'number') graph = g
     } catch { /* ignore malformed graph */ }
   }
+  // Fold the graph into the cache key so a custom orchestration doesn't collide
+  // with — or get shadowed by — the default-layout cache. No graph → '' → keys
+  // are byte-for-byte today's, so existing cached analyses stay valid.
+  const graphTag = graph && graphRaw ? `:g${hashStr(graphRaw)}` : ''
 
   ;(async () => {
     try {
@@ -147,9 +151,9 @@ async function handleAnalyze(url: URL, env: Env): Promise<Response> {
         return
       }
       const { item, articleText, itemType, cacheKey, source } = r
-      const sharedKey = `${cacheKey}:shared`
-      const jargonKey = `${cacheKey}:j:${kbHash}`
-      const fullKey   = `${cacheKey}:${kbHash}`
+      const sharedKey = `${cacheKey}:shared${graphTag}`
+      const jargonKey = `${cacheKey}:j:${kbHash}${graphTag}`
+      const fullKey   = `${cacheKey}:${kbHash}${graphTag}`
 
       // Fast path: this exact (item + KB) was analysed before.
       const cachedFull = await kvGet(env, fullKey)
