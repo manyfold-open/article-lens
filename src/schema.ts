@@ -86,7 +86,7 @@ export interface SSEPlan   { event: 'plan';   agents: AgentName[] }
 export interface SSEStatus { event: 'status'; agent: AgentName; state: AgentState; label: BiStr }
 export interface SSEStep   { event: 'step';   agent: AgentName; label: BiStr }
 export interface SSEResult { event: 'result'; data: HNLensResult }
-export interface SSEError  { event: 'error';  agent?: AgentName; message: string }
+export interface SSEError  { event: 'error';  agent?: AgentName; message: string; kind?: 'sandbox_unavailable' | 'agent_error' }
 // A section streams as soon as its agent finishes, so panels populate early.
 export interface SSESection { event: 'section'; agent: AgentName; data: unknown }
 export type SSEEvent = SSEPlan | SSEStatus | SSEStep | SSEResult | SSEError | SSESection

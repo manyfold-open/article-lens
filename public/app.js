@@ -27,6 +27,8 @@ const AGENT_COLORS = {
 };
 // latest SSE label/state per agent — powers the click-to-inspect panel
 const agentStatus = {};
+const sandboxDownAgents = new Set();
+const sandboxDownReasons = {};
 const WORKFLOW_STAGES = [
   { key: 'recall', label: '集合' },
   { key: 'assign', label: '分派' },
@@ -211,6 +213,8 @@ function startAnalysis(input) {
   document.getElementById('progress-text').textContent = '分析中… / Analyzing…';
   document.getElementById('agents-status').innerHTML = '';
   Object.keys(agentStatus).forEach(k => delete agentStatus[k]);
+  sandboxDownAgents.clear();
+  Object.keys(sandboxDownReasons).forEach(k => delete sandboxDownReasons[k]);
   latestBriefing = null;
   currentResult = null;
   clearReportPanels();
@@ -246,6 +250,8 @@ function handleSSEEvent(ev, es) {
       totalAgents = ev.agents.length;
       ev.agents.forEach(a => {
         ensureAgentRow(a);
+        sandboxDownAgents.delete(a);
+        delete sandboxDownReasons[a];
         if (window.pixelAgents) window.pixelAgents.setAgentState(a, 'idle');
       });
       // Kick off the office choreography: 隊長 walks over to assign the work.
@@ -260,7 +266,7 @@ function handleSSEEvent(ev, es) {
         if (ev.state === 'running') setWorkflowStage('synth');
         const pt = document.getElementById('progress-text');
         if (pt && ev.label) pt.textContent = ev.label.zh || ev.label.en || '';
-        if (window.pixelAgents) {
+        if (window.pixelAgents && !sandboxDownAgents.has('synth')) {
           const sState = ev.state === 'running' ? 'typing' : ev.state;
           window.pixelAgents.setAgentState('synth', sState);
           if (ev.label) window.pixelAgents.setSpeechBubble('synth', ev.label.zh);
@@ -269,7 +275,7 @@ function handleSSEEvent(ev, es) {
       }
       updateAgentRow(ev.agent, ev.state, ev.label);
       if (ev.state === 'running') setWorkflowStage('analyze');
-      if (window.pixelAgents) {
+      if (window.pixelAgents && !sandboxDownAgents.has(ev.agent)) {
         const pxState = ev.state === 'running' ? 'typing' : ev.state;
         window.pixelAgents.setAgentState(ev.agent, pxState);
         if (ev.label) window.pixelAgents.setSpeechBubble(ev.agent, ev.label.zh);
@@ -279,7 +285,7 @@ function handleSSEEvent(ev, es) {
     case 'step':
       agentStatus[ev.agent] = { state: 'running', label: ev.label };
       updateBubble(ev.agent, ev.label);
-      if (window.pixelAgents && ev.label) window.pixelAgents.setSpeechBubble(ev.agent, ev.label.zh);
+      if (window.pixelAgents && ev.label && !sandboxDownAgents.has(ev.agent)) window.pixelAgents.setSpeechBubble(ev.agent, ev.label.zh);
       break;
     case 'section':
       if (ev.data?.briefing) latestBriefing = ev.data.briefing;
@@ -294,14 +300,22 @@ function handleSSEEvent(ev, es) {
       break;
     case 'error':
       if (ev.agent) {
+        const sandboxDown = ev.kind === 'sandbox_unavailable';
         const current = agentStatus[ev.agent]?.state;
-        if (current === 'running' || current === 'done') break;
-        // One agent fell over (e.g. its runtime 502'd) — show it asleep in the
-        // office and keep the run going; the section degrades gracefully.
-        agentStatus[ev.agent] = { state: 'error', label: { zh: '睡著了 💤', en: 'asleep 💤' } };
+        if (!sandboxDown && (current === 'running' || current === 'done')) break;
+        if (sandboxDown) {
+          sandboxDownAgents.add(ev.agent);
+          sandboxDownReasons[ev.agent] = ev.message || 'sandbox/runtime 不在線';
+        }
+        agentStatus[ev.agent] = {
+          state: 'error',
+          label: sandboxDown
+            ? { zh: 'sandbox 睡著了 💤', en: 'sandbox asleep 💤' }
+            : { zh: '睡著了 💤', en: 'asleep 💤' },
+        };
         if (window.pixelAgents) {
           window.pixelAgents.setAsleep(ev.agent, true);
-          window.pixelAgents.setSpeechBubble(ev.agent, '💤 睡著了');
+          window.pixelAgents.setSpeechBubble(ev.agent, sandboxDown ? '💤 sandbox 睡著了' : '💤 睡著了');
         }
       } else {
         // Fatal error — abort the run.
@@ -745,6 +759,13 @@ function agentHoverDetail(id) {
   const st = agentStatus[id];
   const source = currentResult?.flags?.agent_sources?.[id];
   const sourceLabels = { real: '真實分析', cache: '使用快取', fallback: '備援內容', skipped: '隊長略過' };
+  if (sandboxDownAgents.has(id)) {
+    return {
+      state: 'sandbox 睡著了',
+      source: source ? (sourceLabels[source.mode] || source.mode) : 'runtime 不在線',
+      reason: source?.reason?.zh || sandboxDownReasons[id] || '這位 agent 的執行環境沒有 alive，所以改用備援內容。',
+    };
+  }
   if (source) {
     return {
       state: sourceLabels[source.mode] || source.mode,

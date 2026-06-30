@@ -254,9 +254,10 @@ async function runSummary(
     return summary
   } catch (e) {
     fallbackAgents?.add('sum')
+    const sandboxReason = emitSandboxUnavailable('sum', e, emit)
     emit({ event: 'status', agent: 'sum', state: 'done', label: bz('摘要用備援內容') })
     emit({ event: 'section', agent: 'sum', data: mock.summary })
-    if (agentSources) agentSources.sum = { mode: 'fallback', reason: bz(`小摘未能順利回覆，改用本地備援摘要。原因：${shortErr(e)}`) }
+    if (agentSources) agentSources.sum = { mode: 'fallback', reason: fallbackReason('小摘', e, sandboxReason, '改用本地備援摘要') }
     return mock.summary
   }
 }
@@ -282,9 +283,10 @@ async function runContext(
     return verdict
   } catch (e) {
     fallbackAgents?.add('ctx')
+    const sandboxReason = emitSandboxUnavailable('ctx', e, emit)
     emit({ event: 'status', agent: 'ctx', state: 'done', label: bz('裁定用備援內容') })
     emit({ event: 'section', agent: 'ctx', data: mock.verdict })
-    if (agentSources) agentSources.ctx = { mode: 'fallback', reason: bz(`小導未能順利回覆，改用本地裁定。原因：${shortErr(e)}`) }
+    if (agentSources) agentSources.ctx = { mode: 'fallback', reason: fallbackReason('小導', e, sandboxReason, '改用本地裁定') }
     return mock.verdict
   }
 }
@@ -312,9 +314,10 @@ async function runComments(
     return cd
   } catch (e) {
     fallbackAgents?.add('comments')
+    const sandboxReason = emitSandboxUnavailable('comments', e, emit)
     emit({ event: 'status', agent: 'comments', state: 'done', label: bz('留言用備援內容') })
     emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
-    if (agentSources) agentSources.comments = { mode: 'fallback', reason: bz(`小潛未能順利回覆，改用本地留言摘要。原因：${shortErr(e)}`) }
+    if (agentSources) agentSources.comments = { mode: 'fallback', reason: fallbackReason('小潛', e, sandboxReason, '改用本地留言摘要') }
     return mock.comment_digest
   }
 }
@@ -377,11 +380,15 @@ async function curate(
     if (d) applyCuration(result, d)
     emit({ event: 'status', agent: 'synth', state: 'done', label: bz('整合完成!') })
     if (agentSources) agentSources.synth = { mode: 'real', reason: bz('合成實際檢查並修剪各段輸出。') }
-  } catch {
-    // Synthesizer unavailable (e.g. its runtime 502'd) → mark it asleep in the
-    // office; the full, un-pruned result still goes out.
-    emit({ event: 'error', agent: 'synth', message: 'synth unavailable' })
-    if (agentSources) agentSources.synth = { mode: 'fallback', reason: bz('合成超過 25 秒或 runtime 失敗；保留各組原始結果，不再等 QA 修剪。') }
+  } catch (e) {
+    const sandboxReason = emitSandboxUnavailable('synth', e, emit)
+    emit({ event: 'status', agent: 'synth', state: 'done', label: bz('整合略過') })
+    if (agentSources) agentSources.synth = {
+      mode: 'fallback',
+      reason: sandboxReason
+        ? bz(`合成的 sandbox/runtime 不在線，保留各組原始結果，不再等 QA 修剪。原因：${sandboxReason}`)
+        : bz(`合成超過 25 秒或 runtime 失敗；保留各組原始結果，不再等 QA 修剪。原因：${shortErr(e)}`),
+    }
   }
 }
 
@@ -629,9 +636,15 @@ async function runJargon(
     return merged
   } catch (e) {
     fallbackAgents?.add('jargon')
+    const sandboxReason = emitSandboxUnavailable('jargon', e, emit)
     emit({ event: 'status', agent: 'jargon', state: 'done', label: bz('術語用備援內容') })
     emit({ event: 'section', agent: 'jargon', data: [] })
-    if (agentSources) agentSources.jargon = { mode: 'fallback', reason: bz(`小詞超過 ${Math.round(timeoutMs / 1000)} 秒或 runtime 失敗，為避免整篇卡住，先不顯示術語。原因：${shortErr(e)}`) }
+    if (agentSources) agentSources.jargon = {
+      mode: 'fallback',
+      reason: sandboxReason
+        ? bz(`小詞的 sandbox/runtime 不在線，為避免整篇卡住，先不顯示術語。原因：${sandboxReason}`)
+        : bz(`小詞最多等待 ${Math.round(timeoutMs / 1000)} 秒；這次沒有及時回覆，為避免整篇卡住，先不顯示術語。原因：${shortErr(e)}`),
+    }
     return []
   }
 }
@@ -658,6 +671,26 @@ function jargonTimeoutMs(text: string): number {
 function shortErr(e: unknown): string {
   const s = e instanceof Error ? e.message : String(e)
   return s.replace(/\s+/g, ' ').slice(0, 120)
+}
+
+function sandboxUnavailableReason(e: unknown): string | null {
+  const msg = shortErr(e)
+  const s = msg.toLowerCase()
+  const hasDownWord = /(not\s+alive|not\s+running|unavailable|stopped|terminated|dead|no\s+live|offline|502|503)/.test(s)
+  const mentionsRuntime = /(sandbox|runtime|container|worker|workerd)/.test(s)
+  const explicit = /(sandbox.*not.*alive|not.*alive.*sandbox|runtime.*502|sandbox.*502)/.test(s)
+  return (explicit || (mentionsRuntime && hasDownWord)) ? msg : null
+}
+
+function emitSandboxUnavailable(agent: AgentName, e: unknown, emit: (event: SSEEvent) => void): string | null {
+  const reason = sandboxUnavailableReason(e)
+  if (reason) emit({ event: 'error', agent, kind: 'sandbox_unavailable', message: reason })
+  return reason
+}
+
+function fallbackReason(agentZh: string, e: unknown, sandboxReason: string | null, fallbackText: string): BiStr {
+  if (sandboxReason) return bz(`${agentZh} 的 sandbox/runtime 不在線，${fallbackText}。原因：${sandboxReason}`)
+  return bz(`${agentZh}未能順利回覆，${fallbackText}。原因：${shortErr(e)}`)
 }
 
 function chunkText(text: string, size: number, maxWindows: number): string[] {
