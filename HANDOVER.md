@@ -159,7 +159,7 @@ client-side (`transCache`).
 
 ## 10. Repo, deploy gate & collaboration
 
-**Git repo:** https://github.com/tldr0810/hn-lens (private, branch `main`). Clone it,
+**Git repo:** https://github.com/tldr0810/article-lens (private, branch `main`). Clone it,
 branch, open PRs — work off the repo, not by editing a shared workspace (two agents
 editing the same file collided badly before).
 
