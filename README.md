@@ -1,6 +1,6 @@
-# HN Lens 📰
+# Article Lens 📰
 
-A bilingual (中-first / EN-on-demand) Hacker News & article reading companion,
+A bilingual (中-first / EN-on-demand) article reading companion,
 deployed as a single Cloudflare Worker. Paste a HN link, any article URL, or some
 text → a pixel-art "office" of agents reads it and produces a verdict, plain-language
 jargon, a summary, and (for HN threads) a comment digest.
