@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-phase="input" data-lang="bilingual" data-depth="key">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HN Lens — Mockup</title>
+<style>
+:root {
+  --bg: #F7F6F4; --ink: #1C1917; --accent: #FF6600;
+  --green: #16A34A; --red: #DC2626; --amber: #D97706;
+  --muted: #78716C; --border: #E7E5E3; --card: #FFFFFF;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+  --mono: 'JetBrains Mono','Cascadia Code','Fira Code',monospace;
+  --body: system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-family: var(--body); background: var(--bg); color: var(--ink); font-size: 15px; }
+body { min-height: 100vh; }
+
+/* ── Phase visibility ─────────────────────────────────────── */
+html[data-phase=input]   .phase-running,
+html[data-phase=input]   .phase-results  { display: none !important; }
+html[data-phase=running] .phase-input,
+html[data-phase=running] .phase-results  { display: none !important; }
+html[data-phase=results] .phase-input,
+html[data-phase=results] .phase-running  { display: none !important; }
+.results-only { display: none !important; }
+html[data-phase=results] .results-only { display: inline-flex !important; }
+
+/* ── Lang toggle ──────────────────────────────────────────── */
+html[data-lang=zh] .bi-en { display: none; }
+html[data-lang=en] .bi-zh { display: none; }
+
+/* ── Depth toggle ─────────────────────────────────────────── */
+html[data-depth=overview] .depth-key,
+html[data-depth=overview] .depth-deep { display: none; }
+html[data-depth=key]      .depth-deep  { display: none; }
+
+/* ── Topbar ───────────────────────────────────────────────── */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 20px; height: 52px;
+  background: rgba(247,246,244,.92); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.logo { font-family: var(--mono); font-weight: 700; font-size: 1rem; text-decoration: none; color: var(--ink); }
+.logo .o { color: var(--accent); }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.kb-pill {
+  font-family: var(--mono); font-size: .75rem; padding: 4px 10px;
+  border: 1.5px solid var(--accent); border-radius: 99px;
+  background: transparent; color: var(--ink); cursor: pointer;
+  transition: background .15s;
+}
+.kb-pill:hover { background: #fff3eb; }
+
+/* ── Toggle groups ────────────────────────────────────────── */
+.toggle-group { display: inline-flex; border: 1.5px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.toggle-btn {
+  font-family: var(--mono); font-size: .72rem; padding: 4px 10px;
+  background: transparent; border: none; cursor: pointer; color: var(--muted);
+  transition: background .12s, color .12s;
+}
+.toggle-btn:hover { background: #f0ede8; }
+.toggle-btn.active { background: var(--accent); color: #fff; }
+
+/* ── Container ────────────────────────────────────────────── */
+.container { max-width: 720px; margin: 0 auto; padding: 28px 20px 60px; }
+
+/* ── Pixel office (CSS-only) ──────────────────────────────── */
+.office-scene {
+  background: linear-gradient(to bottom, #E8E2DA 55%, #F0EDE8 55%);
+  border-radius: var(--radius); border: 1px solid var(--border);
+  padding: 16px; display: grid; grid-template-columns: 1fr 1fr;
+  gap: 12px; max-width: 480px; margin: 0 auto 24px;
+  position: relative; overflow: hidden;
+}
+.office-scene::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: var(--ink);
+}
+.agent-desk {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.agent-body-wrap {
+  display: flex; flex-direction: column; align-items: center;
+  animation: bob 2s ease-in-out infinite;
+}
+html[data-phase=running] .agent-body-wrap.active { animation: bob-fast .5s ease-in-out infinite; }
+html[data-phase=results] .agent-body-wrap { animation: none; }
+
+@keyframes bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
+@keyframes bob-fast { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+@media (prefers-reduced-motion: reduce) {
+  .agent-body-wrap { animation: none !important; }
+}
+
+.agent-head { width: 14px; height: 14px; border-radius: 2px; background: #FDE68A; position: relative; }
+.agent-head::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 5px; border-radius: 2px 2px 0 0; }
+.agent-torso { width: 18px; height: 18px; border-radius: 2px; margin-top: 2px; }
+.agent-desk-surface { width: 44px; height: 5px; background: #D6D3D1; border-radius: 1px; margin-top: 2px; }
+.agent-name-label { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 4px; }
+.agent-bubble {
+  font-family: var(--mono); font-size: 9px; color: var(--ink);
+  background: rgba(255,255,255,.95); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 7px; white-space: nowrap;
+  margin-bottom: 4px; display: none; position: relative;
+}
+.agent-bubble::after {
+  content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
+  border: 3px solid transparent; border-top-color: var(--border);
+}
+html[data-phase=running] .agent-bubble { display: block; }
+html[data-phase=results] .agent-bubble { display: block; }
+
+/* Agent colours */
+.ag-sum    .agent-head::before, .ag-sum    .agent-torso { background: #3B82F6; }
+.ag-jargon .agent-head::before, .ag-jargon .agent-torso { background: #F59E0B; }
+.ag-qian   .agent-head::before, .ag-qian   .agent-torso { background: #14B8A6; }
+.ag-dao    .agent-head::before, .ag-dao    .agent-torso  { background: #8B5CF6; }
+
+/* Lightbulb for 小詞 done */
+.jargon-done { display: none; font-size: 14px; }
+html[data-phase=results] .jargon-done { display: block; }
+
+/* ── Input phase ──────────────────────────────────────────── */
+.intray-label { text-align: center; margin-bottom: 16px; }
+.intray-main { font-size: 1.05rem; font-weight: 600; }
+.intray-sub { font-size: .82rem; color: var(--muted); display: block; margin-top: 2px; }
+.input-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.hn-input {
+  flex: 1; font-family: var(--mono); font-size: .85rem;
+  padding: 9px 12px; border: 1.5px solid var(--border); border-radius: var(--radius);
+  background: var(--card); color: var(--ink); outline: none;
+  transition: border-color .15s;
+}
+.hn-input:focus { border-color: var(--accent); }
+.btn-primary {
+  padding: 9px 20px; background: var(--accent); color: #fff;
+  border: none; border-radius: var(--radius); font-weight: 600; font-size: .9rem;
+  cursor: pointer; white-space: nowrap; transition: background .15s;
+}
+.btn-primary:hover { background: #e05a00; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip {
+  font-family: var(--mono); font-size: .75rem; padding: 4px 10px;
+  border: 1.5px solid var(--border); border-radius: 99px;
+  background: var(--card); cursor: pointer; color: var(--ink); transition: border-color .15s, background .15s;
+}
+.chip:hover { border-color: var(--accent); background: #fff3eb; }
+.example-label { font-family: var(--mono); font-size: .72rem; color: var(--muted); margin-top: 16px; display: block; }
+.frontpage-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.fp-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--card); cursor: pointer; text-align: left; width: 100%;
+  transition: border-color .15s, background .15s;
+}
+.fp-item:hover { border-color: var(--accent); background: #fff3eb; }
+.fp-title { font-size: .85rem; color: var(--ink); }
+.fp-meta { font-family: var(--mono); font-size: .72rem; color: var(--muted); white-space: nowrap; margin-left: 12px; }
+
+/* ── Running phase ────────────────────────────────────────── */
+.progress-wrap { margin-bottom: 20px; }
+.progress-track { height: 6px; background: var(--border); border-radius: 99px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width .4s ease; }
+.progress-label { font-family: var(--mono); font-size: .75rem; color: var(--muted); display: block; margin-top: 6px; }
+.agent-rows { display: flex; flex-direction: column; gap: 10px; }
+.agent-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.agent-dot {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--border); flex-shrink: 0;
+  transition: background .3s;
+}
+.agent-row.running .agent-dot { background: var(--accent); animation: pulse 1s infinite; }
+.agent-row.done    .agent-dot { background: var(--green); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+.agent-label { font-family: var(--mono); font-size: .8rem; min-width: 52px; }
+.agent-speech { font-size: .82rem; color: var(--muted); }
+
+/* ── Results phase ────────────────────────────────────────── */
+.results-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.btn-back {
+  font-family: var(--mono); font-size: .82rem; padding: 6px 12px;
+  border: 1.5px solid var(--border); border-radius: var(--radius);
+  background: var(--card); cursor: pointer; color: var(--ink); transition: border-color .15s;
+}
+.btn-back:hover { border-color: var(--accent); }
+.meta-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.meta-bar a, .meta-bar span { font-family: var(--mono); font-size: .75rem; color: var(--muted); text-decoration: none; }
+.meta-bar a { color: var(--accent); }
+
+/* ── Cards ────────────────────────────────────────────────── */
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+.section-title {
+  font-size: 1rem; font-weight: 700; margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+.section-title-en { font-weight: 400; color: var(--muted); font-size: .85rem; }
+
+/* ── Verdict ──────────────────────────────────────────────── */
+.verdict-card { border-left: 4px solid var(--green); }
+.verdict-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.badge {
+  font-family: var(--mono); font-size: .7rem; padding: 3px 8px;
+  border-radius: 99px; font-weight: 600;
+}
+.badge-green  { background: #dcfce7; color: #166534; }
+.badge-amber  { background: #fef3c7; color: #92400e; }
+.badge-red    { background: #fee2e2; color: #991b1b; }
+.badge-muted  { background: #f5f5f4; color: var(--muted); }
+.badge-accent { background: #fff3eb; color: var(--accent); border: 1px solid #ffd9b8; }
+.verdict-title { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
+.verdict-why { font-size: .88rem; color: var(--ink); line-height: 1.6; }
+.verdict-why + .verdict-why { margin-top: 4px; color: var(--muted); }
+
+/* ── Jargon hero ──────────────────────────────────────────── */
+.jargon-card { background: #FFFBF7; border-color: #FFD9B8; border-left: 4px solid var(--accent); }
+.jargon-hero-sub { font-size: .82rem; color: var(--muted); margin-bottom: 16px; }
+.term-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px; margin-bottom: 10px;
+  transition: transform .15s, box-shadow .15s;
+}
+.term-card:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(255,102,0,.08); }
+.term-header {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px;
+}
+.term-name { font-family: var(--mono); font-weight: 700; font-size: .92rem; color: var(--ink); }
+.term-zh { font-size: .82rem; color: var(--muted); }
+.term-quote {
+  font-size: .78rem; color: var(--muted); border-left: 3px solid var(--border);
+  padding-left: 8px; margin: 6px 0; font-style: italic;
+}
+.term-explain { font-size: .87rem; line-height: 1.65; margin-top: 4px; }
+.term-explain.bi-zh { color: var(--muted); }
+.save-btn {
+  margin-left: auto; font-family: var(--mono); font-size: .7rem; padding: 3px 9px;
+  border: 1.5px solid var(--accent); border-radius: 99px; background: transparent;
+  color: var(--accent); cursor: pointer; white-space: nowrap; transition: background .12s, color .12s;
+}
+.save-btn:hover, .save-btn.saved { background: var(--accent); color: #fff; }
+.save-btn:disabled { opacity: .6; cursor: default; }
+.badge-seen { font-size: .65rem; }
+
+/* ── Ask 小詞 ─────────────────────────────────────────────── */
+.ask-xici { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.ask-xici-label { font-size: .82rem; color: var(--muted); margin-bottom: 8px; display: block; }
+.ask-row { display: flex; gap: 8px; }
+.ask-input {
+  flex: 1; font-family: var(--mono); font-size: .82rem; padding: 8px 12px;
+  border: 1.5px solid var(--border); border-radius: var(--radius); outline: none;
+  transition: border-color .15s;
+}
+.ask-input:focus { border-color: var(--accent); }
+.btn-secondary {
+  padding: 8px 14px; border: 1.5px solid var(--accent); border-radius: var(--radius);
+  background: transparent; color: var(--accent); font-weight: 600; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.btn-secondary:hover { background: var(--accent); color: #fff; }
+
+/* ── Summary ──────────────────────────────────────────────── */
+.tldr { font-size: .9rem; font-weight: 600; line-height: 1.6; margin-bottom: 12px; }
+.tldr .bi-zh { color: var(--muted); font-weight: 400; margin-top: 4px; display: block; }
+.key-points { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.key-points li {
+  padding-left: 16px; font-size: .87rem; line-height: 1.6; position: relative;
+}
+.key-points li::before { content: '→'; position: absolute; left: 0; color: var(--accent); font-family: var(--mono); }
+.key-points li .bi-zh { color: var(--muted); display: block; }
+
+/* ── Comment digest ───────────────────────────────────────── */
+.overview { font-size: .88rem; line-height: 1.65; margin-bottom: 16px; }
+.overview.bi-zh { color: var(--muted); }
+.camps { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.camp-card {
+  border-left: 3px solid var(--accent); padding: 10px 14px;
+  background: #fafaf9; border-radius: 0 var(--radius) var(--radius) 0;
+}
+.camp-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.camp-label { font-weight: 600; font-size: .87rem; }
+.camp-label.bi-zh + .camp-label.bi-en { font-weight: 400; color: var(--muted); }
+.camp-quote { font-size: .82rem; color: var(--muted); font-style: italic; margin-top: 4px; }
+.hn-link { font-family: var(--mono); font-size: .72rem; color: var(--accent); text-decoration: none; margin-left: 6px; }
+.hn-link:hover { text-decoration: underline; }
+.consensus-block { margin: 12px 0; padding: 12px; background: #f0fdf4; border-radius: var(--radius); border: 1px solid #bbf7d0; }
+.consensus-block strong { font-family: var(--mono); font-size: .72rem; color: var(--green); display: block; margin-bottom: 4px; }
+.consensus-block p { font-size: .85rem; line-height: 1.6; }
+.consensus-block .bi-zh { color: var(--muted); }
+.correction-card {
+  border-left: 3px solid var(--red); padding: 10px 14px;
+  background: #fef2f2; border-radius: 0 var(--radius) var(--radius) 0;
+  margin-top: 8px;
+}
+.correction-card p { font-size: .85rem; line-height: 1.6; }
+.correction-card .bi-zh { color: var(--muted); }
+.corrections-block strong, .spicy-block strong { font-family: var(--mono); font-size: .72rem; display: block; margin-bottom: 6px; }
+.corrections-block strong { color: var(--red); }
+.spicy-block strong { color: var(--amber); }
+.spicy-card {
+  border-left: 3px solid var(--amber); padding: 10px 14px;
+  background: #fffbeb; border-radius: 0 var(--radius) var(--radius) 0;
+  margin-top: 8px;
+}
+.spicy-card blockquote { font-size: .85rem; font-style: italic; color: var(--ink); margin-bottom: 4px; }
+.spicy-card p { font-size: .82rem; color: var(--muted); }
+
+/* ── KB drawer ────────────────────────────────────────────── */
+.kb-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 90;
+  opacity: 0; transition: opacity .2s;
+}
+.kb-overlay.open { opacity: 1; }
+.kb-drawer {
+  position: fixed; top: 0; right: 0; width: 320px; height: 100vh;
+  background: var(--card); border-left: 1px solid var(--border);
+  z-index: 100; transform: translateX(100%); transition: transform .25s ease;
+  display: flex; flex-direction: column;
+}
+.kb-drawer.open { transform: translateX(0); }
+.kb-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+  font-weight: 600; font-size: .9rem;
+}
+.kb-close { background: none; border: none; cursor: pointer; font-size: 1rem; color: var(--muted); }
+.kb-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.kb-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: #fafaf9; }
+.kb-item-header { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+.kb-item .term-name { font-size: .85rem; }
+.kb-item .term-zh { font-size: .78rem; }
+.kb-remove { margin-left: auto; background: none; border: none; cursor: pointer; color: var(--muted); font-size: .8rem; }
+.kb-remove:hover { color: var(--red); }
+.kb-def { font-size: .78rem; color: var(--muted); line-height: 1.5; }
+.kb-empty { font-size: .85rem; color: var(--muted); text-align: center; padding: 24px; }
+
+@media (max-width: 640px) {
+  .container { padding: 16px 14px 40px; }
+  .input-row { flex-direction: column; }
+  .toggle-group { display: none; }
+  .kb-drawer { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<header class="topbar">
+  <span class="logo">HN Lens <span class="o">📰</span></span>
+  <div class="topbar-right">
+    <div class="toggle-group results-only" style="display:none">
+      <button class="toggle-btn active" data-lang="bilingual">雙語</button>
+      <button class="toggle-btn" data-lang="zh">中</button>
+      <button class="toggle-btn" data-lang="en">EN</button>
+    </div>
+    <div class="toggle-group results-only" style="display:none">
+      <button class="toggle-btn" data-depth="overview">一覽</button>
+      <button class="toggle-btn active" data-depth="key">重點</button>
+      <button class="toggle-btn" data-depth="deep">深讀</button>
+    </div>
+    <button class="kb-pill" id="kb-pill">📚 <span id="kb-count">0</span></button>
+  </div>
+</header>
+
+<!-- PIXEL OFFICE (shown in all phases) -->
+<div class="container">
+<div class="office-scene">
+  <!-- 小摘 sum top-left -->
+  <div class="agent-desk ag-sum">
+    <div class="agent-bubble" id="bub-sum">讀文章中…</div>
+    <div class="agent-body-wrap active">
+      <div class="agent-head"></div>
+      <div class="agent-torso"></div>
+    </div>
+    <div class="agent-desk-surface"></div>
+    <span class="agent-name-label">小摘</span>
+  </div>
+  <!-- 小詞 jargon top-right -->
+  <div class="agent-desk ag-jargon">
+    <div class="jargon-done">💡</div>
+    <div class="agent-bubble" id="bub-jargon">找術語中…</div>
+    <div class="agent-body-wrap active">
+      <div class="agent-head"></div>
+      <div class="agent-torso"></div>
+    </div>
+    <div class="agent-desk-surface"></div>
+    <span class="agent-name-label">小詞 ⭐</span>
+  </div>
+  <!-- 小潛 comments bottom-left -->
+  <div class="agent-desk ag-qian">
+    <div class="agent-bubble" id="bub-qian">潛進 312 樓…</div>
+    <div class="agent-body-wrap active">
+      <div class="agent-head"></div>
+      <div class="agent-torso"></div>
+    </div>
+    <div class="agent-desk-surface"></div>
+    <span class="agent-name-label">小潛</span>
+  </div>
+  <!-- 小導 ctx bottom-right -->
+  <div class="agent-desk ag-dao">
+    <div class="agent-bubble" id="bub-dao">評估文章價值…</div>
+    <div class="agent-body-wrap active">
+      <div class="agent-head"></div>
+      <div class="agent-torso"></div>
+    </div>
+    <div class="agent-desk-surface"></div>
+    <span class="agent-name-label">小導</span>
+  </div>
+</div>
+
+<!-- ═══════ PHASE 1: INPUT ═══════ -->
+<main class="phase-input">
+  <div class="intray-label">
+    <span class="intray-main">把連結丟進來，他們就開工 📥</span>
+    <span class="intray-sub">Drop a HN link, the crew gets to work</span>
+  </div>
+  <div class="input-row">
+    <input class="hn-input" id="hn-input" type="url" value="https://news.ycombinator.com/item?id=39600000">
+    <button class="btn-primary" id="analyze-btn">分析 Analyze</button>
+  </div>
+  <span class="example-label">範例 Examples:</span>
+  <div class="chip-row">
+    <button class="chip">pgvector vs Pinecone</button>
+    <button class="chip">Ask HN: 學 Rust</button>
+    <button class="chip">LLM pricing 2024</button>
+  </div>
+  <span class="example-label" style="margin-top:20px">今日精選 / Front Page</span>
+  <div class="frontpage-list">
+    <button class="fp-item"><span class="fp-title">pgvector is Now as Fast as Pinecone at 75% Less Cost</span><span class="fp-meta">437pts · 6h</span></button>
+    <button class="fp-item"><span class="fp-title">IBM debuts sub-1 nanometer chip technology</span><span class="fp-meta">349pts · 22h</span></button>
+    <button class="fp-item"><span class="fp-title">Show HN: Chess-Inspired Roguelike</span><span class="fp-meta">355pts · 5d</span></button>
+  </div>
+</main>
+
+<!-- ═══════ PHASE 2: RUNNING ═══════ -->
+<main class="phase-running">
+  <div class="progress-wrap">
+    <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+    <span class="progress-label" id="progress-label">分析中… / Analyzing…</span>
+  </div>
+  <div class="agent-rows">
+    <div class="agent-row" id="row-sum">
+      <div class="agent-dot"></div>
+      <span class="agent-label" style="color:#3B82F6">小摘</span>
+      <span class="agent-speech" id="speech-sum">排隊中…</span>
+    </div>
+    <div class="agent-row" id="row-jargon">
+      <div class="agent-dot"></div>
+      <span class="agent-label" style="color:#F59E0B">小詞</span>
+      <span class="agent-speech" id="speech-jargon">排隊中…</span>
+    </div>
+    <div class="agent-row" id="row-qian">
+      <div class="agent-dot"></div>
+      <span class="agent-label" style="color:#14B8A6">小潛</span>
+      <span class="agent-speech" id="speech-qian">排隊中…</span>
+    </div>
+    <div class="agent-row" id="row-dao">
+      <div class="agent-dot"></div>
+      <span class="agent-label" style="color:#8B5CF6">小導</span>
+      <span class="agent-speech" id="speech-dao">排隊中…</span>
+    </div>
+  </div>
+</main>
+
+<!-- ═══════ PHASE 3: RESULTS ═══════ -->
+<main class="phase-results">
+  <div class="results-nav">
+    <button class="btn-back" id="back-btn">← 返回</button>
+    <div class="meta-bar">
+      <span>437 pts</span><span>312 comments</span><span>mwilkinson</span><span>6h</span>
+      <a href="https://news.ycombinator.com/item?id=39600000" target="_blank">HN ↗</a>
+    </div>
+  </div>
+
+  <!-- 1. VERDICT -->
+  <div class="card verdict-card">
+    <div class="verdict-badges">
+      <span class="badge badge-green">強烈推薦 Highly Recommended</span>
+      <span class="badge badge-muted">深讀 Deep Read</span>
+    </div>
+    <p class="verdict-title">pgvector is Now as Fast as Pinecone at 75% Less Cost</p>
+    <p class="verdict-why bi-zh">pgvector 跟 Pinecone 的效能比較直接打臉了「向量資料庫要用專門服務」這個主流論述。</p>
+    <p class="verdict-why bi-en">A benchmark directly challenging the conventional wisdom that vector search requires a dedicated managed service.</p>
+  </div>
+
+  <!-- 2. JARGON HERO -->
+  <div class="card jargon-card">
+    <h2 class="section-title">💡 白話術語 <span class="section-title-en">Plain Language</span></h2>
+    <p class="jargon-hero-sub">理解這篇文章，你需要知道這 6 個詞 / 6 terms to understand this article</p>
+
+    <!-- Term 1: pgvector -->
+    <div class="term-card">
+      <div class="term-header">
+        <span class="term-name">pgvector</span>
+        <span class="term-zh">PostgreSQL 向量擴充套件</span>
+        <span class="badge badge-accent badge-seen">文章+留言 both</span>
+        <button class="save-btn" data-term="pgvector">＋ 收藏</button>
+      </div>
+      <blockquote class="term-quote">"pgvector 0.7.0 now supports HNSW indexing with comparable recall to Pinecone"</blockquote>
+      <p class="term-explain bi-en">A free extension for PostgreSQL that adds the ability to store and search vectors—the numeric representations AI models use for text—directly inside your existing database. No new service needed.</p>
+      <p class="term-explain bi-zh">一個免費的 PostgreSQL 外掛，讓你的一般資料庫也能存向量（AI 模型用來表示文字的數字陣列）並做相似搜尋。不用換資料庫，直接在 Postgres 裡就能用。</p>
+    </div>
+
+    <!-- Term 2: Pinecone -->
+    <div class="term-card">
+      <div class="term-header">
+        <span class="term-name">Pinecone</span>
+        <span class="term-zh">Pinecone（專用向量資料庫服務）</span>
+        <span class="badge badge-accent badge-seen">文章+留言 both</span>
+        <button class="save-btn" data-term="Pinecone">＋ 收藏</button>
+      </div>
+      <p class="term-explain bi-en">A cloud service built specifically for storing and searching vectors. Easy to use, but you pay a fixed monthly fee just to keep it running—regardless of whether you're using it.</p>
+      <p class="term-explain bi-zh">一個專門拿來存向量的雲端服務。好處是不用自己管，壞處是每個月固定要付費，不管有沒有在用。</p>
+    </div>
+
+    <!-- Term 3: 向量帳單 (special) -->
+    <div class="term-card" style="border-color:#F59E0B">
+      <div class="term-header">
+        <span class="term-name">向量帳單</span>
+        <span class="term-zh">Vector bill</span>
+        <span class="badge badge-muted badge-seen">留言 comments</span>
+        <span class="badge badge-amber">非正式用語</span>
+        <button class="save-btn" data-term="向量帳單">＋ 收藏</button>
+      </div>
+      <blockquote class="term-quote">"向量帳單比 RDS 還貴，這合理嗎？"</blockquote>
+      <p class="term-explain bi-en">An informal term in this thread for the monthly cost of keeping a vector database running—even when you're not actively querying it.</p>
+      <p class="term-explain bi-zh">這篇討論裡的非正式說法，指你每個月光是為了維持向量搜尋功能而付的費用，不管有沒有在用都要付。</p>
+    </div>
+
+    <!-- Term 4: HNSW -->
+    <div class="term-card">
+      <div class="term-header">
+        <span class="term-name">HNSW</span>
+        <span class="term-zh">階層式可導航小世界圖</span>
+        <span class="badge badge-muted badge-seen">文章 article</span>
+        <button class="save-btn" data-term="HNSW">＋ 收藏</button>
+      </div>
+      <p class="term-explain bi-en">An indexing algorithm that makes vector search faster by organizing vectors in a multi-level graph—like a map that lets you skip to the right neighborhood quickly instead of checking every house.</p>
+      <p class="term-explain bi-zh">讓向量搜尋變快的索引演算法。像多層地圖——先縮小範圍到對的「區域」，再精準找到最近鄰居，比暴力掃描快很多。</p>
+    </div>
+
+    <!-- Term 5: ANN -->
+    <div class="term-card">
+      <div class="term-header">
+        <span class="term-name">ANN</span>
+        <span class="term-zh">近似最近鄰搜尋</span>
+        <span class="badge badge-muted badge-seen">文章 article</span>
+        <button class="save-btn" data-term="ANN">＋ 收藏</button>
+      </div>
+      <p class="term-explain bi-en">Approximate Nearest Neighbor search—finds vectors "close enough" to your query, trading a tiny bit of accuracy for massive speed gains. In practice the difference is imperceptible.</p>
+      <p class="term-explain bi-zh">「夠近就好」的搜尋策略，不要求找最精準答案，換取速度大幅提升。實際上 99% 情況下近似值跟精確值沒有感知差異。</p>
+    </div>
+
+    <!-- Term 6: recall@10 -->
+    <div class="term-card">
+      <div class="term-header">
+        <span class="term-name">recall@10</span>
+        <span class="term-zh">召回率@10</span>
+        <span class="badge badge-muted badge-seen">文章 article</span>
+        <button class="save-btn" data-term="recall@10">＋ 收藏</button>
+      </div>
+      <p class="term-explain bi-en">A benchmark metric: out of the 10 results returned, what fraction were truly the closest matches? 0.95 means 9.5 out of 10 were correct.</p>
+      <p class="term-explain bi-zh">評估向量搜尋品質的指標：回傳的 10 個結果裡，有幾個真的是最近鄰居？0.95 代表 10 個裡有 9.5 個答對。</p>
+    </div>
+
+    <!-- Ask 小詞 -->
+    <div class="ask-xici">
+      <span class="ask-xici-label">還有不懂的詞？問小詞 / Ask 小詞 anything</span>
+      <div class="ask-row">
+        <input class="ask-input" type="text" placeholder="輸入術語… / Enter term…">
+        <button class="btn-secondary">問 Ask</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. SUMMARY (depth-key + depth-deep) -->
+  <div class="card depth-key depth-deep">
+    <h2 class="section-title">📝 文章摘要 <span class="section-title-en">Summary</span></h2>
+    <div class="tldr">
+      pgvector 0.7 with HNSW indexing matches Pinecone's p99 speed at 75% lower cost, tested on 1M OpenAI embeddings.
+      <span class="bi-zh">pgvector 0.7 加上 HNSW 索引，在 1M 筆 OpenAI 嵌入向量的基準測試中，p99 延遲跟 Pinecone 旗鼓相當，費用卻少了 75%。</span>
+    </div>
+    <ul class="key-points">
+      <li>HNSW index brings pgvector to parity with Pinecone on p99 latency at the 1M vector scale.<span class="bi-zh">HNSW 索引讓 pgvector 在 1M 向量規模下的 p99 延遲追平 Pinecone。</span></li>
+      <li>Cost comparison: pgvector on RDS ≈ $150/mo vs Pinecone ≈ $600/mo for equivalent workload.<span class="bi-zh">費用比較：同等規模下 pgvector on RDS 約 $150/月，Pinecone 約 $600/月。</span></li>
+      <li>Benchmark is single-tenant; multi-tenant or &gt;10M vector workloads may differ significantly.<span class="bi-zh">基準測試為單租戶，多租戶或超過 1000 萬向量的情境可能有顯著差異。</span></li>
+    </ul>
+  </div>
+
+  <!-- 4. COMMENT DIGEST (depth-deep only) -->
+  <div class="card depth-deep">
+    <h2 class="section-title">💬 留言精華 <span class="section-title-en">Comment Digest</span></h2>
+    <p class="overview bi-zh">312 則留言呈現三派對立：性價比派、可靠性懷疑派、與「你根本就不需要向量搜尋」實用派。</p>
+    <p class="overview bi-en">312 comments split into three camps: value-for-money advocates, reliability skeptics, and pragmatists who question whether you need vector search at all.</p>
+
+    <div class="camps">
+      <div class="camp-card">
+        <div class="camp-header">
+          <span class="camp-label bi-zh">pgvector 夠用派</span>
+          <span class="camp-label bi-en">pgvector pragmatists</span>
+          <span class="badge badge-green">主流 majority</span>
+        </div>
+        <p class="camp-quote">"Postgres all the things. pgvector 能做的事比大家以為的多太多了。"<a href="https://news.ycombinator.com/item?id=39600011" target="_blank" class="hn-link">HN ↗</a></p>
+      </div>
+      <div class="camp-card">
+        <div class="camp-header">
+          <span class="camp-label bi-zh">規模化懷疑派</span>
+          <span class="camp-label bi-en">Scale skeptics</span>
+          <span class="badge badge-amber">少數派 vocal-minority</span>
+        </div>
+        <p class="camp-quote">"這個基準在 1M 向量下成立，但我們跑 500M 的，完全不一樣的遊戲。"<a href="https://news.ycombinator.com/item?id=39600087" target="_blank" class="hn-link">HN ↗</a></p>
+      </div>
+      <div class="camp-card">
+        <div class="camp-header">
+          <span class="camp-label bi-zh">根本不需要向量派</span>
+          <span class="camp-label bi-en">Anti-vector camp</span>
+          <span class="badge badge-muted">邊緣 fringe</span>
+        </div>
+        <p class="camp-quote">"你們有沒有想過直接用 BM25 全文搜尋？90% 的 RAG 用例根本不需要向量。"<a href="https://news.ycombinator.com/item?id=39600143" target="_blank" class="hn-link">HN ↗</a></p>
+      </div>
+    </div>
+
+    <div class="consensus-block">
+      <strong>共識 Consensus</strong>
+      <p class="bi-zh">pgvector 對 &lt; 10M 向量的用例已夠好，不需要一開始就上 Pinecone。</p>
+      <p class="bi-en">pgvector is good enough for most use cases under 10M vectors—no need to start with Pinecone.</p>
+    </div>
+
+    <div class="corrections-block">
+      <strong>⚠️ 專家糾錯 Expert Corrections</strong>
+      <div class="correction-card">
+        <p class="bi-zh">基準測試沒有考慮到實際查詢模式的多樣性，p99 在混合工作負載下可能惡化 3-5×。</p>
+        <p class="bi-en">The benchmark doesn't account for real-world query pattern diversity; p99 may degrade 3-5× under mixed workloads.</p>
+        <a href="https://news.ycombinator.com/item?id=39600201" target="_blank" class="hn-link">HN ↗</a>
+      </div>
+    </div>
+
+    <div class="spicy-block">
+      <strong>🌶️ 辣評 Spicy Take</strong>
+      <div class="spicy-card">
+        <blockquote>"Pinecone 的商業模式就是讓你懶得自己管基礎設施。pgvector 的崛起跟 Redis 被 Postgres 吃掉的故事一模一樣。"</blockquote>
+        <p class="bi-en">Pinecone's business model is charging you for not wanting to manage infrastructure. pgvector's rise is the same story as Redis getting eaten by Postgres.</p>
+        <a href="https://news.ycombinator.com/item?id=39600312" target="_blank" class="hn-link">HN ↗</a>
+      </div>
+    </div>
+  </div>
+</main>
+
+</div><!-- /container -->
+
+<!-- KB DRAWER -->
+<div class="kb-overlay" id="kb-overlay"></div>
+<aside class="kb-drawer" id="kb-drawer">
+  <div class="kb-header">
+    <span>📚 我的生詞本 / My Glossary</span>
+    <button class="kb-close" id="kb-close">✕</button>
+  </div>
+  <div class="kb-list" id="kb-list">
+    <div class="kb-empty">還沒有收藏 / No saved terms yet</div>
+  </div>
+</aside>
+
+<script>
+'use strict';
+
+// ── Phase ──────────────────────────────────────────────────
+function setPhase(p) {
+  document.documentElement.dataset.phase = p;
+  // Show/hide results-only toggles
+  document.querySelectorAll('.results-only').forEach(el => {
+    el.style.display = p === 'results' ? 'inline-flex' : 'none';
+  });
+}
+
+// ── Analyze simulation ─────────────────────────────────────
+document.getElementById('analyze-btn').addEventListener('click', startAnalysis);
+document.querySelectorAll('.fp-item, .chip').forEach(b => {
+  b.addEventListener('click', startAnalysis);
+});
+
+function startAnalysis() {
+  setPhase('running');
+  const fill = document.getElementById('progress-fill');
+  const label = document.getElementById('progress-label');
+
+  const steps = [
+    { t: 300,  agent: 'sum',   state: 'running', msg: '讀文章中…' },
+    { t: 400,  agent: 'jargon',state: 'running', msg: '找術語中…' },
+    { t: 500,  agent: 'qian',  state: 'running', msg: '潛進 312 樓…' },
+    { t: 600,  agent: 'dao',   state: 'running', msg: '評估文章價值…' },
+    { t: 1200, pct: 30 },
+    { t: 1600, agent: 'sum',   state: 'done',    msg: 'TL;DR 完成! ✓', pct: 50 },
+    { t: 2000, agent: 'jargon',state: 'done',    msg: '找到 6 個詞! 💡', pct: 65 },
+    { t: 2400, pct: 80 },
+    { t: 2700, agent: 'qian',  state: 'done',    msg: '分成 3 派! ✓', pct: 88 },
+    { t: 3000, agent: 'dao',   state: 'done',    msg: '值得深讀! ✓', pct: 95 },
+    { t: 3300, pct: 100, labelText: '整合結果中… / Synthesizing…' },
+    { t: 3800, action: 'done' },
+  ];
+
+  steps.forEach(step => {
+    setTimeout(() => {
+      if (step.agent) {
+        const row = document.getElementById('row-' + step.agent);
+        const speech = document.getElementById('speech-' + step.agent);
+        if (row) row.className = 'agent-row ' + step.state;
+        if (speech) speech.textContent = step.msg;
+        const bub = document.getElementById('bub-' + step.agent);
+        if (bub) bub.textContent = step.msg;
+      }
+      if (step.pct !== undefined) fill.style.width = step.pct + '%';
+      if (step.labelText) label.textContent = step.labelText;
+      if (step.action === 'done') setPhase('results');
+    }, step.t);
+  });
+}
+
+// ── Back button ────────────────────────────────────────────
+document.getElementById('back-btn').addEventListener('click', () => setPhase('input'));
+
+// ── Language toggle ────────────────────────────────────────
+document.querySelectorAll('[data-lang]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-lang]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.documentElement.dataset.lang = btn.dataset.lang;
+  });
+});
+
+// ── Depth toggle ───────────────────────────────────────────
+document.querySelectorAll('[data-depth]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-depth]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.documentElement.dataset.depth = btn.dataset.depth;
+  });
+});
+
+// ── KB ─────────────────────────────────────────────────────
+const KB_KEY = 'hnlens_kb_mockup';
+function kbLoad() { try { return JSON.parse(localStorage.getItem(KB_KEY) || '[]'); } catch { return []; } }
+function kbSave(items) { localStorage.setItem(KB_KEY, JSON.stringify(items)); }
+
+function kbRender() {
+  const items = kbLoad();
+  document.getElementById('kb-count').textContent = items.length;
+  const list = document.getElementById('kb-list');
+  if (!items.length) { list.innerHTML = '<div class="kb-empty">還沒有收藏 / No saved terms yet</div>'; return; }
+  list.innerHTML = items.map(i => `
+    <div class="kb-item">
+      <div class="kb-item-header">
+        <span class="term-name">${i.term}</span>
+        <button class="kb-remove" data-term="${i.term}">✕</button>
+      </div>
+      <p class="kb-def">${i.def}</p>
+    </div>`).join('');
+  list.querySelectorAll('.kb-remove').forEach(b => {
+    b.addEventListener('click', () => { kbSave(kbLoad().filter(x => x.term !== b.dataset.term)); kbRender(); });
+  });
+}
+
+document.querySelectorAll('.save-btn').forEach(btn => {
+  const term = btn.dataset.term;
+  btn.addEventListener('click', () => {
+    const items = kbLoad();
+    if (!items.find(i => i.term === term)) {
+      const card = btn.closest('.term-card');
+      const def = card ? (card.querySelector('.term-explain.bi-zh') || card.querySelector('.term-explain')).textContent.trim() : '';
+      items.unshift({ term, def });
+      kbSave(items);
+    }
+    btn.textContent = '✓ 已收藏';
+    btn.classList.add('saved');
+    btn.disabled = true;
+    kbRender();
+  });
+});
+
+document.getElementById('kb-pill').addEventListener('click', () => {
+  kbRender();
+  document.getElementById('kb-drawer').classList.add('open');
+  document.getElementById('kb-overlay').classList.add('open');
+});
+document.getElementById('kb-close').addEventListener('click', closeKB);
+document.getElementById('kb-overlay').addEventListener('click', closeKB);
+function closeKB() {
+  document.getElementById('kb-drawer').classList.remove('open');
+  document.getElementById('kb-overlay').classList.remove('open');
+}
+
+kbRender();
+</script>
+</body>
+</html>

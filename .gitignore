@@ -1,0 +1,24 @@
+# dependencies / build
+node_modules/
+.wrangler/
+dist/
+
+# secrets — never commit
+.env
+.env.*
+.dev.vars
+
+# local artefacts
+*.tgz
+*.zip
+*.log
+.DS_Store
+
+# editor
+.vscode/
+.idea/
+
+# not part of the project
+.npm/
+chat-attachments/
+hello-world/

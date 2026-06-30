@@ -1,0 +1,30 @@
+name = "hn-lens"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+# Pre-warm the front page so the first view of a top story is instant.
+[triggers]
+crons = ["23 */2 * * *"]
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "6c7d1cf1c14042639cc5b9d13b09e013"
+preview_id = "66e881a0976b4ab0afeb88e7e5fccc6f"
+
+[vars]
+MF_API_URL = "https://api-staging.manyfold.ai/api"
+MF_AGENT_ID = "agt_agpqh6zu7j2ipjtgdxyrk2skvq"
+SPEC_VERSION = "10"
+AGENT_SUMMARIZER = "agt_agpqh65tur7bpof744f3ocap7y"
+AGENT_CONTEXT    = "agt_agpqh7synf3q5df5ysca4k4npu"
+AGENT_SYNTHESIZER = "agt_agpqh7upcv6vfbug4pozts74ou"
+AGENT_COMMENT_MAP = "agt_agpqh7m5c55ffmxr2vri326dgy"
+AGENT_JARGON     = "agt_agpqh7bmxjy4bmnoywfrernr2q"
+AGENT_COMMENT_REDUCE = "agt_agpqh7qqv53addlck44okx6dvy"
+
+# Set via: wrangler secret put MF_API_TOKEN
