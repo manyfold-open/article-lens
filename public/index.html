@@ -148,6 +148,41 @@
       font-weight: 700;
     }
 
+    /* ── Edit-office toggle ──────────────────────────────────────────────── */
+    .edit-toggle {
+      font-family: var(--body);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      cursor: pointer;
+      color: var(--ink);
+      white-space: nowrap;
+      transition: border-color 0.15s, background 0.15s, color 0.15s, box-shadow 0.15s;
+    }
+    .edit-toggle:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(255,102,0,.12);
+    }
+    .edit-toggle.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    /* While editing, frame the office and show a grab cursor; the pod boxes,
+       mode badges ("平行"/"接力") and the 休息區/bench strip are drawn on the
+       canvas itself by pixel.js. */
+    html[data-editmode=on] .pixel-stage-wrap {
+      outline: 2px dashed rgba(255,102,0,.55);
+      outline-offset: 2px;
+      border-radius: 10px;
+    }
+    html[data-editmode=on] .pixel-canvas { cursor: grab; }
+    /* The office hit-targets (KB/lang/whiteboard) must not eat drag events. */
+    html[data-editmode=on] #office-hits { display: none; }
+
     /* ── KB Pill ─────────────────────────────────────────────────────────── */
     .kb-pill {
       font-family: var(--mono);
@@ -1596,6 +1631,10 @@
 <!-- TOP BAR: always visible -->
 <header class="topbar">
   <a class="logo" href="/">HN Lens <span class="accent">📰</span></a>
+  <div class="topbar-right">
+    <button id="edit-toggle" class="edit-toggle" type="button" aria-pressed="false"
+      title="編排辦公室：拖曳小幫手分組、設定協作模式、停用 / Arrange the office">🛠️ 編排辦公室</button>
+  </div>
 </header>
 
 <!-- PIXEL STAGE: shown in all phases. The KB drawer and language switch are
