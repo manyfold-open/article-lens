@@ -1,4 +1,4 @@
-import type { Env, HNItem, ItemType, SSEEvent, HNLensResult } from './schema'
+import type { Env, HNItem, ItemType, SSEEvent, HNLensResult, GraphConfig } from './schema'
 import { fetchFrontPage, parseHNUrl, ageString, fetchHNItem, searchHNByUrl } from './hn'
 import { detectItemType, extractArticle, extractFromUrl } from './extract'
 import { orchestrateAnalysis, mockOrchestrate } from './crew/orchestrator'
@@ -128,6 +128,17 @@ async function handleAnalyze(url: URL, env: Env): Promise<Response> {
     .split(',').map(s => s.trim()).filter(Boolean).slice(0, 80)
   const kbHash = hashStr(kbTerms.map(t => t.toLowerCase()).sort().join('|'))
 
+  // Optional client-supplied orchestration graph (v1). Malformed → null, which
+  // leaves the no-graph code path byte-for-byte identical to today.
+  const graphRaw = url.searchParams.get('graph')
+  let graph: GraphConfig | null = null
+  if (graphRaw) {
+    try {
+      const g = JSON.parse(decodeURIComponent(graphRaw))
+      if (g && typeof g.v === 'number') graph = g
+    } catch { /* ignore malformed graph */ }
+  }
+
   ;(async () => {
     try {
       const r = await resolveInput(url, env)
@@ -153,7 +164,7 @@ async function handleAnalyze(url: URL, env: Env): Promise<Response> {
       if (env.MF_API_TOKEN) {
         try {
           result = await orchestrateAnalysis(item, articleText, itemType, env, emit, {
-            kbTerms, cachedShared, cachedJargon,
+            kbTerms, cachedShared, cachedJargon, graph,
           })
         } catch {
           result = await mockOrchestrate(item, articleText, itemType, emit)

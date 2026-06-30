@@ -78,6 +78,19 @@ export interface HNLensResult {
   source?: 'hn' | 'article' | 'text'
 }
 
+// ── Graph config (v1) — client-supplied orchestration override ────
+// Sent on GET /api/analyze as &graph=<encodeURIComponent(JSON.stringify(cfg))>.
+// `enabled`: per-key SKIP override (false = force skip; true/absent = run as
+// today, cache reuse still applies). `groups`: partition the ENABLED stage-1
+// workers {sum,jargon,comments} only (ctx is never grouped). mode 'relay' runs
+// the group's members sequentially, threading a short digest of the previous
+// member's output into the next member's prompt.
+export interface GraphConfig {
+  v: number
+  enabled?: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx', boolean>>
+  groups?: { members: string[]; mode: 'parallel' | 'relay' }[]
+}
+
 // ── SSE event types (§7) ──────────────────────────────────────────
 export type AgentName = 'sum' | 'jargon' | 'comments' | 'ctx' | 'synth'
 export type AgentState = 'idle' | 'running' | 'done' | 'error'
