@@ -19,7 +19,7 @@ preview_id = "66e881a0976b4ab0afeb88e7e5fccc6f"
 [vars]
 MF_API_URL = "https://api-staging.manyfold.ai/api"
 MF_AGENT_ID = "agt_agpqh6zu7j2ipjtgdxyrk2skvq"
-SPEC_VERSION = "10"
+SPEC_VERSION = "11"
 AGENT_SUMMARIZER = "agt_agpqh65tur7bpof744f3ocap7y"
 AGENT_CONTEXT    = "agt_agpqh7synf3q5df5ysca4k4npu"
 AGENT_SYNTHESIZER = "agt_agpqh7upcv6vfbug4pozts74ou"
