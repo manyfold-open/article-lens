@@ -180,3 +180,19 @@ by the cron; `?live=1` re-runs. Use it when an agent looks flaky.
 **Coordination:** only one agent deploys at a time; say which files you're touching.
 Product priorities (build spec): jargon explanation is the #1 feature; comment digest #2;
 the live pixel office is a feature, not a loading screen; Chinese-first, English on demand.
+
+## 11. Composio MCP (tools)
+
+A Composio MCP server is connected (HTTP) so the agent can drive external apps
+(Gmail, Notion, Google Calendar, GitHub, …) via the `mcp__composio__*` tools
+(`COMPOSIO_SEARCH_TOOLS` → `COMPOSIO_MANAGE_CONNECTIONS` to authorise an app →
+`COMPOSIO_MULTI_EXECUTE_TOOL` to run).
+
+- Registered in Claude config as server `composio`, URL `https://connect.composio.dev/mcp`,
+  auth via an `x-consumer-api-key` header. **The key lives only in `~/.claude.json`
+  (user scope) — never commit it.** Re-add with `claude mcp add --transport http composio
+  "<url>" -H "x-consumer-api-key: <key>" --scope user`; verify with `claude mcp list`.
+- App auth is per-toolkit: Gmail was connected; Notion / Google Calendar need
+  `COMPOSIO_MANAGE_CONNECTIONS` (returns an OAuth URL) before their tools work.
+- Not used by the deployed Worker — this is for agent-side automation (e.g. "analyse
+  this, then save the summary to Notion / email it").
