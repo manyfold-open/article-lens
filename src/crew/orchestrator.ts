@@ -301,22 +301,50 @@ function applyGraphToPlan(plan: CaptainPlan, graph: NormalizedGraph): void {
     .join(' · '))
 }
 
-// Build a short, plain digest (a few lines) of a stage-1 agent's output to
-// thread into the next relay member's prompt as extra context.
+// Build a substantive digest of a stage-1 agent's output to thread into the
+// next relay member's prompt. Richer than a TL;DR: enough for the downstream
+// agent to genuinely anchor on the upstream result. Each section is capped so
+// the prompt stays sane (key points ≤ 10, camps ≤ 6, terms ≤ 12).
 function relayDigest(agent: Stage1Agent, value: unknown): string {
   if (agent === 'sum') {
     const s = value as HNLensResult['summary']
-    const kp = (s.key_points ?? []).slice(0, 4).map(k => `- ${k.zh}`).join('\n')
-    return [`TL;DR：${s.tldr?.zh || ''}`, kp].filter(Boolean).join('\n')
+    const kp = (s.key_points ?? []).slice(0, 10).map(k => `- ${k.zh}`).join('\n')
+    return [`TL;DR：${s.tldr?.zh || ''}`, kp && `重點：\n${kp}`].filter(Boolean).join('\n')
   }
   if (agent === 'comments') {
     const cd = value as HNLensResult['comment_digest']
-    const camps = (cd.camps ?? []).slice(0, 4).map(c => `- ${c.label?.zh || ''}`).join('\n')
-    return [`留言輪廓：${cd.overview?.zh || ''}`, camps].filter(Boolean).join('\n')
+    const camps = (cd.camps ?? []).slice(0, 6)
+      .map(c => `- ${c.label?.zh || ''}${c.stance?.zh ? `：${c.stance.zh}` : ''}`)
+      .join('\n')
+    return [`留言輪廓：${cd.overview?.zh || ''}`, camps && `派別：\n${camps}`].filter(Boolean).join('\n')
   }
   // jargon
   const terms = value as JargonTerm[]
-  return (terms ?? []).slice(0, 8).map(t => `- ${t.term}：${t.explain?.zh || ''}`).join('\n')
+  return (terms ?? []).slice(0, 12).map(t => `- ${t.term}：${t.explain?.zh || ''}`).join('\n')
+}
+
+// Per-pair directive telling the downstream agent HOW to use the upstream
+// output, so relay makes a real, explainable difference from parallel.
+function relayDirective(upstream: Stage1Agent, downstream: Stage1Agent): string {
+  if (downstream === 'jargon' && upstream === 'sum')
+    return '請優先解釋上面摘要強調的核心概念（先把這些講清楚），再補上其他術語，讓術語清單貼合文章真正的主旨。'
+  if (downstream === 'jargon' && upstream === 'comments')
+    return '除了文章術語，也要收錄上面討論在爭辯／反覆提到的詞（社群特有的行話），不要只看文章。'
+  if (downstream === 'comments' && upstream === 'sum')
+    return '請依照上面摘要點出的主要主張／段落，來組織留言的派別與爭論（讓派別對應到文章的核心論點）。'
+  if (downstream === 'comments' && upstream === 'jargon')
+    return '若某個派別的分歧其實卡在上面某個技術術語上，請明確點出是哪個詞。'
+  if (downstream === 'sum')
+    return '請特別加重上一步強調的重點。'
+  return '參考上一步的產出，聚焦在它強調的重點。'
+}
+
+// Compose the full relay context block injected into a downstream member's
+// prompt: a clearly-labelled upstream digest + the per-pair directive.
+function relayContext(upstream: Stage1Agent, downstream: Stage1Agent, value: unknown): string {
+  const digest = relayDigest(upstream, value)
+  const directive = relayDirective(upstream, downstream)
+  return `【接力脈絡 ← 上一步(${agentZh(upstream)})】\n${digest}\n→ ${directive}`
 }
 
 interface Stage1Producers {
@@ -359,7 +387,7 @@ async function runStage1Graph(graph: NormalizedGraph, prod: Stage1Producers): Pr
         let prev: { agent: Stage1Agent; value: unknown } | null = null
         for (const m of members) {
           const extra = prev
-            ? `『前一步產出（參考）：\n${relayDigest(prev.agent, prev.value)}』`
+            ? relayContext(prev.agent, m, prev.value)
             : undefined
           const v = await runOne(m, extra)
           prev = { agent: m, value: v }
