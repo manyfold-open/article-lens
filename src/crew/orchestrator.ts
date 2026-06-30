@@ -1,6 +1,6 @@
 import type {
   Env, HNItem, HNComment, ItemType, SSEEvent, AgentName, HNLensResult,
-  JargonTerm, BiStr,
+  JargonTerm, BiStr, GraphConfig,
 } from '../schema'
 import { getSubtrees } from '../hn'
 import { stripHtml } from '../extract'
@@ -28,6 +28,10 @@ interface OrchestrateOpts {
   kbTerms?: string[]
   cachedShared?: SharedSections | null
   cachedJargon?: JargonTerm[] | null
+  // Optional client-supplied orchestration graph (v1). When present & valid it
+  // OVERRIDES the captain's run/skip decisions and can group stage-1 workers
+  // into sequential "relay" chains. The no-graph path is unaffected.
+  graph?: GraphConfig | null
 }
 
 type WorkerAgent = Exclude<AgentName, 'synth'>
@@ -86,7 +90,11 @@ export async function orchestrateAnalysis(
   opts: OrchestrateOpts = {}
 ): Promise<HNLensResult> {
   const mock = buildMockResult(item, articleText, itemType)
+  const graph = normalizeGraph(opts.graph)
   const captain = buildCaptainPlan(item, articleText, itemType, opts)
+  // Reflect graph.enabled in the emitted plan/briefing so the office shows the
+  // right set, but keep no-graph behaviour byte-for-byte identical.
+  if (graph) applyGraphToPlan(captain, graph)
   emit({ event: 'plan', agents: ['sum', 'jargon', 'comments', 'ctx'] })
   emit({ event: 'section', agent: 'ctx', data: { briefing: captain } })
 
@@ -96,31 +104,68 @@ export async function orchestrateAnalysis(
   const skippedAgents = new Set<AgentName>()
   const agentSources: NonNullable<HNLensResult['flags']['agent_sources']> = {}
 
-  // ── Stage 1: parallel ──────────────────────────────────────────
-  const summaryP: Promise<HNLensResult['summary']> = haveShared
-    ? replaySection('sum', opts.cachedShared!.summary, emit, agentSources)
-    : runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources)
+  let summary: HNLensResult['summary']
+  let comment_digest: HNLensResult['comment_digest']
+  let jargon: JargonTerm[]
+  let verdict: HNLensResult['verdict']
 
-  const commentsP: Promise<HNLensResult['comment_digest']> = haveShared
-    ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
-    : shouldRun(captain, 'comments')
-      ? runComments(env, item, mock, emit, fallbackAgents, agentSources)
-      : skipComments(mock, emit, skippedAgents, agentSources)
+  if (graph) {
+    // ── Graph-driven stage 1 (enabled override + relay groups) ────
+    // Per-agent producers honour cache reuse first, then the enabled override
+    // (false → force skip), else run as today (optionally with relay context).
+    const runSum = (extra?: string): Promise<HNLensResult['summary']> =>
+      haveShared ? replaySection('sum', opts.cachedShared!.summary, emit, agentSources)
+        : graph.enabled.sum === false ? skipSummary(mock, emit, skippedAgents, agentSources)
+          : runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources, extra)
+    const runCom = (extra?: string): Promise<HNLensResult['comment_digest']> =>
+      haveShared ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
+        : graph.enabled.comments === false ? skipComments(mock, emit, skippedAgents, agentSources)
+          : runComments(env, item, mock, emit, fallbackAgents, agentSources, extra)
+    const runJar = (extra?: string): Promise<JargonTerm[]> =>
+      haveJargon ? replaySection('jargon', opts.cachedJargon!, emit, agentSources)
+        : graph.enabled.jargon === false ? skipJargon(emit, skippedAgents, agentSources)
+          : runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, extra)
 
-  const jargonP: Promise<JargonTerm[]> = haveJargon
-    ? replaySection('jargon', opts.cachedJargon!, emit, agentSources)
-    : shouldRun(captain, 'jargon')
-      ? runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources)
-      : skipJargon(emit, skippedAgents, agentSources)
+    const stage1 = await runStage1Graph(graph, { sum: runSum, comments: runCom, jargon: runJar })
+    summary = stage1.sum
+    comment_digest = stage1.comments
+    jargon = stage1.jargon
 
-  const [summary, comment_digest] = await Promise.all([summaryP, commentsP])
+    // ── Stage 2: ctx, unchanged ordering — only enabled/disabled. ──
+    verdict = haveShared
+      ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
+      : graph.enabled.ctx === false
+        ? await skipContext(mock, emit, skippedAgents, agentSources)
+        : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources)
+  } else {
+    // ── Stage 1: parallel ──────────────────────────────────────────
+    const summaryP: Promise<HNLensResult['summary']> = haveShared
+      ? replaySection('sum', opts.cachedShared!.summary, emit, agentSources)
+      : runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources)
 
-  // ── Stage 2: verdict, now that it can see real content ──────────
-  const verdict: HNLensResult['verdict'] = haveShared
-    ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
-    : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources)
+    const commentsP: Promise<HNLensResult['comment_digest']> = haveShared
+      ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
+      : shouldRun(captain, 'comments')
+        ? runComments(env, item, mock, emit, fallbackAgents, agentSources)
+        : skipComments(mock, emit, skippedAgents, agentSources)
 
-  const jargon = await jargonP
+    const jargonP: Promise<JargonTerm[]> = haveJargon
+      ? replaySection('jargon', opts.cachedJargon!, emit, agentSources)
+      : shouldRun(captain, 'jargon')
+        ? runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources)
+        : skipJargon(emit, skippedAgents, agentSources)
+
+    const [summaryR, comment_digestR] = await Promise.all([summaryP, commentsP])
+    summary = summaryR
+    comment_digest = comment_digestR
+
+    // ── Stage 2: verdict, now that it can see real content ──────────
+    verdict = haveShared
+      ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
+      : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources)
+
+    jargon = await jargonP
+  }
 
   // ── Assemble ────────────────────────────────────────────────────
   const result: HNLensResult = {
@@ -214,6 +259,126 @@ function shouldRun(plan: CaptainPlan, agent: WorkerAgent): boolean {
   return (plan.assignments.find(a => a.agent === agent)?.action || 'run') === 'run'
 }
 
+// ── Graph (v1) helpers ─────────────────────────────────────────────
+type Stage1Agent = 'sum' | 'jargon' | 'comments'
+interface NormalizedGraph {
+  enabled: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx', boolean>>
+  groups: { members: Stage1Agent[]; mode: 'parallel' | 'relay' }[]
+}
+
+const STAGE1: Stage1Agent[] = ['sum', 'jargon', 'comments']
+function isStage1(s: string): s is Stage1Agent {
+  return s === 'sum' || s === 'jargon' || s === 'comments'
+}
+
+// Validate + normalise a client graph into something safe to execute. Returns
+// null if it isn't a usable v1 object, so callers fall back to today's path.
+function normalizeGraph(g: GraphConfig | null | undefined): NormalizedGraph | null {
+  if (!g || typeof g.v !== 'number') return null
+  const enabled = (g.enabled && typeof g.enabled === 'object') ? g.enabled : {}
+  const rawGroups = Array.isArray(g.groups) ? g.groups : []
+  const groups: NormalizedGraph['groups'] = []
+  for (const grp of rawGroups) {
+    if (!grp || !Array.isArray(grp.members)) continue
+    // Keep only stage-1 workers (sum/jargon/comments); ctx is never grouped.
+    const members = grp.members.filter(isStage1)
+    if (!members.length) continue
+    groups.push({ members, mode: grp.mode === 'relay' ? 'relay' : 'parallel' })
+  }
+  return { enabled, groups }
+}
+
+// Mirror graph.enabled into the captain plan so the office shows the right set.
+function applyGraphToPlan(plan: CaptainPlan, graph: NormalizedGraph): void {
+  for (const a of plan.assignments) {
+    if (graph.enabled[a.agent] === false) {
+      a.action = 'skip'
+      a.reason = bz('你在編輯面板把這位關掉了，這輪直接略過。')
+    }
+  }
+  plan.route = bz(plan.assignments
+    .map(a => `${agentZh(a.agent)}:${a.action === 'run' ? '開工' : a.action === 'reuse' ? '拿快取' : '略過'}`)
+    .join(' · '))
+}
+
+// Build a short, plain digest (a few lines) of a stage-1 agent's output to
+// thread into the next relay member's prompt as extra context.
+function relayDigest(agent: Stage1Agent, value: unknown): string {
+  if (agent === 'sum') {
+    const s = value as HNLensResult['summary']
+    const kp = (s.key_points ?? []).slice(0, 4).map(k => `- ${k.zh}`).join('\n')
+    return [`TL;DR：${s.tldr?.zh || ''}`, kp].filter(Boolean).join('\n')
+  }
+  if (agent === 'comments') {
+    const cd = value as HNLensResult['comment_digest']
+    const camps = (cd.camps ?? []).slice(0, 4).map(c => `- ${c.label?.zh || ''}`).join('\n')
+    return [`留言輪廓：${cd.overview?.zh || ''}`, camps].filter(Boolean).join('\n')
+  }
+  // jargon
+  const terms = value as JargonTerm[]
+  return (terms ?? []).slice(0, 8).map(t => `- ${t.term}：${t.explain?.zh || ''}`).join('\n')
+}
+
+interface Stage1Producers {
+  sum: (extra?: string) => Promise<HNLensResult['summary']>
+  comments: (extra?: string) => Promise<HNLensResult['comment_digest']>
+  jargon: (extra?: string) => Promise<JargonTerm[]>
+}
+interface Stage1Result {
+  sum: HNLensResult['summary']
+  comments: HNLensResult['comment_digest']
+  jargon: JargonTerm[]
+}
+
+// Execute stage-1 {sum,jargon,comments} per the graph: parallel groups +
+// ungrouped singletons run concurrently (as today); relay groups run their
+// members sequentially, threading the previous member's digest forward.
+async function runStage1Graph(graph: NormalizedGraph, prod: Stage1Producers): Promise<Stage1Result> {
+  const out: Partial<Record<Stage1Agent, unknown>> = {}
+  const runOne = (agent: Stage1Agent, extra?: string): Promise<unknown> => {
+    const p = (prod[agent] as (e?: string) => Promise<unknown>)(extra)
+    return p.then(v => { out[agent] = v; return v })
+  }
+
+  // Figure out which stage-1 agents the graph already partitions.
+  const grouped = new Set<Stage1Agent>()
+  for (const grp of graph.groups) for (const m of grp.members) grouped.add(m)
+  // Anything not placed in a group runs concurrently as a singleton (as today).
+  const singletons = STAGE1.filter(a => !grouped.has(a))
+
+  const concurrent: Promise<unknown>[] = []
+  for (const a of singletons) concurrent.push(runOne(a))
+
+  for (const grp of graph.groups) {
+    // Dedup members within a group, preserving listed order.
+    const seen = new Set<Stage1Agent>()
+    const members = grp.members.filter(m => (seen.has(m) ? false : (seen.add(m), true)))
+    if (grp.mode === 'relay') {
+      // Sequential chain: each later member gets a digest of the previous one.
+      concurrent.push((async () => {
+        let prev: { agent: Stage1Agent; value: unknown } | null = null
+        for (const m of members) {
+          const extra = prev
+            ? `『前一步產出（參考）：\n${relayDigest(prev.agent, prev.value)}』`
+            : undefined
+          const v = await runOne(m, extra)
+          prev = { agent: m, value: v }
+        }
+      })())
+    } else {
+      // Parallel group behaves like ungrouped singletons.
+      for (const m of members) concurrent.push(runOne(m))
+    }
+  }
+
+  await Promise.all(concurrent)
+  return {
+    sum: out.sum as HNLensResult['summary'],
+    comments: out.comments as HNLensResult['comment_digest'],
+    jargon: out.jargon as JargonTerm[],
+  }
+}
+
 function agentZh(agent: WorkerAgent): string {
   return ({ sum: '小摘', jargon: '小詞', comments: '小潛', ctx: '小導' } as Record<WorkerAgent, string>)[agent]
 }
@@ -239,11 +404,12 @@ function commentsWereSampled(item: HNItem): boolean {
 async function runSummary(
   env: Env, item: HNItem, articleText: string, itemType: ItemType,
   mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
-  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
+  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
+  extraContext?: string
 ): Promise<HNLensResult['summary']> {
   emit({ event: 'status', agent: 'sum', state: 'running', label: LABELS.sum.running })
   try {
-    const text = await callMfAgent(env, env.AGENT_SUMMARIZER, buildSummarizerPrompt(item, articleText, itemType))
+    const text = await callMfAgent(env, env.AGENT_SUMMARIZER, buildSummarizerPrompt(item, articleText, itemType, extraContext))
     const p = parseLoose<{ tldr?: unknown; key_points?: unknown[] }>(text)
     const summary: HNLensResult['summary'] = (p && p.tldr)
       ? { tldr: toBi(p.tldr), key_points: (Array.isArray(p.key_points) ? p.key_points : []).map(toBi).filter(k => k.zh) }
@@ -260,6 +426,22 @@ async function runSummary(
     if (agentSources) agentSources.sum = { mode: 'fallback', reason: fallbackReason('小摘', e, sandboxReason, '改用本地備援摘要') }
     return mock.summary
   }
+}
+
+// Graph-only: force-skip 小摘 (no captain skip path exists). Mirrors the other
+// skip helpers — empty/placeholder section + a done status + skipped source.
+async function skipSummary(
+  mock: HNLensResult,
+  emit: (e: SSEEvent) => void,
+  skippedAgents: Set<AgentName>,
+  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
+): Promise<HNLensResult['summary']> {
+  skippedAgents.add('sum')
+  const empty: HNLensResult['summary'] = { tldr: bz('你在編輯面板把小摘關掉了，這輪沒有產生摘要。'), key_points: [] }
+  emit({ event: 'status', agent: 'sum', state: 'done', label: bz('已關閉，略過摘要') })
+  emit({ event: 'section', agent: 'sum', data: empty })
+  if (agentSources) agentSources.sum = { mode: 'skipped', reason: bz('你在編輯面板關掉小摘，沒有呼叫摘要 agent。') }
+  return empty
 }
 
 // ── 小導 verdict (depends on summary + comments) ───────────────────
@@ -291,10 +473,30 @@ async function runContext(
   }
 }
 
+// Graph-only: force-skip 小導. Mirrors the other skip helpers.
+async function skipContext(
+  mock: HNLensResult,
+  emit: (e: SSEEvent) => void,
+  skippedAgents: Set<AgentName>,
+  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
+): Promise<HNLensResult['verdict']> {
+  skippedAgents.add('ctx')
+  const empty: HNLensResult['verdict'] = {
+    worth_reading: mock.verdict.worth_reading,
+    why_frontpage: bz('你在編輯面板把小導關掉了，這輪沒有重新裁定。'),
+    tier: mock.verdict.tier,
+  }
+  emit({ event: 'status', agent: 'ctx', state: 'done', label: bz('已關閉，略過裁定') })
+  emit({ event: 'section', agent: 'ctx', data: empty })
+  if (agentSources) agentSources.ctx = { mode: 'skipped', reason: bz('你在編輯面板關掉小導，沒有呼叫裁定 agent。') }
+  return empty
+}
+
 // ── 小潛 comments (token-budgeted, high-signal first) ──────────────
 async function runComments(
   env: Env, item: HNItem, mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
-  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
+  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
+  extraContext?: string
 ): Promise<HNLensResult['comment_digest']> {
   const commentCount = item.children?.length ?? 0
   if (commentCount === 0) {
@@ -305,7 +507,7 @@ async function runComments(
   }
   emit({ event: 'status', agent: 'comments', state: 'running', label: bz(`潛進 ${commentCount} 樓…`) })
   try {
-    const text = await runCommentPipeline(item, env, emit)
+    const text = await runCommentPipeline(item, env, emit, extraContext)
     const p = parseLoose<HNLensResult['comment_digest']>(text)
     const cd = (p?.overview || p?.camps) ? normalizeDigest(p!) : mock.comment_digest
     emit({ event: 'status', agent: 'comments', state: 'done', label: LABELS.comments.done })
@@ -439,13 +641,13 @@ const LABELS: Record<AgentName, { running: BiStr; done: BiStr }> = {
 }
 
 // ── Comment pipeline (map → reduce), high-signal first + token budget ──
-async function runCommentPipeline(item: HNItem, env: Env, emit: (e: SSEEvent) => void): Promise<string> {
+async function runCommentPipeline(item: HNItem, env: Env, emit: (e: SSEEvent) => void, extraContext?: string): Promise<string> {
   const commentCount = item.children?.length ?? 0
 
   // Small thread: a single call over the (ranked) comments.
   if (commentCount < 10) {
     const allText = rankedCommentsText(item.children ?? [], 2600)
-    return singleCommentCall(env, allText, item)
+    return singleCommentCall(env, allText, item, extraContext)
   }
 
   // Large thread: map-reduce over the highest-signal top-level subtrees.
@@ -463,11 +665,11 @@ async function runCommentPipeline(item: HNItem, env: Env, emit: (e: SSEEvent) =>
   }
 
   emit({ event: 'step', agent: 'comments', label: bz('聚類派別分析中…') })
-  return callMfAgent(env, env.AGENT_COMMENT_REDUCE, buildCommentReducePrompt(mapResults, item))
+  return callMfAgent(env, env.AGENT_COMMENT_REDUCE, buildCommentReducePrompt(mapResults, item, extraContext))
 }
 
-async function singleCommentCall(env: Env, text: string, item: HNItem): Promise<string> {
-  return callMfAgent(env, env.AGENT_COMMENT_REDUCE, buildCommentReducePrompt([text], item))
+async function singleCommentCall(env: Env, text: string, item: HNItem, extraContext?: string): Promise<string> {
+  return callMfAgent(env, env.AGENT_COMMENT_REDUCE, buildCommentReducePrompt([text], item, extraContext))
 }
 
 // Rough token estimate: ~4 chars/token for mixed en, ~1.7 for CJK. Use a
@@ -541,10 +743,10 @@ function rankedCommentsText(comments: HNComment[], budgetTokens: number): string
 }
 
 // ── Prompt builders (zh-only output) ──────────────────────────────
-function buildSummarizerPrompt(item: HNItem, articleText: string, itemType: ItemType): string {
+function buildSummarizerPrompt(item: HNItem, articleText: string, itemType: ItemType, extraContext?: string): string {
   const content = (articleText || item.text || '(no article text available)').slice(0, 6000)
   return `你是 小摘，精簡的中文摘要員。
-
+${relayBlock(extraContext)}
 標題：${item.title}
 類型：${itemType}
 內容：
@@ -556,9 +758,16 @@ ${content}
 {"tldr":{"zh":"..."},"key_points":[{"zh":"..."}]}`
 }
 
+// A short relay-context block to prepend to a prompt when a previous relay
+// member produced output. Empty string when there's nothing to thread.
+function relayBlock(extraContext?: string): string {
+  return extraContext ? `\n${extraContext}\n` : ''
+}
+
 function buildJargonPrompt(
   item: HNItem, articleChunk: string, commentSample: string,
-  part: { i: number; n: number }, known: string[], candidates: string[] = []
+  part: { i: number; n: number }, known: string[], candidates: string[] = [],
+  extraContext?: string
 ): string {
   const where = part.n > 1 ? `（文章第 ${part.i + 1}/${part.n} 段）` : ''
   const knownLine = known.length
@@ -568,7 +777,7 @@ function buildJargonPrompt(
     ? `\n以下是程式從全文掃出的候選詞（可能有雜訊）。請逐一檢視、把屬於本文技術領域且讀者可能不懂的收進來，其餘忽略；也要補上你自己掃到、清單漏掉的詞：\n${candidates.join('、')}\n`
     : ''
   return `你是 小詞，給 HN 讀者的中文術語白話解說員。
-
+${relayBlock(extraContext)}
 文章標題：${item.title}
 
 文章內文${where}（仔細讀，從整段挑詞，不要只挑開頭）：
@@ -600,7 +809,8 @@ zh_term：標準中文名稱或描述性中文標籤；seen_in："article"/"comm
 
 async function runJargon(
   env: Env, item: HNItem, articleText: string, kbTerms: string[], emit: (e: SSEEvent) => void,
-  fallbackAgents?: Set<AgentName>, agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
+  fallbackAgents?: Set<AgentName>, agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
+  extraContext?: string
 ): Promise<JargonTerm[]> {
   emit({ event: 'status', agent: 'jargon', state: 'running', label: LABELS.jargon.running })
   const full = (articleText || item.text || '').trim()
@@ -615,8 +825,8 @@ async function runJargon(
   const candidates = extractCandidates(item.title + '\n' + full + '\n' + commentSample, known).slice(0, 25)
   try {
     const prompts = windows.length === 0
-      ? [buildJargonPrompt(item, '', commentSample, { i: 0, n: 1 }, known, candidates)]
-      : windows.map((w, i) => buildJargonPrompt(item, w, i === 0 ? commentSample : '', { i, n: windows.length }, known, candidates))
+      ? [buildJargonPrompt(item, '', commentSample, { i: 0, n: 1 }, known, candidates, extraContext)]
+      : windows.map((w, i) => buildJargonPrompt(item, w, i === 0 ? commentSample : '', { i, n: windows.length }, known, candidates, i === 0 ? extraContext : undefined))
     if (prompts.length > 1) emit({ event: 'step', agent: 'jargon', label: bz(`通讀全文 ${prompts.length} 段…`) })
     // Run windows independently — a slow/failed window must NOT zero the rest.
     const settled = await Promise.allSettled(prompts.map(p =>
@@ -830,10 +1040,10 @@ ${discussion}
 {"worth_reading":"high","why_frontpage":{"zh":"..."},"tier":"deep"}`
 }
 
-function buildCommentReducePrompt(subtreeSummaries: string[], item: HNItem): string {
+function buildCommentReducePrompt(subtreeSummaries: string[], item: HNItem, extraContext?: string): string {
   const summaries = subtreeSummaries.filter(Boolean).join('\n\n---\n\n').slice(0, 8000)
   return `你是 小潛，分析「${item.title}」的 Hacker News 討論。
-
+${relayBlock(extraContext)}
 總留言數：${item.children?.length ?? 0}
 
 各串摘要：
