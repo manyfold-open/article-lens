@@ -157,15 +157,26 @@ client-side (`transCache`).
 - Possible follow-ups discussed with the user: pre-warm cron for the front page, KB cloud
   sync, more office polish, Reddit/Lobsters sources.
 
-## 10. Collaborating as a second (Codex) agent
+## 10. Repo, deploy gate & collaboration
 
-This project lives in the **original Claude agent's workspace**. To work on it in parallel:
-- Easiest: put this code in a **git repo**, have the Codex agent clone it, make changes,
-  and `wrangler deploy` with the same `CLOUDFLARE_API_TOKEN`. Bump `SPEC_VERSION` if you
-  change result generation.
-- Or grant the Codex agent as an **A2A peer** and delegate tasks via `mf a2a send <peer>`.
-- Coordinate to avoid both deploying at once (last `wrangler deploy` wins). Re-run
-  `npm run typecheck` + `node --check` before any deploy, and create a checkpoint
-  (`sprite-env checkpoints create --comment "..."`) at each milestone so work is restorable.
-- Read `CLAUDE.md` / the build spec first for product priorities (jargon explanation is the
-  #1 feature; comment digest #2; the live pixel show is a feature, not a loading screen).
+**Git repo:** https://github.com/tldr0810/hn-lens (private, branch `main`). Clone it,
+branch, open PRs — work off the repo, not by editing a shared workspace (two agents
+editing the same file collided badly before).
+
+**Safe deploy (use this, not bare `wrangler deploy`):**
+- `npm run ship "message"` → runs `deploy.sh`: typecheck → `node --check` (front-end) →
+  `wrangler deploy` → `npm run smoke` (live) → checkpoint. It **refuses to checkpoint if
+  smoke fails**, so you can't silently ship a broken build.
+- `npm run smoke [baseUrl]` → asserts `/api/analyze` (plan→result, ≥1 jargon term),
+  `/api/translate`, `/api/define`, `/api/health`. Needs the analyze text to be ≥220 chars
+  (the captain skips jargon on short/non-technical input — that's expected).
+- `CLOUDFLARE_API_TOKEN` comes from `.env` (gitignored — set it locally).
+- Bump `SPEC_VERSION` in `wrangler.toml` whenever you change result-generation logic, or
+  old cached analyses keep serving (we hit this).
+
+**Observability:** `GET /api/health` pings all 6 crew agents (up/down + latency), refreshed
+by the cron; `?live=1` re-runs. Use it when an agent looks flaky.
+
+**Coordination:** only one agent deploys at a time; say which files you're touching.
+Product priorities (build spec): jargon explanation is the #1 feature; comment digest #2;
+the live pixel office is a feature, not a loading screen; Chinese-first, English on demand.
