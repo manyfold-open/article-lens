@@ -129,6 +129,7 @@
   });
   const taskState = {};          // id → 'idle'|'typing'|'reading'|'done'
   const sim = { active: false };
+  const runDocs = [];            // result icons flying worker → 合成 (custom run)
 
   // ─── Edit-office mode (drag workers → pods/modes → graphConfig) ──────────────
   // The user drags the four editable workers, clusters {sum,jargon,comments}
@@ -158,6 +159,18 @@
       || Object.keys(editMode.bench).length > 0
       || Object.keys(editMode.podModes).length > 0;
   }
+  // The single source of truth for "custom run": identical to the gate app.js
+  // uses to decide whether to send &graph (getGraphConfig() non-null). When this
+  // is true a run honours the placement (traveling desks + in-place work) rather
+  // than recalling workers to their fixed seats.
+  function isCustomLayout() { return getGraphConfig() !== null; }
+  // Latched per-run so the choreography stays consistent for the whole run even
+  // if state changes mid-run; set in startRun(). customRunActive() gates the
+  // run LOGIC (finish detection, asleep guards) and is true only while active;
+  // customRunView() gates the RENDERING (traveling desks, pods, docs) and stays
+  // true through the present finale so placement doesn't snap back mid-reveal.
+  function customRunActive() { return sim.active && sim.customRun; }
+  function customRunView() { return !!sim.customView; }
   // Bench strip: a labelled lane along the bottom row. Workers dropped here are
   // disabled. Uses logical coords (full width, bottom tile row).
   const BENCH = { x: 0, y: LOGICAL_H - TILE, w: LOGICAL_W, h: TILE };
@@ -229,7 +242,9 @@
     Object.values(pets).forEach(p => {
       if (moving(p) || p.state === 'carry' || p.state === 'deliver') return;
       if (p.timer > 0) return;
-      if (sim.active && p.kind !== 'dog') startWorkPetVisit(p);
+      // In a custom run workers sit at arbitrary placed tiles (not their seat
+      // approach), so skip the seat-targeted work visit and just let pets wander.
+      if (sim.active && !customRunActive() && p.kind !== 'dog') startWorkPetVisit(p);
       else startPetAmbient(p);
     });
   }
@@ -289,9 +304,49 @@
 	    sim.kbOpen = null;
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
+	    runDocs.length = 0;
+	    // Latch the run choreography for its whole lifetime. A custom layout honours
+	    // the user's placement (in-place work, traveling desks, benched=asleep);
+	    // the default layout keeps the full walking tour byte-for-byte as today.
+	    sim.customRun = isCustomLayout();
+	    if (sim.customRun) { startCustomRun(); return; }
+	    sim.customView = false;   // default run uses fixed-furniture rendering
 	    const L = chars.orch;
 	    L.state = 'walking_to_employee'; L.bubble = '';
 	    slideTo(L, L.station.approach, () => assignTour(0));
+	  }
+
+	  // Custom-layout run: workers stay at their PLACED positions and work in
+	  // place (no recall to seats, no walk-to-assign tour). Disabled workers sleep
+	  // on the bench. Finished workers fly a result icon to 合成 instead of walking.
+	  function startCustomRun() {
+	    sim.customView = true;   // keep traveling desks/pods/docs rendered through the finale
+	    const L = chars.orch;
+	    // 隊長 stays near its spot, faces the room, and shows a directing bubble.
+	    L.path = null; L.onArrive = null; L.timer = 0; L.onTimer = null;
+	    L.state = 'idle'; L.facing = 'down'; L.bubble = '各組就位，開工！';
+	    L.timer = 90; L.onTimer = () => { if (sim.active) L.bubble = ''; };
+	    ALL_WORKERS.forEach(id => {
+	      const e = chars[id];
+	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
+	      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
+	      // Place the worker at its custom position (else its seat) and freeze it.
+	      const p = editMode.layout[id];
+	      if (p) { e.x = p.x; e.y = p.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)]; }
+	      if (editMode.bench[id]) {
+	        // Benched → disabled: greyed, asleep, never assigned, no handoff.
+	        e.asleep = true; e.state = 'idle'; e.bubble = ''; e.facing = 'down';
+	        delete taskState[id];
+	      } else {
+	        e.asleep = false; e.facing = 'down';
+	        e.state = 'working'; e.workStart = tick;   // work in place; SSE drives the monitor
+	      }
+	    });
+	    // 合成 also works in place (no desk recall); place it at its seat centre.
+	    const S = chars.synth;
+	    S.path = null; S.onArrive = null; S.timer = 0; S.onTimer = null;
+	    S._queuedDeliver = false; S._returningToDesk = false;
+	    S.state = 'idle'; S.facing = 'down'; S.bubble = '';
 	  }
 
 	  function receiveTask() {
@@ -300,6 +355,7 @@
 	    hardStopSideJobs();
 	    sim.active = false; sim.recalling = true; sim.pendingStart = false;
 	    sim.presented = false; sim.boardActive = false; sim.kbOpen = null;
+	    sim.customView = false; runDocs.length = 0;   // drop any custom-run rendering
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
 	    selected = null;
@@ -516,7 +572,7 @@
   const CHATS = ['🙂 歇會', '🥱', '💤 zzz', '🎧', '摸個魚', '🤔', '☕?'];
 
   function ambientTick(e) {
-    if (sim.active || e.state !== 'idle' || moving(e)) return;
+    if (sim.active || e.asleep || e.state !== 'idle' || moving(e)) return;
     if (e.idleTimer == null) e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
     if (--e.idleTimer > 0) return;
     startAmbient(e);
@@ -558,6 +614,7 @@
     if (editMode.on) return;   // edit mode freezes the sim; the user drives positions
     Object.values(chars).forEach(stepEntity);
     Object.values(pets).forEach(stepEntity);
+    if (customRunActive()) { updateCustomRun(); petTick(); return; }
     // hybrid work gate: a worker moves on only after its real `done` AND min time.
     for (const id of ALL_WORKERS) {
       const w = chars[id];
@@ -576,6 +633,52 @@
     // ambient office life while nothing is being analysed
     Object.values(chars).forEach(ambientTick);
     petTick();
+  }
+
+  // In-place custom run: no walking. Each enabled worker finishes (real `done`
+  // + MIN_WORK) → flies a result icon to 合成 → marked done. When every enabled
+  // worker has handed off, 合成 integrates, then 隊長 presents (existing reveal).
+  function updateCustomRun() {
+    const S = chars.synth;
+    for (const id of ALL_WORKERS) {
+      if (editMode.bench[id]) continue;   // disabled: never finishes, never hands off
+      const w = chars[id];
+      if (w.state === 'working' && taskState[id] === 'done' && (tick - w.workStart) >= MIN_WORK) {
+        w.state = 'done'; w.bubble = '';
+        runDocs.push({ t: 0, x0: w.x, y0: w.y - 4, color: w.role.shirt });   // fly to 合成
+      }
+    }
+    const enabled = ALL_WORKERS.filter(id => !editMode.bench[id]);
+    const allWorkersDone = enabled.length > 0 && enabled.every(id => chars[id].state === 'done');
+    // Once all enabled workers handed off and the last doc has landed, 合成 curates.
+    if (allWorkersDone && S.state === 'idle' && !runDocs.length) {
+      S.state = 'reviewing'; S.workStart = tick; S.bubble = ASSIGNMENTS.synth.card;
+      taskState.synth = 'typing';
+    }
+    if (S.state === 'reviewing' && (tick - S.workStart) >= SYNTH_REVIEW) {
+      S.state = 'done'; S.bubble = ''; taskState.synth = 'done';
+      sim.active = false;
+      if (!sim.presented) { sim.presented = true; startPresentInPlace(); }
+    }
+  }
+
+  // Custom-run finale: 隊長 stays put (no walk to the easel) and triggers the
+  // existing present/whiteboard reveal, then settles everyone.
+  function startPresentInPlace() {
+    const L = chars.orch;
+    L.state = 'presenting'; L.facing = 'down'; L.bubble = '📊 來看報告！';
+    sim.boardActive = true;
+    if (presentHandler) presentHandler();
+    L.timer = 120; L.onTimer = () => {
+      Object.values(chars).forEach(e => {
+        e.statusText = ''; e._report = ''; e._queuedDeliver = false;
+      });
+      L.bubble = ''; L.state = 'idle';
+      // Leave workers where they are; clear any leftover task glow on finale.
+      ALL_WORKERS.concat('synth').forEach(id => { if (!editMode.bench[id]) delete taskState[id]; });
+      sim.customView = false;   // finale settled → desks/pods revert to default rendering
+      runDocs.length = 0;
+    };
   }
 
   // ─── Visual mode resolution ─────────────────────────────────────────────────
@@ -713,9 +816,22 @@
     rect(x+4,y+4,2,7,shade(CHAIR,0.85)); rect(x+10,y+4,2,7,shade(CHAIR,0.85));
   }
 
+  // Desk origin (logical px tile-origin) for a worker. By default the desk sits
+  // at the fixed furniture tile (deskOf) so the default run looks byte-for-byte
+  // as today (workers walk away while the desk stays put). In a custom-layout
+  // run the desk TRAVELS with the worker: origin derived from the worker's
+  // current centre with the same offset as the seat→desk relationship
+  // (x-8, y+8 maps a worker centred on its seat back onto its desk tile).
+  function deskOriginFor(s) {
+    if (customRunView()) { const e = chars[s.id]; return [e.x - 8, e.y + 8]; }
+    const d = deskOf(s); return [T(d[0]), T(d[1])];
+  }
   // ─── Desk (with monitor reflecting its worker's mode) + props ───────────────
   function drawDeskSprite(s) {
-    const d = deskOf(s), x = T(d[0]), y = T(d[1]);
+    // A benched (disabled) worker has no active workstation during a custom run —
+    // it sleeps on the bench, so skip drawing a desk for it entirely.
+    if (customRunView() && editMode.bench[s.id]) return;
+    const [x, y] = deskOriginFor(s);
     const mode = vmode(chars[s.id]);
     rect(x+1,y,TILE-2,TILE-1,DESK); rect(x+1,y,TILE-2,1,DESKHI); rect(x+1,y+TILE-2,TILE-2,1,DESKLO);
     rect(x+3,y+1,10,2,'#9CA3AF');                            // keyboard
@@ -734,7 +850,7 @@
   }
   function drawDeskProp(s,x,y,mode) {
     if (s.id==='orch') { rect(x+1,y+4,4,4,'#A8A29E'); rect(x+1,y+4,4,1,'#D6D3D1'); rect(x+2,y+3,2,1,'#FFFFFF'); }
-    if (s.id==='synth') { const pxx=T(s.seat[0]+1),pyy=y;
+    if (s.id==='synth') { const pxx=x+TILE,pyy=y;
       rect(pxx+1,pyy+3,9,7,'#9CA3AF'); rect(pxx+1,pyy+3,9,1,'#CBD5E1'); rect(pxx+2,pyy+5,7,1,'#475569');
       if(mode==='done'){ rect(pxx+2,pyy,7,4,'#FFFFFF'); rect(pxx+3,pyy+1,5,1,ACCENT); rect(pxx+3,pyy+2,5,1,'#CBD5E1'); }
     }
@@ -971,8 +1087,12 @@
   // ─── Overlays: name plates + speech bubbles ─────────────────────────────────
   function drawNamePlate(s) {
     const e = chars[s.id], mode = vmode(e);
-    const d = deskOf(s), cx = T(d[0])+8, ly = T(d[1]+1)-2;
-    const bx = T(d[0])+1;
+    // A benched worker's nameplate is omitted during a custom run (it sleeps on
+    // the bench with its own grey label drawn elsewhere).
+    if (customRunView() && editMode.bench[s.id]) return;
+    const [dx, dy] = deskOriginFor(s);
+    const cx = dx+8, ly = dy+TILE-2;
+    const bx = dx+1;
     if (mode==='done') { rect(bx,ly+1,4,4,'#16A34A'); dot(bx+1,ly+2,'#FFFFFF'); dot(bx+2,ly+3,'#FFFFFF'); dot(bx+3,ly+1,'#FFFFFF'); }
     else if (mode==='working') { const p=Math.floor(tick/10)%2; rect(bx,ly+1,4,4,p?e.role.shirt:rgba(e.role.shirt,0.45)); }
     else rect(bx,ly+1,4,4,'#CFC4B4');
@@ -1027,8 +1147,15 @@
     drawBackground();
     if (editMode.on) drawEditUnderlay();   // bench + pod rects read under the characters
 
+    // During a custom run, draw the pod outlines + mode badges under the
+    // characters (subtler than edit mode) so teaming/order stays visible.
+    if (customRunView()) drawRunPods();
+
     const sprites = [];
-    STATIONS.forEach(s => { const d=deskOf(s); sprites.push({ baseY:T(d[1]+1), draw:()=>drawDeskSprite(s) }); });
+    STATIONS.forEach(s => {
+      const [, dy] = deskOriginFor(s);
+      sprites.push({ baseY:dy+TILE, draw:()=>drawDeskSprite(s) });
+    });
     sprites.push({ baseY:T(10),    draw:drawSofa });
     sprites.push({ baseY:T(11),    draw:drawTable });
     sprites.push({ baseY:T(9),     draw:drawCoffeeCounter });   // dining corner
@@ -1045,7 +1172,77 @@
     Object.values(pets).forEach(drawBubble);
     if (selected && chars[selected]) drawSelectionMarker(chars[selected]);
     if (fly) drawFlyingBook();
+    if (customRunView()) drawRunDocs();    // result icons flying worker → 合成
     if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
+  }
+
+  // ─── Custom-layout run overlays ─────────────────────────────────────────────
+  // Pod outline + mode badge while a custom run plays (subtler than edit mode).
+  // For relay pods the members are numbered 1→2→… in run order, and the
+  // currently-active member (working) gets a brighter ring.
+  function drawRunPods() {
+    computePods().forEach(pod => {
+      if (pod.length < 2) return;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      pod.forEach(id => { const e = chars[id];
+        minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x);
+        minY = Math.min(minY, e.y); maxY = Math.max(maxY, e.y);
+      });
+      const pad = 9;
+      const x = minX - pad, y = minY - 16, w = (maxX - minX) + pad * 2, h = (maxY - minY) + 26;
+      const relay = podModeOf(pod) === 'relay';
+      const stroke = relay ? '#8B5CF6' : '#14B8A6';
+      c.save();
+      c.fillStyle = relay ? rgba('#8B5CF6', 0.07) : rgba('#14B8A6', 0.07);
+      roundRect(px(x), px(y), px(w), px(h), SCALE * 2.5); c.fill();
+      c.strokeStyle = rgba(stroke, 0.42);
+      c.lineWidth = SCALE; c.stroke();
+      // Mode badge centred above the pod.
+      const label = relay ? '接力' : '平行';
+      const bw = 26, bh = 11;
+      const bx = (minX + maxX) / 2 - bw / 2, by = minY - 16 - bh - 2;
+      c.fillStyle = rgba(stroke, 0.85);
+      roundRect(px(bx), px(by), px(bw), px(bh), SCALE * 1.5); c.fill();
+      c.fillStyle = '#FFFFFF';
+      c.font = `${10}px system-ui, sans-serif`;
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(label, px(bx + bw / 2), px(by + bh / 2) + 1);
+      c.restore();
+      // Relay: number members in run order; highlight the active (working) one.
+      if (relay) {
+        const order = podOrder(pod);
+        order.forEach((id, i) => {
+          const e = chars[id];
+          const active = e.state === 'working' || vmode(e) === 'working';
+          const nx = e.x - 8, ny = e.y - 18;
+          c.save();
+          c.fillStyle = active ? '#8B5CF6' : rgba('#8B5CF6', 0.45);
+          c.beginPath(); c.arc(px(nx), px(ny), px(active ? 3.4 : 2.8), 0, Math.PI * 2); c.fill();
+          c.fillStyle = '#FFFFFF';
+          c.font = `${9}px system-ui, sans-serif`;
+          c.textAlign = 'center'; c.textBaseline = 'middle';
+          c.fillText(String(i + 1), px(nx), px(ny) + 1);
+          c.restore();
+        });
+      }
+    });
+  }
+
+  // Little result documents flying from a finished worker to 合成 (synth) — a
+  // simple lerp along a line (no pathfinding), the in-place analogue of the
+  // default run's walk-to-synth handoff.
+  function drawRunDocs() {
+    const S = chars.synth;
+    for (let i = runDocs.length - 1; i >= 0; i--) {
+      const d = runDocs[i];
+      d.t++;
+      const p = Math.min(d.t / 40, 1);
+      const sx = d.x0, sy = d.y0, ex = S.x, ey = S.y - 4;
+      const cx = sx + (ex - sx) * p, cy = sy + (ey - sy) * p - Math.sin(p * Math.PI) * 18;
+      rect(cx - 2, cy - 3, 5, 6, '#FFFFFF'); rect(cx - 2, cy - 3, 5, 1, d.color);
+      rect(cx - 1, cy - 1, 3, 1, '#9CA3AF'); rect(cx - 1, cy + 1, 3, 1, '#9CA3AF');
+      if (p >= 1) runDocs.splice(i, 1);
+    }
   }
 
   // Bench strip + translucent pod rects, drawn before characters so they read
@@ -1295,6 +1492,7 @@
     if (editMode.on) return;
     // Edit mode is mutually exclusive with a run.
     sim.active = false; sim.recalling = false; sim.pendingStart = false;
+    sim.customView = false; runDocs.length = 0;
     editMode.on = true; editMode.dragId = null;
     selected = null;
     // Freeze everyone: clear paths/timers so the sim never fights the drag.
@@ -1379,6 +1577,9 @@
     getGraphConfig() { return getGraphConfig(); },
     setAgentState(id, state) {
       if (!chars[id] || !VALID.includes(state)) return;
+      // A benched worker is disabled for this run: keep it asleep, ignore any
+      // stray state so "who's disabled" stays unambiguous at a glance.
+      if (customRunActive() && editMode.bench[id]) return;
       taskState[id] = state;
       if (chars[id].asleep) {
         chars[id].bubble = '';
@@ -1393,6 +1594,7 @@
       // latest SSE line for this agent: shown live while working, and reused as
       // the report bubble when the worker walks over to the Leader.
       if (!chars[id] || !text) return;
+      if (customRunActive() && editMode.bench[id]) return;   // benched stays quiet/asleep
       chars[id].statusText = text; chars[id]._report = text;
       if (reducedMotion) { chars[id].bubble = text; render(); }
 	    },
@@ -1410,6 +1612,7 @@
     getAgentInfo(id) { return chars[id] ? { id, name: chars[id].role.name, role: chars[id].role.role, color: chars[id].role.shirt } : null; },
     reset() {
       sim.active = false; selected = null; sim.presented = false; sim.boardActive = false;
+      sim.customView = false; sim.customRun = false; runDocs.length = 0;
       sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
       sim.leaderQueue = []; sim.leaderBusy = false;
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;
