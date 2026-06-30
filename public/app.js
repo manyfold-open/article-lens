@@ -120,12 +120,41 @@ document.addEventListener('DOMContentLoaded', () => {
     fpToggle.textContent = open ? '今日精選 ▴' : '今日精選 ▾';
   });
 
+  // Edit-office mode — drag teammates into pods, set modes, disable workers.
+  const editToggle = document.getElementById('edit-toggle');
+  if (editToggle) editToggle.addEventListener('click', toggleEditMode);
+
   // Initial office-control state
   if (window.pixelAgents) {
     window.pixelAgents.setKbCount(kbLoad().length);
     window.pixelAgents.setLang(document.documentElement.dataset.lang || 'bilingual');
   }
 });
+
+// ── Edit-office mode toggle ─────────────────────────────────────────────────
+function toggleEditMode() {
+  const pa = window.pixelAgents;
+  if (!pa || !pa.setEditMode) return;
+  const next = !pa.isEditMode();
+  // Editing only makes sense from the office hub; bail out of results view.
+  if (next && currentPhase !== 'input') {
+    setPhase('input');
+    pa.reset();
+  }
+  pa.setEditMode(next);
+  syncEditToggle();
+}
+
+function syncEditToggle() {
+  const pa = window.pixelAgents;
+  const btn = document.getElementById('edit-toggle');
+  if (!btn || !pa || !pa.isEditMode) return;
+  const on = pa.isEditMode();
+  btn.classList.toggle('active', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.textContent = on ? '✓ 完成編排' : '🛠️ 編排辦公室';
+  document.documentElement.dataset.editmode = on ? 'on' : 'off';
+}
 
 const LANG_CYCLE = ['zh', 'en'];   // 中 / EN only (no bilingual)
 function cycleLang() {
@@ -222,6 +251,7 @@ function startAnalysis(input) {
   reportReady = false; clearTimeout(reportTimer);
   setWorkflowStage('recall');
   if (window.pixelAgents) window.pixelAgents.receiveTask();
+  syncEditToggle();   // a run auto-exits edit mode in the sim; reflect it on the button
   setPhase('running');
 
   let qs = input.kind === 'id'  ? 'id=' + encodeURIComponent(input.value)
@@ -230,6 +260,11 @@ function startAnalysis(input) {
   // Send the user's saved terms so 小詞 skips what they already know.
   const kb = kbLoad().map(i => String(i.term).replace(/,/g, ' ')).filter(Boolean).slice(0, 80);
   if (kb.length) qs += '&kb=' + encodeURIComponent(kb.join(','));
+  // If the user has arranged the office (drag/pods/mode/disable), pass the
+  // resulting graphConfig so the arrangement drives the real analysis. When the
+  // layout is the default, getGraphConfig() returns null and nothing is sent.
+  const cfg = window.pixelAgents?.getGraphConfig?.();
+  if (cfg) qs += '&graph=' + encodeURIComponent(JSON.stringify(cfg));
   const es = new EventSource(`/api/analyze?${qs}`);
   es.onmessage = e => {
     let ev;

@@ -129,6 +129,39 @@
   });
   const taskState = {};          // id → 'idle'|'typing'|'reading'|'done'
   const sim = { active: false };
+
+  // ─── Edit-office mode (drag workers → pods/modes → graphConfig) ──────────────
+  // The user drags the four editable workers, clusters {sum,jargon,comments}
+  // into pods, sets each pod's collaboration mode, and benches workers to
+  // disable them. The arrangement is serialized into a graphConfig (v1) that the
+  // backend consumes. When the layout equals the default (all enabled, the three
+  // stage-1 workers in one parallel group), getGraphConfig() returns null and the
+  // office behaves byte-for-byte as today.
+  const EDITABLE = ['sum', 'jargon', 'comments', 'ctx']; // draggable workers
+  const STAGE1 = ['sum', 'jargon', 'comments'];          // can be podded
+  const POD_DIST = TILE * 1.2;                            // cluster radius (logical px)
+  const GRAPH_LS_KEY = 'alens.graph';
+  const editMode = {
+    on: false,
+    dragId: null,                 // id currently being dragged
+    bench: Object.create(null),   // id → true when disabled (benched)
+    podModes: Object.create(null),// "a,b,c" (sorted) → 'parallel' | 'relay'
+    layout: Object.create(null),  // id → {x,y} custom positions (config source of truth)
+    badges: [],                   // per-frame clickable mode badges {x,y,w,h,key}
+  };
+  // Position used for pod/config math: the user's custom layout if set, else the
+  // live entity position. Decoupled from the running sim, which moves chars.
+  function posOf(id) { return editMode.layout[id] || chars[id]; }
+  // True when the user has any custom arrangement saved (positions/bench/modes).
+  function hasCustomLayout() {
+    return Object.keys(editMode.layout).length > 0
+      || Object.keys(editMode.bench).length > 0
+      || Object.keys(editMode.podModes).length > 0;
+  }
+  // Bench strip: a labelled lane along the bottom row. Workers dropped here are
+  // disabled. Uses logical coords (full width, bottom tile row).
+  const BENCH = { x: 0, y: LOGICAL_H - TILE, w: LOGICAL_W, h: TILE };
+  function inBench(x, y) { return y >= BENCH.y && x >= BENCH.x && x <= BENCH.x + BENCH.w; }
   const pets = {
     pika: { id:'pika', kind:'pika', x:T(18)+8, y:T(10)+10, tile:[18,10], path:null, onArrive:null, facing:'left', state:'idle', timer:80, onTimer:null, bubble:'', card:'' },
     dog:  { id:'dog',  kind:'dog',  x:T(17)+8, y:T(10)+8,  tile:[17,10], path:null, onArrive:null, facing:'left', state:'idle', timer:120, onTimer:null, bubble:'', card:'' },
@@ -246,6 +279,7 @@
   };
 
 	  function startRun() {
+	    if (editMode.on) exitEditMode();   // a run is mutually exclusive with editing
 	    if (reducedMotion) return;
 	    if (sim.recalling) { sim.pendingStart = true; return; }
 	    if (sim.active) return;
@@ -261,6 +295,7 @@
 	  }
 
 	  function receiveTask() {
+	    if (editMode.on) exitEditMode();   // a run is mutually exclusive with editing
 	    if (reducedMotion) { reset(); return; }
 	    hardStopSideJobs();
 	    sim.active = false; sim.recalling = true; sim.pendingStart = false;
@@ -520,6 +555,7 @@
 
   // ─── Per-frame update ───────────────────────────────────────────────────────
   function update() {
+    if (editMode.on) return;   // edit mode freezes the sim; the user drives positions
     Object.values(chars).forEach(stepEntity);
     Object.values(pets).forEach(stepEntity);
     // hybrid work gate: a worker moves on only after its real `done` AND min time.
@@ -989,6 +1025,7 @@
     c.imageSmoothingEnabled = false;
     c.clearRect(0,0,canvas.width,canvas.height);
     drawBackground();
+    if (editMode.on) drawEditUnderlay();   // bench + pod rects read under the characters
 
     const sprites = [];
     STATIONS.forEach(s => { const d=deskOf(s); sprites.push({ baseY:T(d[1]+1), draw:()=>drawDeskSprite(s) }); });
@@ -1008,6 +1045,84 @@
     Object.values(pets).forEach(drawBubble);
     if (selected && chars[selected]) drawSelectionMarker(chars[selected]);
     if (fly) drawFlyingBook();
+    if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
+  }
+
+  // Bench strip + translucent pod rects, drawn before characters so they read
+  // clearly underneath them.
+  function drawEditUnderlay() {
+    // Bench / 休息區 strip along the bottom.
+    rect(BENCH.x, BENCH.y, BENCH.w, BENCH.h, rgba('#000000', 0.10));
+    rect(BENCH.x, BENCH.y, BENCH.w, 1, rgba('#000000', 0.18));
+    c.save();
+    c.fillStyle = rgba('#1C1917', 0.45);
+    c.font = `${11}px system-ui, sans-serif`;
+    c.textAlign = 'left'; c.textBaseline = 'middle';
+    c.fillText('休息區 / bench — 拖進來休息', px(BENCH.x + 3), px(BENCH.y + BENCH.h / 2));
+    c.restore();
+    // Pod rects (only multi-member pods get a visible cluster box).
+    computePods().forEach(pod => {
+      if (pod.length < 2) return;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      pod.forEach(id => { const e = chars[id];
+        minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x);
+        minY = Math.min(minY, e.y); maxY = Math.max(maxY, e.y);
+      });
+      const pad = 9;
+      const x = minX - pad, y = minY - 16, w = (maxX - minX) + pad * 2, h = (maxY - minY) + 26;
+      const relay = podModeOf(pod) === 'relay';
+      c.save();
+      c.fillStyle = relay ? rgba('#8B5CF6', 0.14) : rgba('#14B8A6', 0.14);
+      roundRect(px(x), px(y), px(w), px(h), SCALE * 2.5); c.fill();
+      c.strokeStyle = relay ? rgba('#8B5CF6', 0.55) : rgba('#14B8A6', 0.55);
+      c.lineWidth = SCALE; c.stroke();
+      c.restore();
+    });
+  }
+
+  // Greyed benched workers, the clickable mode badges, and a subtle hint.
+  function drawEditOverlay() {
+    editMode.badges = [];
+    // Grey out benched workers with a wash.
+    EDITABLE.forEach(id => {
+      if (!editMode.bench[id]) return;
+      const e = chars[id];
+      c.save();
+      c.fillStyle = rgba('#1C1917', 0.42);
+      roundRect(px(e.x - 7), px(e.y - 16), px(14), px(24), SCALE); c.fill();
+      c.restore();
+    });
+    // Mode badges, one per multi-member pod, centred above the pod.
+    computePods().forEach(pod => {
+      if (pod.length < 2) return;
+      let minX = Infinity, maxX = -Infinity, minY = Infinity;
+      pod.forEach(id => { const e = chars[id];
+        minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x); minY = Math.min(minY, e.y);
+      });
+      const relay = podModeOf(pod) === 'relay';
+      const label = relay ? '接力' : '平行';
+      const bw = 26, bh = 11;
+      const bx = (minX + maxX) / 2 - bw / 2;
+      const by = minY - 16 - bh - 2;
+      const key = podKey(pod);
+      editMode.badges.push({ x: bx, y: by, w: bw, h: bh, key });
+      c.save();
+      c.fillStyle = relay ? '#8B5CF6' : '#14B8A6';
+      roundRect(px(bx), px(by), px(bw), px(bh), SCALE * 1.5); c.fill();
+      c.fillStyle = '#FFFFFF';
+      c.font = `${10}px system-ui, sans-serif`;
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(label, px(bx + bw / 2), px(by + bh / 2) + 1);
+      c.restore();
+    });
+    // Subtle hint banner.
+    c.save();
+    c.fillStyle = rgba('#1C1917', 0.62);
+    c.font = `${10}px system-ui, sans-serif`;
+    c.textAlign = 'center'; c.textBaseline = 'top';
+    c.fillText('編輯模式：拖曳小幫手分組、點徽章切換平行/接力、拖到休息區停用',
+      px(LOGICAL_W / 2), px(WALL * TILE + 2));
+    c.restore();
   }
 
   // A little book flying to the bookshelf when a term is saved.
@@ -1042,13 +1157,25 @@
     canvas = document.createElement('canvas'); canvas.className='pixel-canvas';
     canvas.width = px(LOGICAL_W); canvas.height = px(LOGICAL_H);
     container.appendChild(canvas); c = canvas.getContext('2d'); c.imageSmoothingEnabled = false;
-    canvas.addEventListener('click', ev => { const id = locate(ev); if (id && clickHandler) clickHandler(id); });
+    canvas.addEventListener('click', ev => { if (editMode.on) return; const id = locate(ev); if (id && clickHandler) clickHandler(id); });
     canvas.addEventListener('mousemove', ev => {
+      if (editMode.on) {
+        editPointerMove(ev);
+        const overEditable = !!editMode.dragId || EDITABLE.includes(locate(ev));
+        canvas.style.cursor = editMode.dragId ? 'grabbing' : (overEditable ? 'grab' : 'default');
+        return;
+      }
       const id = locate(ev);
       canvas.style.cursor = id ? 'pointer' : 'default';
       if (hoverHandler) hoverHandler(id, id ? pointerInfo(ev) : null);
     });
     canvas.addEventListener('mouseleave', () => { canvas.style.cursor = 'default'; if (hoverHandler) hoverHandler(null, null); });
+    // Drag interactions for edit mode (mouse + touch).
+    canvas.addEventListener('mousedown', editPointerDown);
+    window.addEventListener('mouseup', editPointerUp);
+    canvas.addEventListener('touchstart', editPointerDown, { passive: false });
+    canvas.addEventListener('touchmove', editPointerMove, { passive: false });
+    canvas.addEventListener('touchend', editPointerUp);
   }
   // Map a pointer event to the character under it (front-most wins).
   function locate(ev) {
@@ -1065,6 +1192,177 @@
     const r = canvas.getBoundingClientRect();
     return { x: ev.clientX - r.left, y: ev.clientY - r.top, width: r.width, height: r.height };
   }
+  // Same rect→logical normalization used by locate(), as a {x,y} pair.
+  function locateLogical(ev) {
+    const r = canvas.getBoundingClientRect();
+    const src = ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+    return {
+      x: (src.clientX - r.left) / r.width * LOGICAL_W,
+      y: (src.clientY - r.top) / r.height * LOGICAL_H,
+    };
+  }
+
+  // ─── Edit mode: pods, graphConfig, persistence ──────────────────────────────
+  function podKey(ids) { return ids.slice().sort().join(','); }
+
+  // Cluster the enabled stage-1 workers by proximity (transitive, ≤ POD_DIST).
+  // Returns an array of id-arrays (each a pod). Singletons are length-1 pods.
+  function computePods() {
+    const live = STAGE1.filter(id => !editMode.bench[id]);
+    const pods = [];
+    const seen = new Set();
+    for (const id of live) {
+      if (seen.has(id)) continue;
+      const pod = [id]; seen.add(id);
+      for (let i = 0; i < pod.length; i++) {
+        const a = posOf(pod[i]);
+        for (const other of live) {
+          if (seen.has(other)) continue;
+          const b = posOf(other);
+          if (Math.hypot(a.x - b.x, a.y - b.y) <= POD_DIST) { pod.push(other); seen.add(other); }
+        }
+      }
+      pods.push(pod);
+    }
+    return pods;
+  }
+  function podModeOf(ids) { return editMode.podModes[podKey(ids)] === 'relay' ? 'relay' : 'parallel'; }
+  // Relay runs in listed order — order members left-to-right (then top-to-bottom).
+  function podOrder(ids) {
+    return ids.slice().sort((a, b) => (posOf(a).x - posOf(b).x) || (posOf(a).y - posOf(b).y));
+  }
+
+  // Build the graphConfig (v1). Returns null when the layout equals the default
+  // (all four enabled; the three stage-1 workers in one parallel group).
+  function getGraphConfig() {
+    if (!hasCustomLayout()) return null;   // untouched office → no graph param
+    const enabled = {};
+    let anyDisabled = false;
+    for (const id of EDITABLE) {
+      if (editMode.bench[id]) { enabled[id] = false; anyDisabled = true; }
+    }
+    const pods = computePods();
+    const groups = [];
+    for (const pod of pods) {
+      const mode = podModeOf(pod);
+      const members = mode === 'relay' ? podOrder(pod) : pod.slice();
+      groups.push({ members, mode });
+    }
+    // Default detection: nothing benched, and the three stage-1 workers form a
+    // single parallel group.
+    const isDefault = !anyDisabled
+      && groups.length === 1
+      && groups[0].mode === 'parallel'
+      && groups[0].members.length === STAGE1.length;
+    if (isDefault) return null;
+    const cfg = { v: 1, enabled, groups };
+    return cfg;
+  }
+
+  function persistGraph() {
+    try {
+      const layout = {};
+      for (const id of EDITABLE) if (editMode.layout[id]) layout[id] = editMode.layout[id];
+      const data = { v: 1, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes };
+      localStorage.setItem(GRAPH_LS_KEY, JSON.stringify(data));
+    } catch (_) { /* storage may be unavailable */ }
+  }
+  function restoreGraph() {
+    let data;
+    try { data = JSON.parse(localStorage.getItem(GRAPH_LS_KEY) || 'null'); } catch (_) { return; }
+    if (!data || data.v !== 1) return;
+    editMode.bench = Object.create(null);
+    (data.bench || []).forEach(id => { if (EDITABLE.includes(id)) editMode.bench[id] = true; });
+    editMode.podModes = Object.create(null);
+    if (data.podModes && typeof data.podModes === 'object') {
+      for (const k in data.podModes) if (data.podModes[k] === 'relay') editMode.podModes[k] = 'relay';
+    }
+    editMode.layout = Object.create(null);
+    if (data.layout) {
+      for (const id of EDITABLE) {
+        const p = data.layout[id];
+        if (p && typeof p.x === 'number' && typeof p.y === 'number' && chars[id]) {
+          const x = clampX(p.x), y = clampY(p.y);
+          editMode.layout[id] = { x, y };
+        }
+      }
+    }
+  }
+  function clampX(x) { return Math.max(6, Math.min(LOGICAL_W - 6, x)); }
+  function clampY(y) { return Math.max(WALL * TILE + 6, Math.min(LOGICAL_H - 4, y)); }
+
+  function enterEditMode() {
+    if (editMode.on) return;
+    // Edit mode is mutually exclusive with a run.
+    sim.active = false; sim.recalling = false; sim.pendingStart = false;
+    editMode.on = true; editMode.dragId = null;
+    selected = null;
+    // Freeze everyone: clear paths/timers so the sim never fights the drag.
+    Object.values(chars).forEach(e => {
+      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
+      e.bubble = ''; e.ambKind = null;
+      if (e.state !== 'idle') e.state = 'idle';
+    });
+    // Reflect the saved custom layout onto the live entities so what the user
+    // edits matches what gets persisted; non-customised workers sit at their seat.
+    EDITABLE.forEach(id => {
+      const p = editMode.layout[id]; const e = chars[id];
+      if (p) { e.x = p.x; e.y = p.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)]; }
+    });
+    Object.values(pets).forEach(p => { p.path = null; p.onArrive = null; p.onTimer = null; p.bubble = ''; p.card = ''; p.state = 'idle'; });
+    if (reducedMotion) render();
+  }
+  function exitEditMode() {
+    if (!editMode.on) return;
+    editMode.on = false; editMode.dragId = null;
+    persistGraph();
+    // Snap any non-benched worker that isn't near its seat back onto the grid
+    // gracefully — but keep custom positions; just refresh idle timers.
+    Object.values(chars).forEach(e => { e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND); });
+    if (reducedMotion) render();
+  }
+
+  // Pointer handlers (mouse + touch) — only active in edit mode.
+  function editPointerDown(ev) {
+    if (!editMode.on) return;
+    const p = locateLogical(ev);
+    // Mode badge click takes priority (cycles parallel↔relay).
+    for (const b of editMode.badges) {
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        editMode.podModes[b.key] = editMode.podModes[b.key] === 'relay' ? 'parallel' : 'relay';
+        persistGraph(); if (reducedMotion) render();
+        ev.preventDefault();
+        return;
+      }
+    }
+    const id = locate(ev);
+    if (id && EDITABLE.includes(id)) {
+      editMode.dragId = id;
+      chars[id].path = null; chars[id].onArrive = null;
+      ev.preventDefault();
+    }
+  }
+  function editPointerMove(ev) {
+    if (!editMode.on || !editMode.dragId) return;
+    const p = locateLogical(ev);
+    const id = editMode.dragId, e = chars[id];
+    e.x = clampX(p.x); e.y = clampY(p.y);
+    e.path = null;
+    e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+    editMode.layout[id] = { x: e.x, y: e.y };   // config source of truth
+    ev.preventDefault();
+    if (reducedMotion) render();
+  }
+  function editPointerUp(ev) {
+    if (!editMode.on || !editMode.dragId) return;
+    const id = editMode.dragId;
+    const e = chars[id];
+    if (inBench(e.x, e.y)) editMode.bench[id] = true;
+    else delete editMode.bench[id];
+    editMode.dragId = null;
+    persistGraph();
+    if (reducedMotion) render();
+  }
 
   // ─── Public API ─────────────────────────────────────────────────────────────
   const VALID = ['idle','reading','typing','done'];
@@ -1072,8 +1370,13 @@
     init(containerId) {
       reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       createCanvas(containerId);
+      restoreGraph();   // bring back any saved custom layout (positions/bench/modes)
       if (reducedMotion) render(); else animId = requestAnimationFrame(loop);
     },
+    // ─── Edit-office mode ─────────────────────────────────────────────────────
+    setEditMode(on) { if (on) enterEditMode(); else exitEditMode(); },
+    isEditMode() { return editMode.on; },
+    getGraphConfig() { return getGraphConfig(); },
     setAgentState(id, state) {
       if (!chars[id] || !VALID.includes(state)) return;
       taskState[id] = state;
