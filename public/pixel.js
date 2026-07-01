@@ -71,6 +71,32 @@
   ];
   const deskOf = s => [s.seat[0], s.seat[1] + 1];
 
+  // ─── Layout engine zones (spec → office arrangement) ────────────────────────
+  // The office is DERIVED from the workflow spec: agents are auto-arranged into a
+  // left→right pipeline so you can read the workflow at a glance. Bands are given
+  // as [col,row] tile centres on the 20×12 grid; positions are converted to the
+  // logical-px worker centre (tile*TILE + 8). These are tuned to sit in the open
+  // floor (rows 3–7) and dodge the wall furniture / dining corner on the right.
+  //
+  //   [休息區 rest]  [讀者區 readers]  [裁定 ctx]  [校對 synth]  [白板 board]
+  //     cols 1–3        cols 5–9        col 11       col 14        col 17
+  //
+  // Scope note: FIRST BATCH only — parallel (separate desks), group (shared
+  // table), disabled (sleep), L→R zones, doc-flow, effort desk size. Hooks are
+  // left for later (relay conveyor / vote-clone / conditional-escalate).
+  const ZONE = {
+    rest:    { cols: [1, 3],   row: 9  },   // sofa area; benched agents sleep here
+    readers: { cols: [5, 9],   row: 4  },   // stage-1: sum / jargon / comments
+    ctx:     { col: 11,        row: 5  },   // 裁定 verdict desk
+    synth:   { col: 14,        row: 5  },   // 校對 QA desk
+    board:   { col: 17,        row: 3  },   // whiteboard (orch presents here)
+    orchseat:{ col: 9,         row: 2  },   // 隊長 overseer spot, center-top
+  };
+  // Rest-area slots for benched agents (bottom-left lounge, spread so they don't
+  // stack; chosen to dodge the plant tiles at [1,10] / [6,10]).
+  const REST_SLOTS = [[2, 9], [3, 10], [2, 11], [4, 9]];
+  const centreOf = (col, row) => ({ x: col * TILE + 8, y: row * TILE + 8 });
+
   // Blocking floor furniture (besides seats/desks).
   const BLOCKED = [
     [15,2],[16,2],[17,2],[18,2],          // kitchen counter
@@ -206,6 +232,11 @@
   // true through the present finale so placement doesn't snap back mid-reveal.
   function customRunActive() { return sim.active && sim.customRun; }
   function customRunView() { return !!sim.customView; }
+  // The office is now ALWAYS spec-driven: desks/nameplates/pods travel with the
+  // agents' computed positions (not fixed furniture tiles), whether idle,
+  // reshuffling, or mid-run. layoutView() is the master switch the renderer uses.
+  // (customRunView stays for the run finale's doc/pod extras.)
+  function layoutView() { return true; }
   // Bench strip: a labelled lane along the bottom row. Workers dropped here are
   // disabled. Uses logical coords (full width, bottom tile row).
   const BENCH = { x: 0, y: LOGICAL_H - TILE, w: LOGICAL_W, h: TILE };
@@ -342,34 +373,33 @@
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
 	    runDocs.length = 0;
-	    // Latch the run choreography for its whole lifetime. A custom layout honours
-	    // the user's placement (in-place work, traveling desks, benched=asleep);
-	    // the default layout keeps the full walking tour byte-for-byte as today.
-	    sim.customRun = isCustomLayout();
-	    if (sim.customRun) { startCustomRun(); return; }
-	    sim.customView = false;   // default run uses fixed-furniture rendering
-	    const L = chars.orch;
-	    L.state = 'walking_to_employee'; L.bubble = '';
-	    slideTo(L, L.station.approach, () => assignTour(0));
+	    // The office is now always spec-driven: every run works IN PLACE at the
+	    // computed layout (readers‖ → ctx → synth → whiteboard), with docs flying
+	    // left→right. This unifies the old default+custom paths behind one engine.
+	    sim.customRun = true;
+	    startCustomRun();
 	  }
 
-	  // Custom-layout run: workers stay at their PLACED positions and work in
-	  // place (no recall to seats, no walk-to-assign tour). Disabled workers sleep
-	  // on the bench. Finished workers fly a result icon to 合成 instead of walking.
+	  // Spec-driven run: workers stay at their COMPUTED positions (targetPos) and
+	  // work in place — no recall to fixed seats. Disabled workers sleep in the
+	  // rest area. Finished workers fly a result doc rightward down the pipeline.
 	  function startCustomRun() {
+	    relayoutActive = false;   // freeze any in-flight reshuffle; the run pins positions
+	    computed = computeLayout(specSnapshot());   // ensure targets reflect the current spec
 	    sim.customView = true;   // keep traveling desks/pods/docs rendered through the finale
 	    const L = chars.orch;
 	    // 隊長 stays near its spot, faces the room, and shows a directing bubble.
 	    L.path = null; L.onArrive = null; L.timer = 0; L.onTimer = null;
-	    L.state = 'idle'; L.facing = 'down'; L.bubble = '各組就位，開工！';
+	    { const t = targetPos('orch'); L.x = t.x; L.y = t.y; L.tile = [Math.round((L.x-8)/TILE), Math.round((L.y-8)/TILE)]; }
+	    L.walkTarget = null; L.state = 'idle'; L.facing = 'down'; L.bubble = '各組就位，開工！';
 	    L.timer = 90; L.onTimer = () => { if (sim.active) L.bubble = ''; };
 	    ALL_WORKERS.forEach(id => {
 	      const e = chars[id];
-	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
+	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null; e.walkTarget = null;
 	      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
-	      // Place the worker at its custom position (else its seat) and freeze it.
-	      const p = editMode.layout[id];
-	      if (p) { e.x = p.x; e.y = p.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)]; }
+	      // Place the worker at its computed slot (drag override wins) and freeze it.
+	      const p = targetPos(id);
+	      e.x = p.x; e.y = p.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
 	      if (editMode.bench[id]) {
 	        // Benched → disabled: greyed, asleep, never assigned, no handoff.
 	        e.asleep = true; e.state = 'idle'; e.bubble = ''; e.facing = 'down';
@@ -379,16 +409,23 @@
 	        e.state = 'working'; e.workStart = tick;   // work in place; SSE drives the monitor
 	      }
 	    });
-	    // 合成 also works in place (no desk recall); place it at its seat centre.
+	    // 合成 also works in place at its computed 校對 desk (no desk recall).
 	    const S = chars.synth;
-	    S.path = null; S.onArrive = null; S.timer = 0; S.onTimer = null;
+	    S.path = null; S.onArrive = null; S.timer = 0; S.onTimer = null; S.walkTarget = null;
 	    S._queuedDeliver = false; S._returningToDesk = false;
+	    { const t = targetPos('synth'); S.x = t.x; S.y = t.y; S.tile = [Math.round((S.x-8)/TILE), Math.round((S.y-8)/TILE)]; }
+	    if (editMode.bench.synth) { S.asleep = true; }
 	    S.state = 'idle'; S.facing = 'down'; S.bubble = '';
 	  }
 
+	  // New analysis incoming: instead of recalling everyone to fixed seats, the
+	  // office RE-ARRANGES into the current spec's pipeline (agents walk to their
+	  // computed slots; disabled ones head to the rest area). startRun() latches
+	  // pendingStart and fires once the reshuffle settles, so the run begins from
+	  // a clean, spec-shaped office.
 	  function receiveTask() {
 	    if (editMode.on) exitEditMode();   // a run is mutually exclusive with editing
-	    if (reducedMotion) { reset(); return; }
+	    if (reducedMotion) { window.pixelAgents.reset(); return; }
 	    hardStopSideJobs();
 	    sim.active = false; sim.recalling = true; sim.pendingStart = false;
 	    sim.presented = false; sim.boardActive = false; sim.kbOpen = null;
@@ -397,19 +434,19 @@
 	    sim.leaderQueue = []; sim.leaderBusy = false;
 	    selected = null;
 	    const L = chars.orch;
-	    L.bubble = '全體回座，準備開工！';
-	    let remaining = STATIONS.length;
-	    const done = () => {
-	      remaining--;
-	      if (remaining > 0) return;
-	      sim.recalling = false;
-	      Object.values(chars).forEach(e => {
-	        e.state = 'idle'; e.bubble = ''; e.facing = 'down';
-	        e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
-	      });
-	      if (sim.pendingStart) startRun();
-	    };
-	    STATIONS.forEach(s => recallToSeat(chars[s.id], done));
+	    L.bubble = '各組就位，準備開工！';
+	    // Clear per-agent leftovers, then walk to the computed layout.
+	    Object.values(chars).forEach(e => {
+	      e.timer = 0; e.onTimer = null; e._queuedDeliver = false; e._returningToDesk = false;
+	      e.ambKind = null; e.statusText = ''; e._report = ''; e.workStart = 0;
+	      delete taskState[e.id];
+	    });
+	    relayout();   // reshuffle into the spec pipeline (walk; snaps under reduced-motion)
+	    sim.recalling = false;
+	    // Fire the pending run now; startCustomRun freezes the reshuffle and pins
+	    // positions, so the run begins immediately while agents are (visually)
+	    // still settling into place — reads as "getting to work".
+	    if (sim.pendingStart) startRun();
 	  }
 
 	  function recallToSeat(e, done) {
@@ -588,7 +625,7 @@
       L.state = 'idle'; L.bubble = ''; L.path = null; L.onArrive = null; L.timer = 0; L.onTimer = null; L.ambKind = null;
     }
     L.bubble = '';
-    slideTo(L, L.station.approach, () => walkTo(L, SHELF_APPROACH, () => {
+    walkTo(L, SHELF_APPROACH, () => {
       faceToward(L, [2, 2]);
       L.state = 'kb_search'; L.bubble = '找單詞本…'; L.timer = 85;
       L.onTimer = () => {
@@ -597,11 +634,13 @@
         sim.kbOpen = null;
         L.timer = 35;
         L.onTimer = () => {
-          L.bubble = '';
-          walkTo(L, L.station.approach, () => slideTo(L, L.station.seat, () => finishAmbient(L)));
+          L.bubble = ''; L.state = 'idle';
+          // Return to the computed overseer slot (free-floating) via the layout lerp.
+          L.walkTarget = { x: targetPos('orch').x, y: targetPos('orch').y, benched: false };
+          relayoutActive = true;
         };
       };
-    }));
+    });
   }
 
   // ─── Ambient office life (game-NPC idle behaviour) ──────────────────────────
@@ -609,7 +648,14 @@
   const CHATS = ['🙂 歇會', '🥱', '💤 zzz', '🎧', '摸個魚', '🤔', '☕?'];
 
   function ambientTick(e) {
+    // The office is now spec-driven: workers hold their computed pipeline slots
+    // (not fixed seats), so seat-relative ambient trips would teleport them off
+    // their positions. Suppress the walk-away ambient; liveliness now comes from
+    // idle bob, pets, and the working-monitor glow during a run. (Hook: a future
+    // batch could add position-relative ambient that returns to targetPos.)
+    if (e.walkTarget || relayoutActive) return;
     if (sim.active || e.asleep || e.state !== 'idle' || moving(e)) return;
+    return;   // ambient walk-away disabled under the layout engine
     if (e.idleTimer == null) e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
     if (--e.idleTimer > 0) return;
     startAmbient(e);
@@ -649,9 +695,11 @@
   // ─── Per-frame update ───────────────────────────────────────────────────────
   function update() {
     if (editMode.on) return;   // edit mode freezes the sim; the user drives positions
+    stepLayout();              // advance any in-flight spec-driven reshuffle walk
     Object.values(chars).forEach(stepEntity);
     Object.values(pets).forEach(stepEntity);
     if (customRunActive()) { updateCustomRun(); petTick(); return; }
+    if (relayoutActive) { petTick(); return; }   // don't fight the reshuffle with ambient/seat logic
     // hybrid work gate: a worker moves on only after its real `done` AND min time.
     for (const id of ALL_WORKERS) {
       const w = chars[id];
@@ -672,9 +720,32 @@
     petTick();
   }
 
+  // Document flow, left→right down the pipeline. A finished agent emits a small
+  // 📄 that hops through the downstream stages so you can read the workflow
+  // direction: readers → 裁定(ctx) → 校對(synth) → 白板(whiteboard). Stages that
+  // are disabled are skipped. Endpoints resolve from live positions at spawn.
+  function spawnPipelineDoc(fromId) {
+    const w = chars[fromId];
+    const wps = [];                                    // ordered waypoints (x,y)
+    const push = id => { if (!editMode.bench[id]) wps.push({ x: chars[id].x, y: chars[id].y - 4 }); };
+    // A reader's doc visits 裁定(ctx) on the way to 校對(synth); ctx's own doc
+    // goes straight to synth. This reads as the L→R collect step.
+    if (fromId !== 'ctx') push('ctx');
+    push('synth');
+    if (!wps.length) return;
+    runDocs.push({ x0: w.x, y0: w.y - 4, color: w.role.shirt, wps, seg: 0, t: 0 });
+  }
+  // The finale hop: 合成's integrated report flies to the whiteboard easel.
+  function spawnFinalDoc() {
+    const S = chars.synth;
+    runDocs.push({ x0: S.x, y0: S.y - 4, color: S.role.shirt,
+      wps: [{ x: T(WB_TILE[0]) + 8, y: T(WB_TILE[1]) + 6 }], seg: 0, t: 0 });
+  }
+
   // In-place custom run: no walking. Each enabled worker finishes (real `done`
-  // + MIN_WORK) → flies a result icon to 合成 → marked done. When every enabled
-  // worker has handed off, 合成 integrates, then 隊長 presents (existing reveal).
+  // + MIN_WORK) → emits a doc that flies rightward down the pipeline → marked
+  // done. When every enabled worker has handed off, 合成 integrates, then 隊長
+  // presents (existing reveal).
   function updateCustomRun() {
     const S = chars.synth;
     for (const id of ALL_WORKERS) {
@@ -682,7 +753,7 @@
       const w = chars[id];
       if (w.state === 'working' && taskState[id] === 'done' && (tick - w.workStart) >= MIN_WORK) {
         w.state = 'done'; w.bubble = '';
-        runDocs.push({ t: 0, x0: w.x, y0: w.y - 4, color: w.role.shirt });   // fly to 合成
+        spawnPipelineDoc(id);   // 📄 flies rightward down the pipeline
       }
     }
     const enabled = ALL_WORKERS.filter(id => !editMode.bench[id]);
@@ -695,27 +766,40 @@
     if (S.state === 'reviewing' && (tick - S.workStart) >= SYNTH_REVIEW) {
       S.state = 'done'; S.bubble = ''; taskState.synth = 'done';
       sim.active = false;
+      spawnFinalDoc();   // 合成 → 白板: the integrated report flies to the easel
       if (!sim.presented) { sim.presented = true; startPresentInPlace(); }
     }
   }
 
-  // Custom-run finale: 隊長 stays put (no walk to the easel) and triggers the
-  // existing present/whiteboard reveal, then settles everyone.
+  // Finale: 隊長 walks over to the whiteboard, presents (triggering the report
+  // reveal), then returns to its overseer spot and settles everyone. Walking to
+  // the board keeps the "boss presents the report" beat and anchors the board as
+  // the pipeline's output. The synth→board doc lands just before this.
+  function present_settle() {
+    const L = chars.orch;
+    Object.values(chars).forEach(e => {
+      e.statusText = ''; e._report = ''; e._queuedDeliver = false;
+    });
+    L.bubble = ''; L.state = 'returning';
+    // Walk 隊長 back to its overseer slot (free-floating target, via the layout lerp).
+    L.walkTarget = { x: targetPos('orch').x, y: targetPos('orch').y, benched: false };
+    relayoutActive = true;
+    ALL_WORKERS.concat('synth').forEach(id => { if (!editMode.bench[id]) delete taskState[id]; });
+    sim.customView = false;   // finale settled → desks/pods revert to default rendering
+    runDocs.length = 0;
+  }
   function startPresentInPlace() {
     const L = chars.orch;
-    L.state = 'presenting'; L.facing = 'down'; L.bubble = '📊 來看報告！';
-    sim.boardActive = true;
-    if (presentHandler) presentHandler();
-    L.timer = 120; L.onTimer = () => {
-      Object.values(chars).forEach(e => {
-        e.statusText = ''; e._report = ''; e._queuedDeliver = false;
-      });
-      L.bubble = ''; L.state = 'idle';
-      // Leave workers where they are; clear any leftover task glow on finale.
-      ALL_WORKERS.concat('synth').forEach(id => { if (!editMode.bench[id]) delete taskState[id]; });
-      sim.customView = false;   // finale settled → desks/pods revert to default rendering
-      runDocs.length = 0;
-    };
+    // Walk 隊長 to the whiteboard easel, face it, then present.
+    L.state = 'walking_to_employee'; L.bubble = '';
+    L.walkTarget = null;
+    walkTo(L, WB_APPROACH, () => {
+      faceToward(L, WB_TILE);
+      L.state = 'presenting'; L.bubble = '📊 來看報告！';
+      sim.boardActive = true;
+      if (presentHandler) presentHandler();
+      L.timer = 120; L.onTimer = present_settle;
+    });
   }
 
   // ─── Visual mode resolution ─────────────────────────────────────────────────
@@ -860,22 +944,35 @@
   // current centre with the same offset as the seat→desk relationship
   // (x-8, y+8 maps a worker centred on its seat back onto its desk tile).
   function deskOriginFor(s) {
-    if (customRunView()) { const e = chars[s.id]; return [e.x - 8, e.y + 8]; }
+    if (layoutView()) { const e = chars[s.id]; return [e.x - 8, e.y + 8]; }
     const d = deskOf(s); return [T(d[0]), T(d[1])];
   }
   // ─── Desk (with monitor reflecting its worker's mode) + props ───────────────
+  // Effort shows as desk richness: low = compact 1-monitor desk, med = today's,
+  // high = a wider, busier 2-monitor desk with a subtle "busy" glow.
   function drawDeskSprite(s) {
-    // A benched (disabled) worker has no active workstation during a custom run —
-    // it sleeps on the bench, so skip drawing a desk for it entirely.
-    if (customRunView() && editMode.bench[s.id]) return;
+    // A benched (disabled) worker has no active workstation — it sleeps in the
+    // rest area, so skip drawing a desk for it entirely.
+    if (editMode.bench[s.id]) return;
     const [x, y] = deskOriginFor(s);
     const mode = vmode(chars[s.id]);
-    rect(x+1,y,TILE-2,TILE-1,DESK); rect(x+1,y,TILE-2,1,DESKHI); rect(x+1,y+TILE-2,TILE-2,1,DESKLO);
-    rect(x+3,y+1,10,2,'#9CA3AF');                            // keyboard
+    const eff = effortDeskSize(s.id);
+    const dw = eff.w;                                        // desk width by effort
+    // "busy" glow behind a high-effort desk.
+    if (eff.glow && mode === 'working') {
+      c.save(); c.fillStyle = rgba(chars[s.id].role.shirt, 0.12 + 0.06 * (Math.floor(tick/12)%2));
+      roundRect(px(x-1), px(y-1), px(dw+2), px(TILE+1), SCALE); c.fill(); c.restore();
+    }
+    rect(x+1,y,dw-2,TILE-1,DESK); rect(x+1,y,dw-2,1,DESKHI); rect(x+1,y+TILE-2,dw-2,1,DESKLO);
+    rect(x+3,y+1,Math.min(10,dw-6),2,'#9CA3AF');            // keyboard
     rect(x+4,y+1,1,1,'#6B7280'); rect(x+7,y+1,1,1,'#6B7280'); rect(x+10,y+1,1,1,'#6B7280');
-    const mx=x+4,my=y+5;                                     // monitor
+    const mx=x+4,my=y+5;                                     // primary monitor
     rect(mx-1,my-1,10,8,'#34302A'); rect(mx,my,8,6,MON);
     drawScreen(mx+1,my+1,6,4,mode,chars[s.id].role.shirt);
+    if (eff.monitors >= 2) {                                 // high effort: 2nd monitor
+      const m2=x+dw-6; rect(m2-1,my-1,7,8,'#34302A'); rect(m2,my,5,6,MON);
+      drawScreen(m2+1,my+1,3,4,mode,chars[s.id].role.shirt);
+    }
     drawDeskProp(s,x,y,mode);
   }
   function drawScreen(x,y,w,hh,mode,shirt) {
@@ -900,10 +997,41 @@
     rect(x+1,y+7,7,5,'#B07A45'); rect(x,y+8,9,1,'#8A5E32'); rect(x+1,y+11,7,1,WOODLO);
     rect(x+3,y+2,2,6,'#4D7C0F'); rect(x,y+3,4,3,'#65A30D'); rect(x+5,y+2,4,3,'#84CC16'); rect(x+2,y,4,3,'#A3E635');
   }
+  // A small rest-area mat (bottom-left) so benched/disabled agents visibly nap
+  // on a lounge rather than bare floor. Drawn only when someone is benched.
+  function drawRestLounge(){
+    const anyBenched = ALL_WORKERS.concat('synth').some(id => editMode.bench[id]);
+    if (!anyBenched) return;
+    const x = T(1)+2, y = T(9)+4, w = T(4)-4, h = T(3)-6;
+    rect(x, y, w, h, rgba(SOFA, 0.5)); rect(x, y, w, 1, rgba(SOFAHI, 0.6));
+    c.save(); c.strokeStyle = rgba(RUGE, 0.5); c.lineWidth = SCALE;
+    c.strokeRect(px(x+1), px(y+1), px(w-2), px(h-2)); c.restore();
+    c.save(); c.fillStyle = rgba('#1C1917', 0.35);
+    c.font = `${9}px system-ui, sans-serif`; c.textAlign = 'left'; c.textBaseline = 'top';
+    c.fillText('休息區', px(x+2), px(y+1)); c.restore();
+  }
   function drawSofa(){ const sx=T(14),sy=T(9)+1,sw=T(3);
     rect(sx,sy,sw,4,SOFA); rect(sx,sy,sw,1,SOFAHI); rect(sx,sy+4,sw,3,SOFAHI);
     rect(sx,sy+4,1,3,SOFA); rect(sx+sw-1,sy+4,1,3,SOFA); rect(sx+sw/2,sy+4,1,3,shade(SOFA,0.85)); }
   function drawTable(){ const x=T(16)+2,y=T(10); rect(x,y,TILE-2,5,WOOD); rect(x,y,TILE-2,1,WOODHI); dot(x+5,y+2,'#FFFFFF'); }
+  // A shared BIG desk for a grouped reader pod ("一起做"): one wide wooden slab
+  // centred on the table centre, with the members seated around it. Signals
+  // collaboration (vs. separate side-by-side desks = parallel).
+  function drawSharedTable(tbl){
+    const cx = tbl.cx * TILE + 8, cy = tbl.cy * TILE + 8;
+    const w = 26, h = 12, x = cx - w/2, y = cy - h/2;
+    rect(x, y, w, h, WOOD); rect(x, y, w, 1, WOODHI); rect(x, y+h-1, w, 1, WOODLO);
+    rect(x+2, y+2, w-4, h-4, shade(WOOD, 1.08));            // tabletop inset
+    rect(cx-1, cy-1, 3, 4, '#FFFFFF');                      // shared papers in the middle
+    // each member's small monitor on the slab, reflecting their live mode.
+    tbl.members.forEach(id => {
+      const e = chars[id];
+      const mode = vmode(e);
+      const mx = e.x - 4, my = y + 2;
+      rect(mx-1, my-1, 6, 6, '#34302A'); rect(mx, my, 4, 4, MON);
+      drawScreen(mx+0.5, my+0.5, 3, 3, mode, e.role.shirt);
+    });
+  }
   function drawCooler(){ const x=T(18)+4,y=T(9)+2; rect(x,y+4,7,8,'#E5E7EB'); rect(x,y+4,7,1,'#FFFFFF');
     rect(x+1,y,5,5,rgba('#3B82F6',0.55)); rect(x+1,y,5,1,'#93C5FD'); rect(x+2,y+7,3,1,'#2563EB'); }
   // Coffee machine on a small counter (dining corner).
@@ -1124,9 +1252,9 @@
   // ─── Overlays: name plates + speech bubbles ─────────────────────────────────
   function drawNamePlate(s) {
     const e = chars[s.id], mode = vmode(e);
-    // A benched worker's nameplate is omitted during a custom run (it sleeps on
-    // the bench with its own grey label drawn elsewhere).
-    if (customRunView() && editMode.bench[s.id]) return;
+    // A benched (disabled) worker has no desk; it sleeps in the rest area with a
+    // 💤, so its desk-anchored nameplate is omitted.
+    if (editMode.bench[s.id]) return;
     const [dx, dy] = deskOriginFor(s);
     const cx = dx+8, ly = dy+TILE-2;
     const bx = dx+1;
@@ -1184,15 +1312,27 @@
     drawBackground();
     if (editMode.on) drawEditUnderlay();   // bench + pod rects read under the characters
 
-    // During a custom run, draw the pod outlines + mode badges under the
-    // characters (subtler than edit mode) so teaming/order stays visible.
-    if (customRunView()) drawRunPods();
+    // Spec-driven pods: draw the shared-table cluster outline + 平行/接力 badge
+    // under the characters (subtler than edit mode) so teaming stays readable in
+    // the idle office as well as during a run.
+    if (!editMode.on && layoutView()) drawRunPods();
 
     const sprites = [];
+    // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
+    computed.tables.forEach(tbl => {
+      sprites.push({ baseY: tbl.cy * TILE + TILE, draw: () => drawSharedTable(tbl) });
+    });
+    // Pod members share ONE big table (drawn above) instead of individual desks,
+    // so their monitors sit on the shared slab and it reads as "working together".
+    const grouped = new Set();
+    computed.tables.forEach(t => t.members.forEach(id => grouped.add(id)));
     STATIONS.forEach(s => {
+      if (editMode.bench[s.id]) return;      // benched: no desk (sleeps in rest area)
+      if (grouped.has(s.id)) return;         // grouped: uses the shared table
       const [, dy] = deskOriginFor(s);
       sprites.push({ baseY:dy+TILE, draw:()=>drawDeskSprite(s) });
     });
+    sprites.push({ baseY:T(9),     draw:drawRestLounge });   // bottom-left rest mat (when benched)
     sprites.push({ baseY:T(10),    draw:drawSofa });
     sprites.push({ baseY:T(11),    draw:drawTable });
     sprites.push({ baseY:T(9),     draw:drawCoffeeCounter });   // dining corner
@@ -1209,7 +1349,7 @@
     Object.values(pets).forEach(drawBubble);
     if (selected && chars[selected]) drawSelectionMarker(chars[selected]);
     if (fly) drawFlyingBook();
-    if (customRunView()) drawRunDocs();    // result icons flying worker → 合成
+    if (customRunView()) drawRunDocs();    // result docs flying left→right down the pipeline
     if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
     drawTokenMeter();                      // live estimate / actual token readout
   }
@@ -1266,20 +1406,26 @@
     });
   }
 
-  // Little result documents flying from a finished worker to 合成 (synth) — a
-  // simple lerp along a line (no pathfinding), the in-place analogue of the
-  // default run's walk-to-synth handoff.
+  // Result documents flying left→right through the pipeline waypoints (a simple
+  // per-segment lerp with a little arc). Each doc carries an ordered `wps` list;
+  // it advances one segment at a time, and is removed after the last waypoint.
+  const DOC_SEG = 34;   // frames per pipeline hop
   function drawRunDocs() {
-    const S = chars.synth;
     for (let i = runDocs.length - 1; i >= 0; i--) {
       const d = runDocs[i];
       d.t++;
-      const p = Math.min(d.t / 40, 1);
-      const sx = d.x0, sy = d.y0, ex = S.x, ey = S.y - 4;
-      const cx = sx + (ex - sx) * p, cy = sy + (ey - sy) * p - Math.sin(p * Math.PI) * 18;
+      const p = Math.min(d.t / DOC_SEG, 1);
+      // segment endpoints: from the previous waypoint (or spawn) to the next.
+      const from = d.seg === 0 ? { x: d.x0, y: d.y0 } : d.wps[d.seg - 1];
+      const to = d.wps[d.seg];
+      const cx = from.x + (to.x - from.x) * p;
+      const cy = from.y + (to.y - from.y) * p - Math.sin(p * Math.PI) * 14;
       rect(cx - 2, cy - 3, 5, 6, '#FFFFFF'); rect(cx - 2, cy - 3, 5, 1, d.color);
       rect(cx - 1, cy - 1, 3, 1, '#9CA3AF'); rect(cx - 1, cy + 1, 3, 1, '#9CA3AF');
-      if (p >= 1) runDocs.splice(i, 1);
+      if (p >= 1) {
+        d.seg++; d.t = 0;
+        if (d.seg >= d.wps.length) runDocs.splice(i, 1);   // reached the end
+      }
     }
   }
 
@@ -1567,9 +1713,11 @@
 
   // ─── Task presets ───────────────────────────────────────────────────────────
   // A preset is a spec of {enabled, effort} per node. Applying one sets the
-  // office state (bench disabled nodes, set effort badges), clears pods, and
-  // leaves each worker at its default seat position so the run reads cleanly.
-  // '標準' is the default: all enabled, all med → getGraphConfig() === null.
+  // office state (bench disabled nodes, set effort badges), clears pods + drag
+  // overrides, then RE-LAYOUTS: the office auto-arranges into the preset's
+  // pipeline (agents walk to their new spec-derived slots; disabled ones head to
+  // the sofa to sleep). '標準' = all enabled/med (getGraphConfig() === null) and
+  // renders as the clean readers‖ → ctx → synth → whiteboard pipeline.
   const PRESETS = {
     quick: {   // ⚡ 快速掃描: sum(low)+ctx; jargon+comments off; synth on
       sum: { enabled: true, effort: 'low' }, jargon: { enabled: false },
@@ -1606,15 +1754,182 @@
         editMode.effort[id] = node.effort;
       }
     }
-    // Snap editable workers back to their seats so nothing looks podded/moved.
-    EDITABLE.forEach(id => {
-      const s = chars[id].station;
-      chars[id].x = s.seat[0] * TILE + 8; chars[id].y = s.seat[1] * TILE + 8;
-      chars[id].tile = s.seat.slice();
-    });
     persistGraph();
     meter.mode = 'estimate';
+    // Auto-arrange: recompute the layout from this preset's spec and walk every
+    // agent to its new pipeline slot (snap under reduced-motion). Drag overrides
+    // were cleared above, so the arrangement is purely spec-derived.
+    relayout();
     if (reducedMotion) render();
+  }
+
+  // ─── Layout engine: computeLayout(spec) → positions + tables ────────────────
+  // Snapshot of the current tunable spec, read straight from the office state
+  // (bench = disabled, effort per node, and the stage-1 pods with their mode).
+  // This is the single input to computeLayout so "office = a picture of the
+  // workflow" stays true whether the spec came from a preset or free-tuning.
+  function specSnapshot() {
+    const nodes = {};
+    for (const id of EFFORT_NODES) nodes[id] = { enabled: !editMode.bench[id], effort: effortOf(id) };
+    nodes.ctx   = { enabled: !editMode.bench.ctx,   effort: 'med' };
+    nodes.synth = { enabled: !editMode.bench.synth, effort: 'med' };
+    return { nodes, pods: computePods() };
+  }
+
+  // Effort → desk richness. Kept simple + legible: low = compact 1-monitor desk,
+  // med = today's desk, high = a bigger, busier 2-monitor desk with a glow.
+  // Returned as a descriptor the desk sprite reads (see drawDeskSprite).
+  function effortDeskSize(id) {
+    const lvl = (EFFORT_NODES.includes(id)) ? effortOf(id) : 'med';
+    if (lvl === 'low')  return { monitors: 1, w: TILE - 4, glow: false };
+    if (lvl === 'high') return { monitors: 2, w: TILE + 3, glow: true  };
+    return { monitors: 1, w: TILE - 2, glow: false };   // med (≈ today)
+  }
+
+  // Turn a spec into a target position per agent + a list of shared tables.
+  // Rules (FIRST BATCH):
+  //  • disabled agent  → a rest-area slot (sofa) and sleeps.
+  //  • enabled readers → if 2+ are grouped in one pod, seat them around ONE
+  //    shared big table (a table piece is emitted); else separate side-by-side
+  //    desks across the readers band (reads as parallel).
+  //  • ctx / synth     → their zone desk when enabled.
+  //  • orch            → the overseer spot (still walks to the board to present).
+  // Returns { pos: {id:{x,y}}, tables: [{cx,cy,members}], readerDesks: {id:true} }.
+  function computeLayout(spec) {
+    spec = spec || specSnapshot();
+    const pos = Object.create(null);
+    const tables = [];
+    const readerDesks = Object.create(null);
+
+    // 隊長 overseer spot (center-top). It walks to the board to present later.
+    pos.orch = centreOf(ZONE.orchseat.col, ZONE.orchseat.row);
+
+    // Disabled agents → rest slots (sofa), assigned in a stable order.
+    const disabled = ALL_WORKERS.concat('synth').filter(id => !spec.nodes[id] || !spec.nodes[id].enabled);
+    disabled.forEach((id, i) => {
+      const slot = REST_SLOTS[i % REST_SLOTS.length];
+      pos[id] = centreOf(slot[0], slot[1]);
+    });
+
+    // Enabled stage-1 readers: split into grouped (pods ≥2) vs. solo.
+    const enabledReaders = STAGE1.filter(id => spec.nodes[id] && spec.nodes[id].enabled);
+    // Which pods (from the spec) have ≥2 enabled reader members?
+    const readerPods = (spec.pods || [])
+      .map(pod => pod.filter(id => enabledReaders.includes(id)))
+      .filter(pod => pod.length >= 2);
+    const grouped = new Set();
+    readerPods.forEach(pod => pod.forEach(id => grouped.add(id)));
+    const soloReaders = enabledReaders.filter(id => !grouped.has(id));
+
+    // Lay out the readers band left→right. Each pod occupies a table cluster;
+    // solo readers each get their own desk. We walk a cursor across the band.
+    const [c0, c1] = ZONE.readers.cols;
+    const row = ZONE.readers.row;
+    // Count the "slots" needed: one per solo desk + one (2-wide) per pod table.
+    let cursor = c0;
+    const span = c1 - c0;                      // available columns
+    // Distribute evenly-ish: solo desks are 1 col apart; a table spans 2 cols.
+    const units = soloReaders.length + readerPods.reduce((n, p) => n + 2, 0);
+    const gap = units > 1 ? Math.max(1, Math.floor(span / (units - 1))) : 1;
+
+    soloReaders.forEach(id => {
+      pos[id] = centreOf(clampCol(cursor), row);
+      readerDesks[id] = true;
+      cursor += gap;
+    });
+    readerPods.forEach(pod => {
+      // Seat pod members around ONE shared big table: place the table centre,
+      // then members adjacent (left/right, then a second row below if needed).
+      const tcx = clampCol(cursor + 0.5);
+      const tcy = row;
+      tables.push({ cx: tcx, cy: tcy, members: pod.slice() });
+      pod.forEach((id, i) => {
+        // ring positions around the table centre (px offsets)
+        const ring = [ [-6, -2], [6, -2], [-6, 8], [6, 8] ];
+        const o = ring[i % ring.length];
+        pos[id] = { x: tcx * TILE + 8 + o[0], y: tcy * TILE + 8 + o[1] };
+      });
+      cursor += 2 * gap;
+    });
+
+    // ctx / synth desks when enabled (disabled ones already sent to rest).
+    if (spec.nodes.ctx && spec.nodes.ctx.enabled)   pos.ctx   = centreOf(ZONE.ctx.col, ZONE.ctx.row);
+    if (spec.nodes.synth && spec.nodes.synth.enabled) pos.synth = centreOf(ZONE.synth.col, ZONE.synth.row);
+
+    return { pos, tables, readerDesks };
+  }
+  function clampCol(col) { return Math.max(1, Math.min(COLS - 3, col)); }
+
+  // The live computed layout (spec-derived). Manual drag (editMode.layout) sits
+  // ON TOP of this as a per-agent override until a preset/spec change clears it.
+  let computed = { pos: Object.create(null), tables: [], readerDesks: Object.create(null) };
+  // Final target for an agent: a user drag override wins, else the computed slot,
+  // else its legacy fixed seat (so anything unplaced still has a home).
+  function targetPos(id) {
+    if (editMode.layout[id]) return editMode.layout[id];
+    if (computed.pos[id]) return computed.pos[id];
+    const s = chars[id].station;
+    return { x: s.seat[0] * TILE + 8, y: s.seat[1] * TILE + 8 };
+  }
+
+  // Recompute the layout from the current spec and move every agent to its new
+  // target. Under reduced-motion we snap; otherwise agents WALK (a simple lerp
+  // toward the target that stepEntity-independent code advances each frame), so
+  // the office visibly "reshuffles into the new workflow". Benched agents head to
+  // the sofa and sleep.
+  let relayoutActive = false;
+  function relayout(opts) {
+    opts = opts || {};
+    computed = computeLayout(specSnapshot());
+    if (reducedMotion || opts.snap) {
+      // Snap: place each agent exactly on its target.
+      Object.keys(chars).forEach(id => {
+        const t = targetPos(id);
+        const e = chars[id];
+        e.x = t.x; e.y = t.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+        e.walkTarget = null;
+        e.asleep = !!editMode.bench[id] && id !== 'orch';
+        if (e.asleep) { e.bubble = ''; e.state = 'idle'; }
+      });
+      if (reducedMotion) render();
+      return;
+    }
+    // Animate: set a walkTarget the layout loop lerps toward. Benched → sleep on
+    // arrival. We don't use A* here (positions are free-floating, not tile-locked).
+    relayoutActive = true;
+    Object.keys(chars).forEach(id => {
+      const e = chars[id];
+      const t = targetPos(id);
+      e.path = null; e.onArrive = null;   // cancel any sim walk; the layout owns motion
+      e.walkTarget = { x: t.x, y: t.y, benched: !!editMode.bench[id] && id !== 'orch' };
+      if (e.walkTarget.benched) e.bubble = ''; else e.asleep = false;
+      e.state = e.walkTarget.benched ? 'idle' : 'idle';
+    });
+  }
+
+  // Advance layout walks (called each frame from update()). Lerp toward each
+  // agent's walkTarget; on arrival, benched agents fall asleep. Returns when all
+  // targets are reached (relayoutActive flips false).
+  const LAYOUT_SPEED = 1.4;   // logical px/frame for the reshuffle walk
+  function stepLayout() {
+    if (!relayoutActive) return;
+    let anyMoving = false;
+    Object.keys(chars).forEach(id => {
+      const e = chars[id];
+      const t = e.walkTarget;
+      if (!t) return;
+      const dx = t.x - e.x, dy = t.y - e.y, d = Math.hypot(dx, dy);
+      if (d <= LAYOUT_SPEED) {
+        e.x = t.x; e.y = t.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+        e.walkTarget = null;
+        if (t.benched) { e.asleep = true; e.facing = 'down'; }
+      } else {
+        e.x += dx / d * LAYOUT_SPEED; e.y += dy / d * LAYOUT_SPEED;
+        e.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+        anyMoving = true;
+      }
+    });
+    if (!anyMoving) relayoutActive = false;
   }
 
   function persistGraph() {
@@ -1670,11 +1985,14 @@
       e.bubble = ''; e.ambKind = null;
       if (e.state !== 'idle') e.state = 'idle';
     });
-    // Reflect the saved custom layout onto the live entities so what the user
-    // edits matches what gets persisted; non-customised workers sit at their seat.
-    EDITABLE.forEach(id => {
-      const p = editMode.layout[id]; const e = chars[id];
-      if (p) { e.x = p.x; e.y = p.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)]; }
+    // Snap everyone to their current layout target so the user edits FROM the
+    // spec-derived pipeline arrangement (drag overrides win; else computed slot).
+    relayoutActive = false;
+    computed = computeLayout(specSnapshot());
+    Object.keys(chars).forEach(id => {
+      const e = chars[id]; const t = targetPos(id);
+      e.x = t.x; e.y = t.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+      e.walkTarget = null; e.asleep = false;
     });
     Object.values(pets).forEach(p => { p.path = null; p.onArrive = null; p.onTimer = null; p.bubble = ''; p.card = ''; p.state = 'idle'; });
     if (reducedMotion) render();
@@ -1683,9 +2001,11 @@
     if (!editMode.on) return;
     editMode.on = false; editMode.dragId = null;
     persistGraph();
-    // Snap any non-benched worker that isn't near its seat back onto the grid
-    // gracefully — but keep custom positions; just refresh idle timers.
     Object.values(chars).forEach(e => { e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND); });
+    // Re-layout on exit: bench/effort changes reflow undragged agents into the
+    // pipeline (drag overrides are kept). Snap here — the edit already showed
+    // the arrangement, so no walk is needed.
+    relayout({ snap: true });
     if (reducedMotion) render();
   }
 
@@ -1752,6 +2072,9 @@
       reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       createCanvas(containerId);
       restoreGraph();   // bring back any saved custom layout (positions/bench/modes)
+      // Open the office already arranged into the current spec's pipeline (snap
+      // on load; later spec changes animate the reshuffle).
+      relayout({ snap: true });
       if (reducedMotion) render(); else animId = requestAnimationFrame(loop);
     },
     // ─── Edit-office mode ─────────────────────────────────────────────────────
@@ -1760,6 +2083,13 @@
     getGraphConfig() { return getGraphConfig(); },
     // ─── Presets + effort + token meter ───────────────────────────────────────
     applyPreset(name) { applyPreset(name); },
+    // ─── Layout engine ────────────────────────────────────────────────────────
+    // Compute the spec-derived target positions + shared tables (pure; for tests
+    // / debugging / callers that want to read the arrangement).
+    computeLayout(spec) { return computeLayout(spec); },
+    // Recompute from the current spec and reshuffle the office (agents walk to
+    // their new slots; pass {snap:true} to place instantly). Respects reduced-motion.
+    relayout(opts) { relayout(opts); },
     // Which built-in preset the current spec matches ('standard' when default),
     // or null when it's a free-tuned arrangement. Lets the picker highlight one.
     getActivePreset() {
@@ -1839,18 +2169,21 @@
     reset() {
       sim.active = false; selected = null; sim.presented = false; sim.boardActive = false;
       sim.customView = false; sim.customRun = false; runDocs.length = 0;
+      relayoutActive = false;
       meter.mode = 'estimate';   // back to the live estimate for tuning
       sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
       sim.leaderQueue = []; sim.leaderBusy = false;
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;
+      // Clear per-agent run state, then snap everyone back to their spec-derived
+      // layout slot (computeLayout) — the office rests in its pipeline shape.
       STATIONS.forEach(s => { const e = chars[s.id];
-        e.x = s.seat[0]*TILE+8; e.y = s.seat[1]*TILE+8; e.tile = s.seat.slice();
-        e.path = null; e.onArrive = null; e.facing = 'down'; e.state = 'idle';
+        e.path = null; e.onArrive = null; e.walkTarget = null; e.facing = 'down'; e.state = 'idle';
 	        e.timer = 0; e.onTimer = null; e.bubble = ''; e._report = ''; e.statusText = ''; e.workStart = 0; e.asleep = false;
 	        e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
         e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
         delete taskState[s.id];
       });
+      relayout({ snap: true });   // reposition to the computed pipeline layout
       petQueue.length = 0;
       Object.assign(pets.pika, { x:T(18)+8, y:T(10)+10, tile:[18,10], path:null, onArrive:null, facing:'left', state:'idle', timer:80, onTimer:null, bubble:'', card:'' });
       Object.assign(pets.dog,  { x:T(17)+8, y:T(10)+8,  tile:[17,10], path:null, onArrive:null, facing:'left', state:'idle', timer:120, onTimer:null, bubble:'', card:'' });
