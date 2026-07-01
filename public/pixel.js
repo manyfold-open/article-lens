@@ -176,6 +176,10 @@
   // Which workers expose an effort knob (low/med/high). ctx/synth have no effort.
   const EFFORT_NODES = ['sum', 'jargon', 'comments'];
   const EFFORT_LEVELS = ['low', 'med', 'high'];
+  // Which workers expose a replicas knob (vote ×N: run N times + merge). Only the
+  // three stage-1 readers; ctx/synth have no replicas. 1–3, default 1.
+  const REPLICA_NODES = ['sum', 'jargon', 'comments'];
+  const MAX_REPLICAS = 3;
   const editMode = {
     on: false,
     dragId: null,                 // id currently being dragged
@@ -183,10 +187,19 @@
     podModes: Object.create(null),// "a,b,c" (sorted) → 'parallel' | 'relay'
     layout: Object.create(null),  // id → {x,y} custom positions (config source of truth)
     effort: Object.create(null),  // id → 'low' | 'med' | 'high' (default 'med')
+    replicas: Object.create(null),// id → 2 | 3 (default 1; only stored when >1)
     badges: [],                   // per-frame clickable mode badges {x,y,w,h,key}
     effortBadges: [],             // per-frame clickable effort badges {x,y,w,h,id}
+    replicaBadges: [],            // per-frame clickable replica badges {x,y,w,h,id}
   };
   function effortOf(id) { return editMode.effort[id] || 'med'; }
+  // Replicas for a node (1 default). Clamped to 1..MAX_REPLICAS; only stage-1
+  // readers can carry >1, everything else is always 1.
+  function replicasOf(id) {
+    if (!REPLICA_NODES.includes(id)) return 1;
+    const n = editMode.replicas[id] | 0;
+    return n >= 2 ? Math.min(MAX_REPLICAS, n) : 1;
+  }
 
   // ─── Token cost model + meter ───────────────────────────────────────────────
   // Live estimate (before/while tuning) vs actual (accumulated from usage SSE).
@@ -207,7 +220,8 @@
     let total = 0;
     for (const id of EFFORT_NODES) {
       if (editMode.bench[id]) continue;
-      total += TOKEN_COST[id][effortOf(id)];
+      // vote ×N: running an agent N times costs ~N× its per-run tokens.
+      total += TOKEN_COST[id][effortOf(id)] * replicasOf(id);
     }
     if (!editMode.bench.ctx) total += TOKEN_COST.ctx.med;   // ctx: effort n/a
     total += TOKEN_COST.synth.med;                          // synth: always on
@@ -223,7 +237,8 @@
     return Object.keys(editMode.layout).length > 0
       || Object.keys(editMode.bench).length > 0
       || Object.keys(editMode.podModes).length > 0
-      || EFFORT_NODES.some(id => effortOf(id) !== 'med');   // non-default effort counts
+      || EFFORT_NODES.some(id => effortOf(id) !== 'med')    // non-default effort counts
+      || REPLICA_NODES.some(id => replicasOf(id) > 1);      // vote ×N counts
   }
   // The single source of truth for "custom run": identical to the gate app.js
   // uses to decide whether to send &graph (getGraphConfig() non-null). When this
@@ -1429,9 +1444,66 @@
     }
   }
 
+  // ─── Vote ×N clones (draw-time ghosts; no real sim entities) ────────────────
+  // When a stage-1 reader has replicas>1 we draw N-1 faint duplicate silhouettes
+  // beside it during idle+work, plus a "×N" tag, to read as "run N times & merge".
+  // They MERGE back into one (slide to zero offset, then vanish) once the agent is
+  // done. Reduced-motion → static (fixed spread, no slide). Robust: pure drawing,
+  // wrapped so it can never throw into the render loop.
+  const CLONE_OFFSETS = [                 // per extra clone: [dx, dy] logical px
+    [-9, 3], [9, 4],                      // N=2 → 1 ghost (uses first); N=3 → 2 ghosts
+  ];
+  // A faint, simplified copy of the worker's body+head at (gx feet-centre, gy feet).
+  function drawGhostBody(e, cx, feetY, alpha) {
+    const shirt = e.role.shirt, hair = e.role.hair;
+    const top = feetY - 15;
+    c.save();
+    c.globalAlpha = alpha;
+    // shadow
+    c.fillStyle = SHADOW; c.beginPath();
+    c.ellipse(px(cx), px(feetY + 1), px(4), px(1.6), 0, 0, Math.PI * 2); c.fill();
+    const by = top + 7;
+    rect(cx - 5, by, 10, 6, shirt); rect(cx - 5, by, 1, 6, shade(shirt, 1.18));
+    rect(cx - 5, top, 10, 5, hair); rect(cx - 4, top - 1, 8, 1, hair);
+    rect(cx - 3, top + 5, 6, 3, SKIN);
+    c.restore();
+  }
+  function drawClones(e, mode) {
+    let n;
+    try { n = replicasOf(e.id); } catch (_) { return; }
+    if (n <= 1 || editMode.bench[e.id]) return;
+    if (mode === 'done') return;            // finished → clones have merged into one
+    const ghosts = Math.min(n - 1, CLONE_OFFSETS.length);
+    const feetY = e.y + 6;
+    const wob = reducedMotion ? 0 : (Math.floor(tick / 10) % 2 ? 1 : 0);
+    for (let i = 0; i < ghosts; i++) {
+      const off = CLONE_OFFSETS[i];
+      const gx = e.x + off[0];
+      const gy = feetY + off[1] + (i % 2 ? wob : -wob);
+      drawGhostBody(e, gx, gy, 0.28);
+    }
+  }
+  // The "×N" tag floating above a replicated worker (drawn with the sprite).
+  function drawReplicaTag(e) {
+    let n;
+    try { n = replicasOf(e.id); } catch (_) { return; }
+    if (n <= 1 || editMode.bench[e.id]) return;
+    const label = '×' + n;
+    const x = e.x + 6, y = e.y - 15 - 7;
+    c.save();
+    c.fillStyle = rgba(e.role.shirt, 0.92);
+    roundRect(px(x - 6), px(y - 4), px(13), px(9), SCALE); c.fill();
+    c.fillStyle = '#FFFFFF';
+    c.font = `${9}px system-ui, sans-serif`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(label, px(x + 0.5), px(y) + 1);
+    c.restore();
+  }
+
   // ─── Character sprite (4 facings + walk) ────────────────────────────────────
   function drawCharacter(e) {
     const mode = e.asleep ? 'idle' : vmode(e);              // asleep → calm, dim, no activity
+    if (!editMode.on) drawClones(e, mode);                  // ghosts behind the real sprite
     const isMoving = !e.asleep && moving(e);
     let bob = 0;
     if (e.asleep) bob = 0;
@@ -1481,6 +1553,7 @@
     }
 
     if (e.asleep) drawAsleep(cx, top); else drawHeadDecor(e, cx, top, mode);
+    if (!editMode.on) drawReplicaTag(e);                    // "×N" tag for vote-N workers
   }
 
   // A teammate whose agent runtime failed: closed eyes + a drifting 💤.
@@ -1827,12 +1900,38 @@
     c.restore();
   }
 
+  // Clickable replicas badge (⧉×N) just under the effort badge. Registers a hit
+  // rect in editMode.replicaBadges so a click cycles 1→2→3→1. Only shown when >1
+  // would be meaningful — it's always drawn for enabled stage-1 readers so the
+  // user can discover it, but stays subtle at ×1.
+  function drawReplicaBadge(id) {
+    const e = chars[id];
+    const n = replicasOf(id);
+    const label = '⧉×' + n;
+    const bw = 24, bh = 10;
+    const bx = e.x - bw / 2, by = e.y + 9 + 11;   // sits just below the effort badge
+    editMode.replicaBadges.push({ x: bx, y: by, w: bw, h: bh, id });
+    c.save();
+    // Brighter chip when active (×2/×3) so vote-N pops; muted at ×1.
+    const active = n > 1;
+    c.fillStyle = active ? rgba(e.role.shirt, 0.9) : rgba('#1C1917', 0.55);
+    roundRect(px(bx), px(by), px(bw), px(bh), SCALE * 1.4); c.fill();
+    c.fillStyle = '#FFFFFF';
+    c.font = `${9}px system-ui, sans-serif`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(label, px(bx + bw / 2), px(by + bh / 2) + 1);
+    c.restore();
+  }
+
   // Greyed benched workers, the clickable mode badges, and a subtle hint.
   function drawEditOverlay() {
     editMode.badges = [];
     editMode.effortBadges = [];
+    editMode.replicaBadges = [];
     // Per-worker effort knob (only for effort nodes that are enabled).
     EFFORT_NODES.forEach(id => { if (!editMode.bench[id]) drawEffortBadge(id); });
+    // Per-worker replicas knob (vote ×N) for enabled stage-1 readers.
+    REPLICA_NODES.forEach(id => { if (!editMode.bench[id]) drawReplicaBadge(id); });
     // Grey out benched workers with a wash.
     EDITABLE.forEach(id => {
       if (!editMode.bench[id]) return;
@@ -2023,10 +2122,13 @@
     const synthEnabled = !editMode.bench.synth;   // FE never benches synth, kept for shape
     if (!synthEnabled) anyDisabled = true;
 
-    // v2 nodes: enabled (default true) + effort (default "med", only where it applies).
+    // v2 nodes: enabled (default true) + effort (default "med", only where it
+    // applies) + replicas (vote ×N; default 1, only emitted when >1).
     const nodes = {};
     for (const id of EFFORT_NODES) {
       nodes[id] = { enabled: !editMode.bench[id], effort: effortOf(id) };
+      const rep = replicasOf(id);
+      if (rep > 1) nodes[id].replicas = rep;
     }
     nodes.ctx = { enabled: !editMode.bench.ctx };
     nodes.synth = { enabled: synthEnabled };
@@ -2044,9 +2146,10 @@
       && groups[0].mode === 'parallel'
       && groups[0].members.length === STAGE1.length;
     const nonDefaultEffort = EFFORT_NODES.some(id => effortOf(id) !== 'med');
+    const nonDefaultReplicas = REPLICA_NODES.some(id => replicasOf(id) > 1);
 
     // Full default spec → null (no &graph, unchanged behaviour).
-    if (!anyDisabled && defaultGroup && !nonDefaultEffort) return null;
+    if (!anyDisabled && defaultGroup && !nonDefaultEffort && !nonDefaultReplicas) return null;
 
     const cfg = { v: 2, nodes };
     // Attach groups only when a non-default pod arrangement exists (a real
@@ -2072,13 +2175,20 @@
       sum: { enabled: true, effort: 'med' }, jargon: { enabled: true, effort: 'med' },
       comments: { enabled: true, effort: 'med' }, ctx: { enabled: true }, synth: { enabled: true },
     },
-    jargon: {   // 🎯 術語特訓: jargon(high)+ctx; sum(low); comments off
-      sum: { enabled: true, effort: 'low' }, jargon: { enabled: true, effort: 'high' },
+    jargon: {   // 🎯 術語特訓: jargon(high, ×2 vote)+ctx; sum(low); comments off
+      sum: { enabled: true, effort: 'low' },
+      jargon: { enabled: true, effort: 'high', replicas: 2 },
       comments: { enabled: false }, ctx: { enabled: true }, synth: { enabled: true },
     },
     deep: {   // 🔬 深度精讀: all enabled, all high
       sum: { enabled: true, effort: 'high' }, jargon: { enabled: true, effort: 'high' },
       comments: { enabled: true, effort: 'high' }, ctx: { enabled: true }, synth: { enabled: true },
+    },
+    reliable: {   // 🛡️ 可靠: all stage-1 readers at med effort, run ×2 and merge
+      sum: { enabled: true, effort: 'med', replicas: 2 },
+      jargon: { enabled: true, effort: 'med', replicas: 2 },
+      comments: { enabled: true, effort: 'med', replicas: 2 },
+      ctx: { enabled: true }, synth: { enabled: true },
     },
   };
 
@@ -2091,12 +2201,16 @@
     editMode.podModes = Object.create(null);
     editMode.bench = Object.create(null);
     editMode.effort = Object.create(null);
+    editMode.replicas = Object.create(null);
     for (const id of EDITABLE.concat('synth')) {
       const node = spec[id];
       if (!node) continue;
       if (node.enabled === false) editMode.bench[id] = true;
       if (EFFORT_NODES.includes(id) && EFFORT_LEVELS.includes(node.effort) && node.effort !== 'med') {
         editMode.effort[id] = node.effort;
+      }
+      if (REPLICA_NODES.includes(id) && node.enabled !== false && node.replicas > 1) {
+        editMode.replicas[id] = Math.min(MAX_REPLICAS, node.replicas | 0);
       }
     }
     persistGraph();
@@ -2309,7 +2423,9 @@
       for (const id of EDITABLE) if (editMode.layout[id]) layout[id] = editMode.layout[id];
       const effort = {};
       for (const id of EFFORT_NODES) if (effortOf(id) !== 'med') effort[id] = effortOf(id);
-      const data = { v: 2, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes, effort };
+      const replicas = {};
+      for (const id of REPLICA_NODES) if (replicasOf(id) > 1) replicas[id] = replicasOf(id);
+      const data = { v: 2, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes, effort, replicas };
       localStorage.setItem(GRAPH_LS_KEY, JSON.stringify(data));
     } catch (_) { /* storage may be unavailable */ }
   }
@@ -2327,6 +2443,13 @@
     if (data.effort && typeof data.effort === 'object') {
       for (const id of EFFORT_NODES) {
         if (EFFORT_LEVELS.includes(data.effort[id])) editMode.effort[id] = data.effort[id];
+      }
+    }
+    editMode.replicas = Object.create(null);
+    if (data.replicas && typeof data.replicas === 'object') {
+      for (const id of REPLICA_NODES) {
+        const n = data.replicas[id] | 0;
+        if (n >= 2) editMode.replicas[id] = Math.min(MAX_REPLICAS, n);
       }
     }
     editMode.layout = Object.create(null);
@@ -2393,6 +2516,18 @@
         const cur = effortOf(b.id);
         const next = EFFORT_LEVELS[(EFFORT_LEVELS.indexOf(cur) + 1) % EFFORT_LEVELS.length];
         if (next === 'med') delete editMode.effort[b.id]; else editMode.effort[b.id] = next;
+        persistGraph(); if (reducedMotion) render();
+        if (onSpecChange) onSpecChange();
+        ev.preventDefault();
+        return;
+      }
+    }
+    // Replicas badge click (vote ×N; cycles 1→2→3→1).
+    for (const b of editMode.replicaBadges) {
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        const cur = replicasOf(b.id);
+        const next = cur >= MAX_REPLICAS ? 1 : cur + 1;
+        if (next <= 1) delete editMode.replicas[b.id]; else editMode.replicas[b.id] = next;
         persistGraph(); if (reducedMotion) render();
         if (onSpecChange) onSpecChange();
         ev.preventDefault();
@@ -2480,9 +2615,13 @@
           const want = EFFORT_LEVELS.includes(n.effort) ? n.effort : 'med';
           if (want !== eff(id)) return false;
         }
+        if (REPLICA_NODES.includes(id) && n.enabled !== false) {
+          const wantRep = n.replicas > 1 ? Math.min(MAX_REPLICAS, n.replicas | 0) : 1;
+          if (wantRep !== replicasOf(id)) return false;
+        }
         return true;
       });
-      for (const name of ['quick', 'jargon', 'deep']) if (matches(PRESETS[name])) return name;
+      for (const name of ['quick', 'jargon', 'deep', 'reliable']) if (matches(PRESETS[name])) return name;
       return null;
     },
     // Live estimate in tokens (for the picker labels, etc.).
