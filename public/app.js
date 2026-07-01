@@ -124,12 +124,44 @@ document.addEventListener('DOMContentLoaded', () => {
   const editToggle = document.getElementById('edit-toggle');
   if (editToggle) editToggle.addEventListener('click', toggleEditMode);
 
+  // Task presets — load a spec into the office (enabled+effort per worker).
+  document.querySelectorAll('.preset-btn[data-preset]').forEach(btn => {
+    btn.addEventListener('click', () => onPresetClick(btn.dataset.preset));
+  });
+  // When the user free-tunes in edit mode (effort/mode badges, benching), keep
+  // the preset highlight + meter in sync.
+  if (window.pixelAgents?.setSpecChangeHandler) {
+    window.pixelAgents.setSpecChangeHandler(syncPresetPicker);
+  }
+
   // Initial office-control state
   if (window.pixelAgents) {
     window.pixelAgents.setKbCount(kbLoad().length);
     window.pixelAgents.setLang(document.documentElement.dataset.lang || 'bilingual');
+    syncPresetPicker();   // reflect any restored/persisted spec on the picker
   }
 });
+
+// ── Task presets ─────────────────────────────────────────────────────────────
+function onPresetClick(name) {
+  const pa = window.pixelAgents;
+  if (!pa || !pa.applyPreset) return;
+  // Applying a preset only makes sense from the office hub; leave results view.
+  if (currentPhase !== 'input') { setPhase('input'); pa.reset(); }
+  pa.applyPreset(name);
+  syncPresetPicker();
+}
+
+// Highlight the preset the current office spec matches (or none, when the user
+// has free-tuned into an arrangement no preset covers).
+function syncPresetPicker() {
+  const pa = window.pixelAgents;
+  if (!pa || !pa.getActivePreset) return;
+  const active = pa.getActivePreset();
+  document.querySelectorAll('.preset-btn[data-preset]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.preset === active);
+  });
+}
 
 // ── Edit-office mode toggle ─────────────────────────────────────────────────
 function toggleEditMode() {
@@ -326,9 +358,17 @@ function handleSSEEvent(ev, es) {
       if (ev.data?.briefing) latestBriefing = ev.data.briefing;
       renderSection(ev.agent, ev.data);   // populate this panel as soon as it's ready
       break;
+    case 'usage':
+      // Per-agent token usage — accumulate into the office token meter (actual).
+      if (window.pixelAgents?.addUsage) window.pixelAgents.addUsage(ev.agent, ev.tokens);
+      break;
     case 'result':
       es.close();
       currentResult = ev.data;
+      // Finalize the token meter from the authoritative total, if provided.
+      if (ev.data?.usage && window.pixelAgents?.setUsageTotal && typeof ev.data.usage.total === 'number') {
+        window.pixelAgents.setUsageTotal(ev.data.usage.total);
+      }
       renderResults(ev.data);     // fill the report, but keep it hidden…
       setWorkflowStage('present');
       armReport();                // …until 隊長 walks to the whiteboard to present
