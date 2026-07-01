@@ -401,6 +401,19 @@
 	    sim.leaderQueue = []; sim.leaderBusy = false;
 	    sim.handoff = false; sim.handoffStart = 0;   // synth→隊長 report hand-off phase
 	    sim.collecting = false;                      // collector integration phase not yet begun
+	    // Relay pods: each becomes a conveyor line — the doc is carried person→
+	    // person in podOrder, and the LAST member delivers the combined doc to the
+	    // collector. Snapshot the chains once so the choreography stays stable for
+	    // the whole run. relayState[chainKey] tracks the moving cursor per chain.
+	    sim.relayChains = relayChainsSnapshot();
+	    sim.relayState = Object.create(null);
+	    sim.relayMembers = new Set();
+	    sim.relayChains.forEach((chain, ci) => {
+	      chain.forEach(id => sim.relayMembers.add(id));
+	      // i = index of the member currently HOLDING the doc; busy = a carry is in
+	      // flight; delivered = the final leg to the collector has completed.
+	      sim.relayState[ci] = { i: 0, busy: false, delivered: false };
+	    });
 	    runDocs.length = 0;
 	    // The office is now always spec-driven: every run works IN PLACE at the
 	    // computed layout (readers‖ → ctx → synth → whiteboard), with docs flying
@@ -779,6 +792,21 @@
     if (readers.length) return readers.slice().sort((a, b) => chars[b].x - chars[a].x)[0];
     return 'orch';
   }
+  // Snapshot the current relay chains: for every stage-1 pod whose mode is
+  // 'relay' AND that has ≥2 ENABLED members, return the enabled members in
+  // podOrder (left→right run order, matching the 1→2→… badges). Single-member
+  // or parallel pods are excluded (they keep the independent-carry behaviour).
+  // Read once at run start so the chain stays stable for the whole run.
+  function relayChainsSnapshot() {
+    const chains = [];
+    computePods().forEach(pod => {
+      if (pod.length < 2) return;                       // singletons: not a relay line
+      if (podModeOf(pod) !== 'relay') return;           // parallel pods: unchanged
+      const chain = podOrder(pod).filter(id => !editMode.bench[id]);
+      if (chain.length >= 2) chains.push(chain);        // need ≥2 enabled to convey
+    });
+    return chains;
+  }
   // Where a carrier stands to hand a document to `target` (just to its left, or
   // right if the target sits near the left edge). A small offset so the two
   // sprites don't overlap during the beat.
@@ -804,6 +832,9 @@
 
     for (const id of carriers) {
       if (editMode.bench[id]) continue;   // disabled: never finishes, never delivers
+      // Relay-pod members are driven by the conveyor (stepRelayChains), not the
+      // independent carry-to-collector path — skip them here.
+      if (sim.relayMembers && sim.relayMembers.has(id)) continue;
       const w = chars[id];
       if (w.state === 'working' && taskState[id] === 'done' && (tick - w.workStart) >= MIN_WORK
           && !w._queuedDeliver) {
@@ -813,6 +844,10 @@
         tryCarryToSynth();
       }
     }
+
+    // Advance any relay conveyor lines (doc carried member→member; last member
+    // carries the combined doc to the collector).
+    stepRelayChains(collectorId);
 
     const enabledCarriers = carriers.filter(id => !editMode.bench[id]);
     // Every carrier has walked its draft over and returned to its slot.
@@ -871,6 +906,123 @@
           w.state = 'done'; w.facing = 'down';
           sim.synthBusy = false; sim.handed++;
           tryCarryToSynth();
+        });
+      };
+    });
+  }
+
+  // Bubbles a relay member says as it hands the growing doc to the next person.
+  const RELAY_PASS_SAYS = ['接著換你', '換你了', '傳給你', '交棒'];
+
+  // ── Relay conveyor ─────────────────────────────────────────────────────────
+  // A relay pod is a CONVEYOR LINE: the document is carried person→person in
+  // podOrder. Member i works, then walks the doc to member i+1 (who "works" with
+  // it), … and the LAST member carries the combined doc to the collector (合成,
+  // or the fallback producer). This reads as clearly sequential — one moving doc
+  // travelling down the line — vs. a parallel pod where each reader independently
+  // carries its own draft to 合成 at the same time.
+  //
+  // Serialized per chain via relayState[ci].busy so a chain never has two carries
+  // in flight. MIN_WORK still gates each member before it may pass the doc along,
+  // keeping the beats watchable. Under reduced-motion the whole custom run never
+  // starts, so this is only ever reached in the animated path.
+  function stepRelayChains(collectorId) {
+    const chains = sim.relayChains || [];
+    for (let ci = 0; ci < chains.length; ci++) {
+      const chain = chains[ci];
+      const st = sim.relayState[ci];
+      if (!st || st.busy || st.delivered) continue;
+      const h = st.i;                                  // index currently holding the doc
+      const id = chain[h];
+      const w = chars[id];
+      if (!w) { st.delivered = true; continue; }
+      // The holder must finish its OWN work (real done + MIN_WORK) before it may
+      // pass the doc forward — this is what keeps the relay watchably sequential.
+      const worked = taskState[id] === 'done' && (tick - w.workStart) >= MIN_WORK;
+      if (w.state !== 'working' || !worked) continue;
+
+      if (h < chain.length - 1) {
+        carryRelayToNext(ci, h);                       // → next member down the line
+      } else {
+        carryRelayToCollector(ci, h, collectorId);     // last member → collector
+      }
+    }
+  }
+
+  // Member `h` in chain `ci` carries the doc to member `h+1`, hands it over, then
+  // returns to its slot → done. The next member becomes the new holder.
+  function carryRelayToNext(ci, h) {
+    const chain = sim.relayChains[ci];
+    const st = sim.relayState[ci];
+    const w = chars[chain[h]];
+    const nxt = chars[chain[h + 1]];
+    if (!nxt) { carryRelayToCollector(ci, h, null); return; }
+    st.busy = true;
+    const home = { x: w.x, y: w.y };
+    // Stand just short of the next member (members sit close in the conveyor line,
+    // so a small offset keeps the hop visible without the sprites overlapping).
+    const side = nxt.x >= w.x ? -1 : 1;
+    const spot = { x: nxt.x + side * 8, y: nxt.y };
+    w.state = 'delivering'; w.bubble = '';
+    walkXY(w, spot.x, spot.y, () => {
+      faceToward(w, nxt.tile);
+      w.state = 'reporting';                           // hand-over beat
+      w.bubble = RELAY_PASS_SAYS[Math.floor(Math.random() * RELAY_PASS_SAYS.length)];
+      if (!nxt.bubble) nxt.bubble = '接手';
+      w.timer = REPORT;
+      w.onTimer = () => {
+        w.bubble = ''; if (nxt.bubble === '接手') nxt.bubble = '';
+        w.state = 'delivering';
+        walkXY(w, home.x, home.y, () => {
+          w.state = 'done'; w.facing = 'down';         // this member is finished
+          st.i = h + 1;                                // doc now held by the next member
+          st.busy = false;                             // release the chain for the next hop
+        });
+      };
+    });
+  }
+
+  // Last member `h` in chain `ci` carries the COMBINED doc to the collector,
+  // hands it over, returns → done. Counts as all chain members' contributions
+  // (sim.handed += chain.length) so the run's allDelivered gate closes. If the
+  // collector IS this member (synth+ctx both benched, chain right-most), the
+  // member just holds the report in place (no extra leg).
+  function carryRelayToCollector(ci, h, collectorId) {
+    const chain = sim.relayChains[ci];
+    const st = sim.relayState[ci];
+    const w = chars[chain[h]];
+    const cid = collectorId || (!editMode.bench.synth ? 'synth' : lastProducerId());
+    const S = chars[cid];
+    // Collector is this very member (fallback producer): it already holds the
+    // combined doc — settle it and account for the whole chain.
+    if (!S || cid === chain[h]) {
+      st.busy = false; st.delivered = true;
+      w.state = 'done'; w.facing = 'down';
+      sim.handed += chain.length;
+      return;
+    }
+    // Serialize the final leg through the shared synth lane so relay + parallel
+    // carriers never collide at the collector.
+    if (sim.synthBusy) return;                         // wait our turn; retried next frame
+    sim.synthBusy = true; st.busy = true;
+    const home = { x: w.x, y: w.y };
+    const spot = handoffSpotFor(S);
+    w.state = 'delivering'; w.bubble = '';
+    walkXY(w, spot.x, spot.y, () => {
+      faceToward(w, S.tile);
+      w.state = 'reporting';
+      w.bubble = DELIVER_SAYS[Math.floor(Math.random() * DELIVER_SAYS.length)];
+      if (!S.bubble) S.bubble = '收到';
+      w.timer = REPORT;
+      w.onTimer = () => {
+        w.bubble = ''; if (S.bubble === '收到') S.bubble = '';
+        w.state = 'delivering';
+        walkXY(w, home.x, home.y, () => {
+          w.state = 'done'; w.facing = 'down';
+          sim.synthBusy = false;
+          st.delivered = true; st.busy = false;
+          sim.handed += chain.length;                  // whole chain accounted for
+          tryCarryToSynth();                            // let any queued parallel carrier proceed
         });
       };
     });
@@ -1550,12 +1702,41 @@
       c.textAlign = 'center'; c.textBaseline = 'middle';
       c.fillText(label, px(bx + bw / 2), px(by + bh / 2) + 1);
       c.restore();
-      // Relay: number members in run order; highlight the active (working) one.
+      // Relay: draw the conveyor as a dashed line threading the members in run
+      // order, number them 1→2→…, and highlight the member currently HOLDING the
+      // doc (the live cursor during a run; member 1 when idle). This is what makes
+      // a relay read as "one doc travelling down a line" vs. parallel's cluster.
       if (relay) {
         const order = podOrder(pod);
+        // The chain's live cursor (which member currently holds the doc), if this
+        // pod is an active relay chain in the running sim; else -1 (idle office).
+        let holder = -1;
+        if (sim.relayChains) {
+          for (let ci = 0; ci < sim.relayChains.length; ci++) {
+            if (podKey(sim.relayChains[ci]) === podKey(order)) {
+              holder = sim.relayState[ci] && sim.relayState[ci].delivered
+                ? order.length : (sim.relayState[ci] ? sim.relayState[ci].i : 0);
+              break;
+            }
+          }
+        }
+        // Conveyor line linking consecutive members (drawn under the badges).
+        if (order.length >= 2) {
+          c.save();
+          c.strokeStyle = rgba('#8B5CF6', 0.5); c.lineWidth = SCALE;
+          c.setLineDash([SCALE * 2, SCALE * 2]);
+          c.beginPath();
+          order.forEach((id, i) => {
+            const e = chars[id]; const lx = px(e.x), ly = px(e.y - 18);
+            if (i === 0) c.moveTo(lx, ly); else c.lineTo(lx, ly);
+          });
+          c.stroke();
+          c.setLineDash([]);
+          c.restore();
+        }
         order.forEach((id, i) => {
           const e = chars[id];
-          const active = e.state === 'working' || vmode(e) === 'working';
+          const active = i === holder;                 // the current doc-holder
           const nx = e.x - 8, ny = e.y - 18;
           c.save();
           c.fillStyle = active ? '#8B5CF6' : rgba('#8B5CF6', 0.45);
@@ -1937,7 +2118,11 @@
     for (const id of EFFORT_NODES) nodes[id] = { enabled: !editMode.bench[id], effort: effortOf(id) };
     nodes.ctx   = { enabled: !editMode.bench.ctx,   effort: 'med' };
     nodes.synth = { enabled: !editMode.bench.synth, effort: 'med' };
-    return { nodes, pods: computePods() };
+    // Carry each pod's collaboration mode so the layout can arrange a relay pod
+    // as a left→right conveyor line (ordered, separate desks) instead of the
+    // shared table a parallel pod uses.
+    const pods = computePods();
+    return { nodes, pods, podModes: pods.map(podModeOf) };
   }
 
   // Effort → desk richness. Kept simple + legible: low = compact 1-monitor desk,
@@ -1975,24 +2160,31 @@
       pos[id] = centreOf(slot[0], slot[1]);
     });
 
-    // Enabled stage-1 readers: split into grouped (pods ≥2) vs. solo.
+    // Enabled stage-1 readers: split into grouped (pods ≥2) vs. solo. Carry each
+    // reader pod's collaboration mode so relay pods can be arranged as a conveyor
+    // line rather than a shared table.
     const enabledReaders = STAGE1.filter(id => spec.nodes[id] && spec.nodes[id].enabled);
-    // Which pods (from the spec) have ≥2 enabled reader members?
+    const podModes = spec.podModes || [];
     const readerPods = (spec.pods || [])
-      .map(pod => pod.filter(id => enabledReaders.includes(id)))
-      .filter(pod => pod.length >= 2);
+      .map((pod, i) => ({
+        members: pod.filter(id => enabledReaders.includes(id)),
+        mode: podModes[i] === 'relay' ? 'relay' : 'parallel',
+      }))
+      .filter(p => p.members.length >= 2);
     const grouped = new Set();
-    readerPods.forEach(pod => pod.forEach(id => grouped.add(id)));
+    readerPods.forEach(p => p.members.forEach(id => grouped.add(id)));
     const soloReaders = enabledReaders.filter(id => !grouped.has(id));
 
-    // Lay out the readers band left→right. Each pod occupies a table cluster;
-    // solo readers each get their own desk. We walk a cursor across the band.
+    // Lay out the readers band left→right. A PARALLEL pod occupies a shared table
+    // cluster (2 cols); a RELAY pod stretches into a left→right line of separate
+    // desks (one col per member) so it reads as a conveyor; solo readers each get
+    // their own desk. We walk a cursor across the band.
     const [c0, c1] = ZONE.readers.cols;
     const row = ZONE.readers.row;
-    // Count the "slots" needed: one per solo desk + one (2-wide) per pod table.
     let cursor = c0;
     const span = c1 - c0;                      // available columns
-    // Distribute evenly-ish: solo desks are 1 col apart; a table spans 2 cols.
+    // Count the "units" (columns) needed so the cursor spreads them evenly-ish:
+    // solo = 1, parallel pod = 2 (its table), relay pod = 2 (a compact line).
     const units = soloReaders.length + readerPods.reduce((n, p) => n + 2, 0);
     const gap = units > 1 ? Math.max(1, Math.floor(span / (units - 1))) : 1;
 
@@ -2001,19 +2193,34 @@
       readerDesks[id] = true;
       cursor += gap;
     });
-    readerPods.forEach(pod => {
-      // Seat pod members around ONE shared big table: place the table centre,
-      // then members adjacent (left/right, then a second row below if needed).
-      const tcx = clampCol(cursor + 0.5);
-      const tcy = row;
-      tables.push({ cx: tcx, cy: tcy, members: pod.slice() });
-      pod.forEach((id, i) => {
-        // ring positions around the table centre (px offsets)
-        const ring = [ [-6, -2], [6, -2], [-6, 8], [6, 8] ];
-        const o = ring[i % ring.length];
-        pos[id] = { x: tcx * TILE + 8 + o[0], y: tcy * TILE + 8 + o[1] };
-      });
-      cursor += 2 * gap;
+    readerPods.forEach(p => {
+      if (p.mode === 'relay') {
+        // Conveyor line: members in run order (podOrder), each on its OWN desk,
+        // arranged in a TIGHT left→right row centred on the cursor. Spacing is
+        // kept under POD_DIST so proximity clustering (computePods) still sees them
+        // as one pod, while the row reads as a line the doc travels down.
+        const order = p.members.slice().sort((a, b) => (posOf(a).x - posOf(b).x) || (posOf(a).y - posOf(b).y));
+        const STEP = 18;                              // px between members (< POD_DIST≈19)
+        const ccx = clampCol(cursor + 0.5) * TILE + 8;
+        const cy0 = row * TILE + 8;
+        const x0 = ccx - (order.length - 1) * STEP / 2;
+        order.forEach((id, i) => {
+          pos[id] = { x: x0 + i * STEP, y: cy0 };
+          readerDesks[id] = true;
+        });
+        cursor += 2 * gap;
+      } else {
+        // Parallel pod → ONE shared big table (members ringed around the centre).
+        const tcx = clampCol(cursor + 0.5);
+        const tcy = row;
+        tables.push({ cx: tcx, cy: tcy, members: p.members.slice() });
+        p.members.forEach((id, i) => {
+          const ring = [ [-6, -2], [6, -2], [-6, 8], [6, 8] ];
+          const o = ring[i % ring.length];
+          pos[id] = { x: tcx * TILE + 8 + o[0], y: tcy * TILE + 8 + o[1] };
+        });
+        cursor += 2 * gap;
+      }
     });
 
     // ctx / synth desks when enabled (disabled ones already sent to rest).
@@ -2341,6 +2548,7 @@
       sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
       sim.leaderQueue = []; sim.leaderBusy = false;
       sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
+      sim.relayChains = []; sim.relayState = Object.create(null); sim.relayMembers = new Set();
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;
       // Clear per-agent run state, then snap everyone back to their spec-derived
       // layout slot (computeLayout) — the office rests in its pipeline shape.
