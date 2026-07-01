@@ -96,7 +96,10 @@ export interface HNLensResult {
 // group's members sequentially, threading a short digest of the previous
 // member's output into the next member's prompt.
 export type Effort = 'low' | 'med' | 'high'
-export interface GraphNode { enabled?: boolean; effort?: Effort }
+// `replicas` (v2, sum/jargon/comments only): run the agent N times in parallel
+// and merge (vote ×N). Default 1 (= today's single run). Typically 1–3; the
+// orchestrator clamps out-of-range values. Ignored for ctx/synth.
+export interface GraphNode { enabled?: boolean; effort?: Effort; replicas?: number }
 export interface GraphConfig {
   v: number
   // v2 per-agent config. sum/jargon/comments honour enabled+effort; ctx/synth
