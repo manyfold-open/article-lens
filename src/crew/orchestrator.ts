@@ -828,7 +828,7 @@ async function curate(
   emit({ event: 'status', agent: 'synth', state: 'running', label: bz('整合中…') })
   meter?.add('synth', prompt.length, 0)
   try {
-    const text = await callMfAgent(env, env.AGENT_SYNTHESIZER, prompt, { timeoutMs: 25_000, attempts: 1 })
+    const text = await callMfAgent(env, env.AGENT_SYNTHESIZER, prompt, { timeoutMs: 55_000, attempts: 1 })
     meter?.add('synth', 0, text.length)
     const d = parseLoose<CuratorDecision>(text)
     if (d) applyCuration(result, d)
