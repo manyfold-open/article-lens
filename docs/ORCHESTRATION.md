@@ -86,7 +86,13 @@ Invariant: **absent / default spec ⇒ today's behaviour, byte-for-byte.**
   **actual** total after the run. A small number + bar in the office corner.
 
 ## Build phases
-- **v1 (now):** graphConfig v2 (nodes: enabled+effort) · effort→params in orchestrator ·
-  token measurement + `usage` SSE + meter · 4 presets (⚡📄🎯🔬) · effort knob in edit mode.
-- **v1.5:** meaningful `edges` (jargon→ctx) · layered office (tiers + wires).
-- **v2:** vote×N (fixes jargon-returns-0) · debate merge · conditional escalate (💸) · audience tone.
+- **v1 — SHIPPED:** graphConfig v2 (nodes: enabled+effort) · effort→params · token
+  meter (`usage` SSE) · presets · effort knob.
+- **Office-as-diagram — SHIPPED:** layout auto-arranges from the spec (zones L→R,
+  shared table for groups, disabled sleep in the dining corner, human doc delivery).
+- **batch 2 — SHIPPED:** ① relay conveyor (carry doc down a relay pod) · ② vote×N
+  `replicas` (merge; jargon union fixes the empty-jargon flake) · ③ conditional
+  escalate 💸 (cheap sum+ctx first, run jargon+comments only if `verdict.worth_reading`
+  is high/medium). Presets now: ⚡📄🎯🔬🛡️💸.
+- **Later:** meaningful `edges` (jargon→ctx) · debate merge (2× ctx pro/con) ·
+  audience tone (beginner/expert) · calibrate token metering (synth sometimes reads 0).
