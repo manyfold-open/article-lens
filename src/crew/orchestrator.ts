@@ -199,18 +199,53 @@ export async function orchestrateAnalysis(
           : withReplicas('jargon', graph.replicas.jargon,
               q => runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, extra, eff.jargon, meter, q),
               mergeJargonReplicas, m => bz(`找到 ${m.length} 個詞!`))
+    // ctx producer, parameterised by the comment_digest to feed it (cheap phase
+    // passes an empty digest — summary-only is fine for a quick worth-reading call).
+    const runCtx = (cd: HNLensResult['comment_digest']): Promise<HNLensResult['verdict']> =>
+      haveShared ? replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
+        : graph.enabled.ctx === false ? skipContext(mock, emit, skippedAgents, agentSources)
+          : runContext(env, item, summary, cd, mock, emit, fallbackAgents, agentSources, meter)
 
-    const stage1 = await runStage1Graph(graph, { sum: runSum, comments: runCom, jargon: runJar })
-    summary = stage1.sum
-    comment_digest = stage1.comments
-    jargon = stage1.jargon
+    if (opts.graph?.escalate) {
+      // ── Conditional escalate (省錢漸進): cheap first, escalate if worthy ──
+      // Phase 1 (cheap): sum + ctx only. ctx runs on the summary alone (empty
+      // comment_digest) — good enough for a quick "is it worth reading" call.
+      summary = await runSum()
+      const emptyDigest = normalizeDigest({
+        overview: bz(''), camps: [], consensus: bz(''), disputes: [], expert_corrections: [], spicy: [],
+      })
+      verdict = await runCtx(emptyDigest)
 
-    // ── Stage 2: ctx, unchanged ordering — only enabled/disabled. ──
-    verdict = haveShared
-      ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
-      : graph.enabled.ctx === false
-        ? await skipContext(mock, emit, skippedAgents, agentSources)
-        : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources, meter)
+      // Decision: read a machine-readable worth-reading boolean from the verdict.
+      const go = isWorthReading(verdict)
+      emit({ event: 'escalate', decision: go ? 'go' : 'stop', reason: escalateReason(verdict, go) })
+
+      if (go) {
+        // Escalate: now run the fuller workers (respecting enabled/effort/replicas
+        // /groups). If the user disabled jargon/comments they stay skipped even on
+        // 'go' (runJar/runCom honour graph.enabled). Keep phase-1 verdict as-is.
+        const stage1 = await runStage1Graph(graph, {
+          sum: async () => summary,               // already produced in phase 1
+          comments: runCom,
+          jargon: runJar,
+        })
+        comment_digest = stage1.comments
+        jargon = stage1.jargon
+      } else {
+        // Not worth reading: skip jargon + comments via the existing skip path so
+        // their sections are empty, then let synth run over what exists.
+        comment_digest = await skipComments(mock, emit, skippedAgents, agentSources)
+        jargon = await skipJargon(emit, skippedAgents, agentSources)
+      }
+    } else {
+      const stage1 = await runStage1Graph(graph, { sum: runSum, comments: runCom, jargon: runJar })
+      summary = stage1.sum
+      comment_digest = stage1.comments
+      jargon = stage1.jargon
+
+      // ── Stage 2: ctx, unchanged ordering — only enabled/disabled. ──
+      verdict = await runCtx(comment_digest)
+    }
   } else {
     // ── Stage 1: parallel ──────────────────────────────────────────
     const summaryP: Promise<HNLensResult['summary']> = haveShared
@@ -625,6 +660,31 @@ async function runContext(
   } finally {
     meter?.finish('ctx')
   }
+}
+
+// ── Escalate decision: read "worth reading" from the verdict ───────
+// Primary signal is the machine-readable `verdict.worth_reading`
+// ('high'|'medium'|'low'): 'high'/'medium' → worth reading (go), 'low' → stop.
+// This is the real recommendation field in the schema, so no heuristic/text
+// parsing is needed in the normal case. If it's missing/unrecognised (e.g. the
+// agent fell back and produced garbage), default to 'go' — over-delivering is
+// safer than silently dropping content. Never throws.
+function isWorthReading(verdict: HNLensResult['verdict'] | null | undefined): boolean {
+  try {
+    const wr = String(verdict?.worth_reading ?? '').trim().toLowerCase()
+    if (wr === 'low') return false
+    if (wr === 'high' || wr === 'medium') return true
+    return true   // unknown / missing → over-deliver
+  } catch {
+    return true
+  }
+}
+
+function escalateReason(verdict: HNLensResult['verdict'] | null | undefined, go: boolean): string {
+  const wr = String(verdict?.worth_reading ?? '').trim().toLowerCase()
+  const known = wr === 'high' || wr === 'medium' || wr === 'low'
+  if (go) return known ? `worth_reading=${wr}` : 'worth_reading unknown — over-delivering'
+  return `worth_reading=${wr || 'low'}`
 }
 
 // Graph-only: force-skip 小導. Mirrors the other skip helpers.
