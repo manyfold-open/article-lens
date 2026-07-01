@@ -2480,6 +2480,102 @@
     if (reducedMotion) render();
   }
 
+  // Which built-in preset the current spec matches ('standard' when default), or
+  // null for a free-tuned arrangement. Shared by the picker highlight and the
+  // workflow-summary prefix so both stay in agreement.
+  function matchActivePreset() {
+    const cfg = getGraphConfig();
+    if (cfg === null) return 'standard';   // 標準 default
+    if (cfg.groups) return null;           // custom pods → no clean preset match
+    const bench = id => !!editMode.bench[id];
+    const eff = id => effortOf(id);
+    const matches = spec => (!!spec.escalate === !!editMode.escalate) && EDITABLE.concat('synth').every(id => {
+      const n = spec[id]; if (!n) return true;
+      if ((n.enabled === false) !== bench(id)) return false;
+      if (EFFORT_NODES.includes(id) && n.enabled !== false) {
+        const want = EFFORT_LEVELS.includes(n.effort) ? n.effort : 'med';
+        if (want !== eff(id)) return false;
+      }
+      if (REPLICA_NODES.includes(id) && n.enabled !== false) {
+        const wantRep = n.replicas > 1 ? Math.min(MAX_REPLICAS, n.replicas | 0) : 1;
+        if (wantRep !== replicasOf(id)) return false;
+      }
+      return true;
+    });
+    for (const name of ['quick', 'jargon', 'deep', 'reliable', 'thrifty']) if (matches(PRESETS[name])) return name;
+    return null;
+  }
+
+  // ─── Live workflow summary line ─────────────────────────────────────────────
+  // Compose a single-line, human-readable picture of the CURRENT office spec —
+  // the same source getGraphConfig()/specSnapshot() read — so the caption always
+  // states exactly how the agents are arranged plus the cost estimate. Purely a
+  // read of edit-mode state; never throws.
+  const SUMMARY_ZH = { sum: '小摘', jargon: '小詞', comments: '小潛', ctx: '小導', synth: '合成' };
+  const EFFORT_ZH = { low: '低', med: '中', high: '高' };
+  const PRESET_LABEL = {
+    quick: '⚡ 快速掃描', standard: '📄 標準', jargon: '🎯 術語特訓',
+    reliable: '🛡️ 可靠', deep: '🔬 深度精讀', thrifty: '💸 省錢漸進',
+  };
+  // "小詞(高×2)" — worker name + effort (低/中/高) + optional ×N vote tag.
+  function workerToken(id) {
+    let s = SUMMARY_ZH[id] || id;
+    const eff = EFFORT_ZH[effortOf(id)];
+    const rep = replicasOf(id);
+    if (EFFORT_NODES.includes(id)) s += '(' + eff + (rep > 1 ? '×' + rep : '') + ')';
+    else if (rep > 1) s += '×' + rep;
+    return s;
+  }
+  function getWorkflowSummary() {
+    try {
+      const preset = matchActivePreset();
+      const prefix = preset ? PRESET_LABEL[preset] : '🛠️ 自訂';
+      const enabledReaders = STAGE1.filter(id => !editMode.bench[id]);
+      const disabled = STAGE1.filter(id => editMode.bench[id]);
+      const estK = fmtK(estimateTokens());   // e.g. "~28k"
+
+      // 💸 escalate mode reads as a two-phase chain: cheap first, then +candidates.
+      if (editMode.escalate) {
+        const cand = editMode.escalateCandidates
+          .filter(id => enabledReaders.includes(id))
+          .map(id => SUMMARY_ZH[id] || id);
+        const first = enabledReaders.filter(id => !editMode.escalateCandidates.includes(id))
+          .map(id => SUMMARY_ZH[id] || id);
+        const firstStr = first.length ? first.join('·') : '小摘';
+        const candStr = cand.length ? cand.join('·') : '其餘讀者';
+        return `${prefix} 先 ${firstStr}→小導，值得才 +${candStr} · 預估 ${estK}`;
+      }
+
+      // Group the enabled readers by pod: parallel members joined by ∥, relay
+      // members joined by → in run order. Ungrouped readers run in parallel (∥).
+      const pods = computePods().filter(pod => pod.some(id => !editMode.bench[id]));
+      const podStrs = [];
+      const grouped = new Set();
+      for (const pod of pods) {
+        const members = (podModeOf(pod) === 'relay' ? podOrder(pod) : pod.slice())
+          .filter(id => !editMode.bench[id]);
+        if (!members.length) continue;
+        members.forEach(id => grouped.add(id));
+        const sep = podModeOf(pod) === 'relay' ? ' → ' : ' ∥ ';
+        podStrs.push(members.map(workerToken).join(sep));
+      }
+      // Any enabled reader not captured by a multi-member pod (singletons) joins
+      // the parallel list so nothing is dropped.
+      const loose = enabledReaders.filter(id => !grouped.has(id)).map(workerToken);
+      const stageParts = podStrs.concat(loose);
+      let chain = stageParts.length ? stageParts.join(' ∥ ') : '（無讀者）';
+
+      if (!editMode.bench.ctx) chain += ' → 小導';
+      if (!editMode.bench.synth) chain += ' → 合成';
+
+      let line = `${prefix} — ${chain} · 預估 ${estK}`;
+      if (disabled.length) line += ' · 停用: ' + disabled.map(id => SUMMARY_ZH[id] || id).join('、');
+      return line;
+    } catch (e) {
+      return '';   // never break the caption
+    }
+  }
+
   // ─── Layout engine: computeLayout(spec) → positions + tables ────────────────
   // Snapshot of the current tunable spec, read straight from the office state
   // (bench = disabled, effort per node, and the stage-1 pods with their mode).
@@ -2859,29 +2955,11 @@
     relayout(opts) { relayout(opts); },
     // Which built-in preset the current spec matches ('standard' when default),
     // or null when it's a free-tuned arrangement. Lets the picker highlight one.
-    getActivePreset() {
-      const cfg = getGraphConfig();
-      if (cfg === null) return 'standard';   // 標準 default
-      // No pods and only node enabled/effort differences → try to match a preset.
-      if (cfg.groups) return null;
-      const bench = id => !!editMode.bench[id];
-      const eff = id => effortOf(id);
-      const matches = spec => (!!spec.escalate === !!editMode.escalate) && EDITABLE.concat('synth').every(id => {
-        const n = spec[id]; if (!n) return true;
-        if ((n.enabled === false) !== bench(id)) return false;
-        if (EFFORT_NODES.includes(id) && n.enabled !== false) {
-          const want = EFFORT_LEVELS.includes(n.effort) ? n.effort : 'med';
-          if (want !== eff(id)) return false;
-        }
-        if (REPLICA_NODES.includes(id) && n.enabled !== false) {
-          const wantRep = n.replicas > 1 ? Math.min(MAX_REPLICAS, n.replicas | 0) : 1;
-          if (wantRep !== replicasOf(id)) return false;
-        }
-        return true;
-      });
-      for (const name of ['quick', 'jargon', 'deep', 'reliable', 'thrifty']) if (matches(PRESETS[name])) return name;
-      return null;
-    },
+    getActivePreset() { return matchActivePreset(); },
+    // Live, human-readable one-line summary composed from the current spec
+    // (readers ∥ / relay → grouping, effort, vote ×N, ctx/synth, escalate, cost).
+    // app.js renders this into #preset-caption everywhere the caption updates.
+    getWorkflowSummary() { return getWorkflowSummary(); },
     // Live estimate in tokens (for the picker labels, etc.).
     getEstimate() { return estimateTokens(); },
     getEffort(id) { return effortOf(id); },

@@ -234,6 +234,41 @@
     /* The office hit-targets (KB/lang/whiteboard) must not eat drag events. */
     html[data-editmode=on] #office-hits { display: none; }
 
+    /* ── Edit-mode legend / hints ────────────────────────────────────────────
+       A small, unobtrusive panel pinned to the office's top-left corner, shown
+       only while editing. Non-interactive (pointer-events:none) so it never
+       eats a drag, and narrow so it never covers the agents or the meter. */
+    #edit-legend {
+      position: absolute;
+      top: 8px; left: 8px;
+      z-index: 4;
+      max-width: 200px;
+      padding: 8px 10px;
+      border: 1px solid rgba(255,102,0,.35);
+      border-radius: 8px;
+      background: rgba(255,255,255,.90);
+      box-shadow: var(--shadow-sm);
+      color: var(--ink);
+      font-size: 11px;
+      line-height: 1.5;
+      pointer-events: none;
+      display: none;
+    }
+    html[data-editmode=on] #edit-legend { display: block; }
+    #edit-legend .el-title {
+      display: block;
+      font-weight: 800;
+      font-size: 11px;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    #edit-legend ul { list-style: none; margin: 0; padding: 0; }
+    #edit-legend li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #edit-legend b { color: var(--ink); font-weight: 700; }
+    @media (max-width: 560px) {
+      #edit-legend { max-width: 150px; font-size: 10px; padding: 6px 8px; }
+    }
+
     /* ── KB Pill ─────────────────────────────────────────────────────────── */
     .kb-pill {
       font-family: var(--mono);
@@ -1728,6 +1763,18 @@
       aria-label="看隊長的報告總覽 / Open the briefing"></button>
   </div>
   <div id="agent-tooltip" class="agent-tooltip" hidden></div>
+  <!-- Edit-mode legend: only visible while arranging the office (data-editmode=on).
+       Non-interactive; explains the drag / bench / effort / vote / mode affordances. -->
+  <aside id="edit-legend" aria-hidden="true">
+    <span class="el-title">🛠️ 編排說明</span>
+    <ul>
+      <li><b>拖到一起</b> = 一起做（合桌）</li>
+      <li><b>拖到休息區</b> = 停用</li>
+      <li><b>●/●●/●●●</b> = 用力度（低/中/高）</li>
+      <li><b>⧉×N</b> = 投票（跑幾份）</li>
+      <li><b>平行 / 接力</b> = 分組模式（點徽章切換）</li>
+    </ul>
+  </aside>
 </div>
 <div id="workflow-strip" class="workflow-strip" aria-label="Workflow status"></div>
 
