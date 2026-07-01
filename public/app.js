@@ -164,11 +164,19 @@ function syncPresetPicker() {
     btn.classList.toggle('active', on);
     if (on) activeBtn = btn;
   });
+  // Caption = a live workflow summary composed from the current office spec
+  // (which readers run, in what grouping, at what effort/×N, ctx/synth, cost).
+  // Falls back to the static preset description if the summary is unavailable.
   const caption = document.getElementById('preset-caption');
   if (caption) {
-    caption.textContent = activeBtn
-      ? (activeBtn.dataset.desc || '')
-      : '🛠️ 自訂編排 · 你手動調整過，不符合任何範本';
+    let text = '';
+    if (pa.getWorkflowSummary) { try { text = pa.getWorkflowSummary(); } catch { text = ''; } }
+    if (!text) {
+      text = activeBtn
+        ? (activeBtn.dataset.desc || '')
+        : '🛠️ 自訂編排 · 你手動調整過，不符合任何範本';
+    }
+    caption.textContent = text;
   }
 }
 
