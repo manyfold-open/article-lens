@@ -173,7 +173,17 @@
   // backend consumes. When the layout equals the default (all enabled, the three
   // stage-1 workers in one parallel group), getGraphConfig() returns null and the
   // office behaves byte-for-byte as today.
-  const EDITABLE = ['sum', 'jargon', 'comments', 'ctx']; // draggable workers
+  const EDITABLE = ['sum', 'jargon', 'comments', 'ctx']; // spec-editable workers (bench/graphConfig source)
+  // Which agents the user can freely DRAG in edit mode. This is a SUPERSET of
+  // EDITABLE: orch (隊長) and synth (合成) are also draggable, but purely for
+  // COSMETIC placement — moving them is layout-only and never touches
+  // getGraphConfig()/the spec/enabled/hasCustomLayout()'s graph decision (they're
+  // infra, not spec nodes). Their positions still persist in localStorage so the
+  // office remembers where you put them.
+  const DRAGGABLE = ['sum', 'jargon', 'comments', 'ctx', 'orch', 'synth'];
+  // Infra agents: draggable + persisted, but not spec nodes (no enable/disable,
+  // no bench, excluded from the graphConfig decision).
+  const INFRA = ['orch', 'synth'];
   const STAGE1 = ['sum', 'jargon', 'comments'];          // can be podded
   const POD_DIST = TILE * 1.2;                            // cluster radius (logical px)
   const GRAPH_LS_KEY = 'alens.graph';
@@ -241,9 +251,14 @@
   // Position used for pod/config math: the user's custom layout if set, else the
   // live entity position. Decoupled from the running sim, which moves chars.
   function posOf(id) { return editMode.layout[id] || chars[id]; }
-  // True when the user has any custom arrangement saved (positions/bench/modes).
+  // True when the user has any custom arrangement saved that affects the SPEC
+  // (positions of spec-node workers / bench / modes / effort / replicas /
+  // escalate). Infra agents (orch/synth) may carry drag-position overrides in
+  // editMode.layout too, but those are cosmetic-only and MUST NOT count here —
+  // otherwise merely nudging 隊長/合成 would flip getGraphConfig() non-null and
+  // start emitting &graph. So we only look at EDITABLE layout overrides.
   function hasCustomLayout() {
-    return Object.keys(editMode.layout).length > 0
+    return EDITABLE.some(id => !!editMode.layout[id])
       || Object.keys(editMode.bench).length > 0
       || Object.keys(editMode.podModes).length > 0
       || EFFORT_NODES.some(id => effortOf(id) !== 'med')    // non-default effort counts
@@ -1952,8 +1967,12 @@
     // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
     computed.tables.forEach(tbl => {
       const homes = tbl.members.map(id => targetPos(id)).filter(Boolean);
-      const cy = homes.length ? homes.reduce((s, p) => s + p.y, 0) / homes.length : tbl.cy * TILE + 8;
-      sprites.push({ baseY: cy + 6, draw: () => drawSharedTable(tbl) });
+      // Sort the table UNDER every seated member so nobody hides behind the slab:
+      // baseY = a hair above the topmost member's feet (minY - 1). Members' own
+      // sprites use baseY = e.y + 6, and every member sits at/below the table
+      // centre, so this keeps the slab strictly first in the y-sort.
+      const minY = homes.length ? homes.reduce((m, p) => Math.min(m, p.y), Infinity) : tbl.cy * TILE + 8;
+      sprites.push({ baseY: minY - 1, draw: () => drawSharedTable(tbl) });
     });
     // Pod members share ONE big table (drawn above) instead of individual desks,
     // so their monitors sit on the shared slab and it reads as "working together".
@@ -2213,7 +2232,7 @@
     c.fillStyle = rgba('#1C1917', 0.62);
     c.font = `${10}px system-ui, sans-serif`;
     c.textAlign = 'center'; c.textBaseline = 'top';
-    c.fillText('編輯模式：拖曳小幫手分組、點徽章切換平行/接力、拖到休息區停用',
+    c.fillText('編輯模式：拖曳任何人（含隊長/合成）擺位、點徽章切換平行/接力、把小幫手拖到休息區停用',
       px(LOGICAL_W / 2), px(WALL * TILE + 2));
     c.restore();
   }
@@ -2287,7 +2306,7 @@
     canvas.addEventListener('mousemove', ev => {
       if (editMode.on) {
         editPointerMove(ev);
-        const overEditable = !!editMode.dragId || EDITABLE.includes(locate(ev));
+        const overEditable = !!editMode.dragId || DRAGGABLE.includes(locate(ev));
         canvas.style.cursor = editMode.dragId ? 'grabbing' : (overEditable ? 'grab' : 'default');
         return;
       }
@@ -2678,14 +2697,29 @@
         });
         cursor += 2 * gap;
       } else {
-        // Parallel pod → ONE shared big table (members ringed around the centre).
+        // Parallel pod → ONE shared big table (members ringed around it). Members
+        // are spread WIDE around the slab with real separation so their sprites +
+        // nameplates don't overlap or stack, and are seated at/below the table's
+        // midline so they y-sort ON TOP of the slab (drawn after it) — never hidden
+        // behind it. Offsets scale to member count: 2 sit left/right, 3 add a
+        // centred front seat, 4 ring the corners.
         const tcx = clampCol(cursor + 0.5);
         const tcy = row;
         tables.push({ cx: tcx, cy: tcy, members: p.members.slice() });
+        const n = p.members.length;
+        // Wide horizontal spread (±SPREAD px); Y offsets keep everyone on/below
+        // the table centre (>= 0) so the table (baseY ≈ centre) sorts underneath.
+        const SPREAD = 11;
+        const rings = {
+          2: [ [-SPREAD, 4], [SPREAD, 4] ],
+          3: [ [-SPREAD, 2], [SPREAD, 2], [0, 9] ],
+          4: [ [-SPREAD, 1], [SPREAD, 1], [-SPREAD, 9], [SPREAD, 9] ],
+        };
+        const ring = rings[n] || rings[4];
+        const cx0 = tcx * TILE + 8, cy0 = tcy * TILE + 8;
         p.members.forEach((id, i) => {
-          const ring = [ [-6, -2], [6, -2], [-6, 8], [6, 8] ];
           const o = ring[i % ring.length];
-          pos[id] = { x: tcx * TILE + 8 + o[0], y: tcy * TILE + 8 + o[1] };
+          pos[id] = { x: clampX(cx0 + o[0]), y: clampY(cy0 + o[1]) };
         });
         cursor += 2 * gap;
       }
@@ -2773,8 +2807,10 @@
 
   function persistGraph() {
     try {
+      // Persist every DRAGGABLE agent's manual position — including infra
+      // (orch/synth) — so the office remembers exactly where you put everyone.
       const layout = {};
-      for (const id of EDITABLE) if (editMode.layout[id]) layout[id] = editMode.layout[id];
+      for (const id of DRAGGABLE) if (editMode.layout[id]) layout[id] = editMode.layout[id];
       const effort = {};
       for (const id of EFFORT_NODES) if (effortOf(id) !== 'med') effort[id] = effortOf(id);
       const replicas = {};
@@ -2808,7 +2844,7 @@
     }
     editMode.layout = Object.create(null);
     if (data.layout) {
-      for (const id of EDITABLE) {
+      for (const id of DRAGGABLE) {
         const p = data.layout[id];
         if (p && typeof p.x === 'number' && typeof p.y === 'number' && chars[id]) {
           const x = clampX(p.x), y = clampY(p.y);
@@ -2899,7 +2935,7 @@
       }
     }
     const id = locate(ev);
-    if (id && EDITABLE.includes(id)) {
+    if (id && DRAGGABLE.includes(id)) {
       editMode.dragId = id;
       chars[id].path = null; chars[id].onArrive = null;
       ev.preventDefault();
@@ -2920,8 +2956,13 @@
     if (!editMode.on || !editMode.dragId) return;
     const id = editMode.dragId;
     const e = chars[id];
-    if (inBench(e.x, e.y)) editMode.bench[id] = true;
-    else delete editMode.bench[id];
+    // Only the 4 spec-node workers get disabled by the bench. Infra agents
+    // (orch/synth) can be dropped anywhere — including over the bench lane —
+    // without being "benched off"; they have no enable/disable.
+    if (!INFRA.includes(id)) {
+      if (inBench(e.x, e.y)) editMode.bench[id] = true;
+      else delete editMode.bench[id];
+    }
     editMode.dragId = null;
     persistGraph();
     if (onSpecChange) onSpecChange();
