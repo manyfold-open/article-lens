@@ -362,6 +362,15 @@ function handleSSEEvent(ev, es) {
       // Per-agent token usage — accumulate into the office token meter (actual).
       if (window.pixelAgents?.addUsage) window.pixelAgents.addUsage(ev.agent, ev.tokens);
       break;
+    case 'escalate':
+      // 💸 省錢漸進: after running sum+ctx first, the backend decides whether the
+      // article is worth reading. 'go' → wake the standby candidates (jargon+comments)
+      // from the dining corner into the readers zone; 'stop' → they stay asleep and
+      // the run wraps with just sum+ctx→synth→隊長.
+      if (window.pixelAgents?.escalateDecision) {
+        window.pixelAgents.escalateDecision(ev.decision === 'go' ? 'go' : 'stop');
+      }
+      break;
     case 'result':
       es.close();
       currentResult = ev.data;
