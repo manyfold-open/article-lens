@@ -28,7 +28,8 @@
   const LOGICAL_W = COLS * TILE;          // 320
   const LOGICAL_H = ROWS * TILE;          // 192
 
-  const SPEED  = 1.03;                    // logical px / frame (~+15% over original 0.9)
+  const SPEED  = 1.03;                    // idle/ambient walking speed
+  const WORK_SPEED = 1.38;                // task deliveries + final presentation move with intent
   const RUSH_SPEED = 2.15;                // new assignment: everyone hustles back (~+13% over original 1.9)
   const ASSIGN = 70;                      // frames a talk holds
   const REPORT = 80;
@@ -86,10 +87,10 @@
   // left for later (relay conveyor / vote-clone / conditional-escalate).
   const ZONE = {
     rest:    { cols: [1, 3],   row: 9  },   // sofa area; benched agents sleep here
-    readers: { cols: [5, 9],   row: 4  },   // stage-1: sum / jargon / comments
+    readers: { cols: [5, 9],   row: 5  },   // stage-1: sum / jargon / comments
     ctx:     { col: 11,        row: 5  },   // 裁定 verdict desk
     synth:   { col: 14,        row: 5  },   // 校對 QA desk
-    board:   { col: 17,        row: 3  },   // whiteboard (orch presents here)
+    board:   { col: 12,        row: 2  },   // whiteboard (to the right of 隊長)
     orchseat:{ col: 9,         row: 2  },   // 隊長 overseer spot, center-top
   };
   // Rest-area slots for benched/disabled agents. The rest area IS the bottom-right
@@ -109,10 +110,10 @@
     [16,10],                              // coffee table
     [1,10],[6,10],[18,3],[11,10],         // plants
     [18,8],[18,9],                        // dining corner: coffee counter + water cooler
-    [5,3],                                // whiteboard easel (beside 隊長)
+    [12,2],                               // whiteboard easel (beside 隊長)
   ];
-  const WB_TILE = [5, 3];                 // whiteboard easel sits beside 隊長
-  const WB_APPROACH = [4, 3];             // 隊長 stands at its own approach to present
+  const WB_TILE = [12, 2];                // whiteboard easel sits to 隊長's right
+  const WB_APPROACH = [11, 2];            // 隊長 stands beside it to present
   const SHELF_APPROACH = [2, 3];          // 隊長 stands here to look up the wordbook
 
   // ─── Walkable grid ──────────────────────────────────────────────────────────
@@ -289,39 +290,39 @@
   function moving(e) { return !!e.walkXY || (e.path && e.path.length > 0); }
   // Free-floating straight-line walk toward a logical-px point (tx,ty). Unlike
   // walkTo (A* over the tile grid) this works from/to the arbitrary computed
-  // positions agents occupy during an in-place custom run. rush → RUSH_SPEED.
-  function walkXY(e, tx, ty, cb, rush) {
+  // positions agents occupy during an in-place custom run. pace: idle/task/rush.
+  function walkXY(e, tx, ty, cb, pace) {
     e.path = null; e.onArrive = null;
-    e.walkXY = { tx, ty, cb: cb || null, rush: !!rush };
+    e.walkXY = { tx, ty, cb: cb || null, pace: pace || 'idle' };
   }
 
-	  function stepEntity(e) {
-	    if (e.timer > 0) { e.timer--; if (e.timer === 0 && e.onTimer) { const t = e.onTimer; e.onTimer = null; t(); } }
-	    // Free-floating straight-line walk (used for in-place custom-run human
-	    // deliveries where positions aren't tile-locked so A* can't be used).
-	    if (e.walkXY) {
-	      const w = e.walkXY;
-	      const dx = w.tx - e.x, dy = w.ty - e.y, d = Math.hypot(dx, dy);
-	      const sp = w.rush ? RUSH_SPEED : SPEED;
-	      if (d <= sp) {
-	        e.x = w.tx; e.y = w.ty; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
-	        e.walkXY = null; const cb = w.cb; if (cb) cb();
-	      } else {
-	        e.x += dx / d * sp; e.y += dy / d * sp;
-	        e.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
-	      }
-	      return;
-	    }
-	    if (!e.path || !e.path.length) return;
-	    const [tc, tr] = e.path[0];
-	    const tx = tc*TILE + 8, ty = tr*TILE + 8;
-	    const dx = tx - e.x, dy = ty - e.y, d = Math.hypot(dx, dy);
-	    const speed = e.state === 'recall' ? RUSH_SPEED : SPEED;
-	    if (d <= speed) {
-	      e.x = tx; e.y = ty; e.tile = [tc, tr]; e.path.shift();
-	      if (!e.path.length) { const cb = e.onArrive; e.onArrive = null; if (cb) cb(); }
-	    } else {
-	      e.x += dx / d * speed; e.y += dy / d * speed;
+  function stepEntity(e) {
+    if (e.timer > 0) { e.timer--; if (e.timer === 0 && e.onTimer) { const t = e.onTimer; e.onTimer = null; t(); } }
+    // Free-floating straight-line walk (used for in-place custom-run human
+    // deliveries where positions aren't tile-locked so A* can't be used).
+    if (e.walkXY) {
+      const w = e.walkXY;
+      const dx = w.tx - e.x, dy = w.ty - e.y, d = Math.hypot(dx, dy);
+      const sp = w.pace === 'rush' ? RUSH_SPEED : (w.pace === 'task' ? WORK_SPEED : SPEED);
+      if (d <= sp) {
+        e.x = w.tx; e.y = w.ty; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+        e.walkXY = null; const cb = w.cb; if (cb) cb();
+      } else {
+        e.x += dx / d * sp; e.y += dy / d * sp;
+        e.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+      }
+      return;
+    }
+    if (!e.path || !e.path.length) return;
+    const [tc, tr] = e.path[0];
+    const tx = tc*TILE + 8, ty = tr*TILE + 8;
+    const dx = tx - e.x, dy = ty - e.y, d = Math.hypot(dx, dy);
+    const speed = e.state === 'recall' ? RUSH_SPEED : SPEED;
+    if (d <= speed) {
+      e.x = tx; e.y = ty; e.tile = [tc, tr]; e.path.shift();
+      if (!e.path.length) { const cb = e.onArrive; e.onArrive = null; if (cb) cb(); }
+    } else {
+      e.x += dx / d * speed; e.y += dy / d * speed;
       e.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
     }
   }
@@ -492,8 +493,8 @@
 	      const e = chars[id];
 	      if (!e) return;
 	      if (sim.escalateStandby) sim.escalateStandby.delete(id);   // now a real carrier
-	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
-	      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
+		      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
+		      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null; e.carryDoc = false;
 	      e.asleep = false; e.bubble = '值得讀，開工！';
 	      e.state = 'delivering';   // transient "moving" state so nothing else grabs it
 	      const t = targetPos(id);  // its computed reader slot (all-enabled escalate spec)
@@ -501,7 +502,7 @@
 	        e.x = t.x; e.y = t.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
 	        e.facing = 'down'; e.bubble = '';
 	        e.state = 'working'; e.workStart = tick;   // work in place; SSE drives the monitor
-	      });
+	      }, 'rush');
 	    });
 	  }
 	  // Reduced-motion escalate: no walking — reflect states statically. 'go' wakes
@@ -589,8 +590,8 @@
 	    L.bubble = '各組就位，準備開工！';
 	    // Clear per-agent leftovers, then walk to the computed layout.
 	    Object.values(chars).forEach(e => {
-	      e.timer = 0; e.onTimer = null; e._queuedDeliver = false; e._returningToDesk = false;
-	      e.ambKind = null; e.statusText = ''; e._report = ''; e.workStart = 0;
+		      e.timer = 0; e.onTimer = null; e._queuedDeliver = false; e._returningToDesk = false;
+		      e.ambKind = null; e.statusText = ''; e._report = ''; e.workStart = 0; e.carryDoc = false;
 	      delete taskState[e.id];
 	    });
 	    relayout();   // reshuffle into the spec pipeline (walk; snaps under reduced-motion)
@@ -604,8 +605,8 @@
 	  function recallToSeat(e, done) {
 	    e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
 	    e.asleep = false; e._queuedDeliver = false; e.ambKind = null;
-	    e._returningToDesk = false;
-	    e.statusText = ''; e._report = ''; e.workStart = 0;
+		    e._returningToDesk = false;
+		    e.statusText = ''; e._report = ''; e.workStart = 0; e.carryDoc = false;
 	    delete taskState[e.id];
 	    e.state = 'recall';
 	    if (e.id !== 'orch') e.bubble = '收到，回座！';
@@ -720,13 +721,15 @@
   // expands (the app reveals it via the present handler).
   function startPresent() {
     const L = chars.orch;
-    L.state = 'walking_to_employee'; L.bubble = '';
-    slideTo(L, L.station.approach, () => walkTo(L, WB_APPROACH, () => {
-      faceToward(L, WB_TILE); L.state = 'presenting'; L.bubble = '📊 來看報告！';
+    L.state = 'walking_to_employee'; L.bubble = ''; L.carryDoc = true;
+    const spot = centreOf(WB_APPROACH[0], WB_APPROACH[1]);
+    walkXY(L, spot.x, spot.y, () => {
+      L.tile = WB_APPROACH.slice();
+      faceToward(L, WB_TILE); L.carryDoc = false; L.state = 'presenting'; L.bubble = '📊 來看報告！';
       sim.boardActive = true;
       if (presentHandler) presentHandler();
       L.timer = 120; L.onTimer = () => settleAfterReport();
-    }));
+    }, 'task');
   }
 
   function settleAfterReport() {
@@ -1018,9 +1021,9 @@
           w.state = 'done'; w.facing = 'down';
           sim.synthBusy = false; sim.handed++;
           tryCarryToSynth();
-        });
+        }, 'task');
       };
-    });
+    }, 'task');
   }
 
   // Bubbles a relay member says as it hands the growing doc to the next person.
@@ -1089,9 +1092,9 @@
           w.state = 'done'; w.facing = 'down';         // this member is finished
           st.i = h + 1;                                // doc now held by the next member
           st.busy = false;                             // release the chain for the next hop
-        });
+        }, 'task');
       };
-    });
+    }, 'task');
   }
 
   // Last member `h` in chain `ci` carries the COMBINED doc to the collector,
@@ -1135,9 +1138,9 @@
           st.delivered = true; st.busy = false;
           sim.handed += chain.length;                  // whole chain accounted for
           tryCarryToSynth();                            // let any queued parallel carrier proceed
-        });
+        }, 'task');
       };
-    });
+    }, 'task');
   }
 
   // Report hand-off: the collector (producer) carries the integrated report to
@@ -1167,11 +1170,11 @@
       F.onTimer = () => {
         F.bubble = '';
         F.state = 'delivering';
-        walkXY(F, home.x, home.y, () => { F.state = 'done'; F.facing = 'down'; });
+        walkXY(F, home.x, home.y, () => { F.state = 'done'; F.facing = 'down'; }, 'task');
         L.timer = HANDOFF_MIN;
         L.onTimer = () => { if (!sim.presented) { L.bubble = ''; sim.presented = true; startPresentInPlace(); } };
       };
-    });
+    }, 'task');
   }
 
   // Finale: 隊長 walks over to the whiteboard, presents (triggering the report
@@ -1181,7 +1184,7 @@
   function present_settle() {
     const L = chars.orch;
     Object.values(chars).forEach(e => {
-      e.statusText = ''; e._report = ''; e._queuedDeliver = false; e.walkXY = null;
+      e.statusText = ''; e._report = ''; e._queuedDeliver = false; e.walkXY = null; e.carryDoc = false;
     });
     L.bubble = ''; L.state = 'returning';
     // Walk 隊長 back to its overseer slot (free-floating target, via the layout lerp).
@@ -1197,15 +1200,18 @@
     // The hand-off is done; clear the producer's "交給隊長" bubble.
     Object.values(chars).forEach(e => { if (e.id !== 'orch' && e.bubble === '報告交給隊長') e.bubble = ''; });
     // Walk 隊長 to the whiteboard easel, face it, then present.
-    L.state = 'walking_to_employee'; L.bubble = '';
+    L.state = 'walking_to_employee'; L.bubble = ''; L.carryDoc = true;
     L.walkTarget = null;
-    walkTo(L, WB_APPROACH, () => {
+    const spot = centreOf(WB_APPROACH[0], WB_APPROACH[1]);
+    walkXY(L, spot.x, spot.y, () => {
+      L.tile = WB_APPROACH.slice();
       faceToward(L, WB_TILE);
+      L.carryDoc = false;
       L.state = 'presenting'; L.bubble = '📊 來看報告！';
       sim.boardActive = true;
       if (presentHandler) presentHandler();
       L.timer = 120; L.onTimer = present_settle;
-    });
+    }, 'task');
   }
 
   // ─── Visual mode resolution ─────────────────────────────────────────────────
@@ -1433,25 +1439,23 @@
   // centred on the table centre, with the members seated around it. Signals
   // collaboration (vs. separate side-by-side desks = parallel).
   function drawSharedTable(tbl){
-    // The table + monitors must track the members' ACTUAL rendered positions so a
-    // dragged pod stays co-located (the old tbl.cx/cy computed-band centre went
-    // stale the moment the user dragged the pod, stranding the table/monitors).
-    // Centre the slab on the live centroid of the pod members and size it to span
-    // them (with padding) so it always sits under the agents wherever they are.
-    const live = tbl.members.map(id => chars[id]).filter(Boolean);
-    if (!live.length) return;
+    // Draw from the layout's fixed home positions, not live carrier positions.
+    // Otherwise a shared table stretches/follows a person when they walk to 合成.
+    const homes = tbl.members.map(id => targetPos(id)).filter(Boolean);
+    if (!homes.length) return;
     let sx = 0, sy = 0, minX = Infinity, maxX = -Infinity;
-    live.forEach(e => { sx += e.x; sy += e.y; minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x); });
-    const cx = sx / live.length, cy = sy / live.length;
+    homes.forEach(p => { sx += p.x; sy += p.y; minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); });
+    const cx = sx / homes.length, cy = sy / homes.length;
     const w = Math.max(26, (maxX - minX) + 16), h = 12, x = cx - w/2, y = cy - h/2;
     rect(x, y, w, h, WOOD); rect(x, y, w, 1, WOODHI); rect(x, y+h-1, w, 1, WOODLO);
     rect(x+2, y+2, w-4, h-4, shade(WOOD, 1.08));            // tabletop inset
     rect(cx-1, cy-1, 3, 4, '#FFFFFF');                      // shared papers in the middle
-    // each member's small monitor on the slab, anchored above the member's own
-    // live position (so a monitor sits with its agent, not floating on a stale row).
-    live.forEach(e => {
+    // Each member's small monitor stays at their home seat on the shared slab.
+    tbl.members.forEach(id => {
+      const e = chars[id], p = targetPos(id);
+      if (!e || !p) return;
       const mode = vmode(e);
-      const mx = e.x - 4, my = e.y - 8;
+      const mx = p.x - 4, my = p.y - 8;
       rect(mx-1, my-1, 6, 6, '#34302A'); rect(mx, my, 4, 4, MON);
       drawScreen(mx+0.5, my+0.5, 3, 3, mode, e.role.shirt);
     });
@@ -1629,6 +1633,7 @@
     if (f!=='up') rect(cx-1, by, 2, 2, '#FFFFFF');           // collar (front)
 
     drawArms(e, cx, by, mode, isMoving);
+    if (e.carryDoc) drawHeldReport(cx, by, e.facing);
 
     // hair crown
     rect(cx-5, top, 10, 5, hair); rect(cx-4, top-1, 8, 1, hair); rect(cx-5, top, 10, 1, shade(hair,1.25));
@@ -1664,6 +1669,15 @@
     c.fillText('z', px(cx+4), px(top-2) - f*SCALE*2);
     c.fillText('z', px(cx+6), px(top-4) - f*SCALE*2);
     c.restore();
+  }
+
+  function drawHeldReport(cx, by, facing) {
+    const side = facing === 'left' ? -1 : 1;
+    const x = cx + side * 6, y = by + 1;
+    rect(x - 2, y - 2, 5, 7, '#FFFFFF');
+    rect(x - 2, y - 2, 5, 1, ACCENT);
+    rect(x - 1, y, 3, 1, '#9CA3AF');
+    rect(x - 1, y + 2, 3, 1, '#CBD5E1');
   }
 
   function drawArms(e, cx, by, mode, isMoving) {
@@ -1802,10 +1816,8 @@
     const sprites = [];
     // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
     computed.tables.forEach(tbl => {
-      // baseY from the members' live centroid so the y-sort matches where the
-      // table is actually drawn (tracks a dragged pod, not the stale computed row).
-      const mem = tbl.members.map(id => chars[id]).filter(Boolean);
-      const cy = mem.length ? mem.reduce((s, e) => s + e.y, 0) / mem.length : tbl.cy * TILE + 8;
+      const homes = tbl.members.map(id => targetPos(id)).filter(Boolean);
+      const cy = homes.length ? homes.reduce((s, p) => s + p.y, 0) / homes.length : tbl.cy * TILE + 8;
       sprites.push({ baseY: cy + 6, draw: () => drawSharedTable(tbl) });
     });
     // Pod members share ONE big table (drawn above) instead of individual desks,
@@ -2813,15 +2825,15 @@
       sim.relayChains = []; sim.relayState = Object.create(null); sim.relayMembers = new Set();
       sim.escalate = false; sim.escalateDecided = false; sim.escalateStandby = new Set();
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;
-      // Clear per-agent run state, then snap everyone back to their spec-derived
-      // layout slot (computeLayout) — the office rests in its pipeline shape.
-      STATIONS.forEach(s => { const e = chars[s.id];
-        e.path = null; e.onArrive = null; e.walkTarget = null; e.walkXY = null; e.facing = 'down'; e.state = 'idle';
+	      // Clear per-agent run state, then snap everyone back to their spec-derived
+	      // layout slot (computeLayout) — the office rests in its pipeline shape.
+	      STATIONS.forEach(s => { const e = chars[s.id];
+	        e.path = null; e.onArrive = null; e.walkTarget = null; e.walkXY = null; e.facing = 'down'; e.state = 'idle';
 	        e.timer = 0; e.onTimer = null; e.bubble = ''; e._report = ''; e.statusText = ''; e.workStart = 0; e.asleep = false;
-	        e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
-        e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
-        delete taskState[s.id];
-      });
+	        e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null; e.carryDoc = false;
+	        e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
+	        delete taskState[s.id];
+	      });
       relayout({ snap: true });   // reposition to the computed pipeline layout
       petQueue.length = 0;
       Object.assign(pets.pika, { x:T(18)+8, y:T(10)+10, tile:[18,10], path:null, onArrive:null, facing:'left', state:'idle', timer:80, onTimer:null, bubble:'', card:'' });
