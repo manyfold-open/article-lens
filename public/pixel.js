@@ -1082,31 +1082,49 @@
     // Standby escalate candidates are excluded until woken — otherwise the run
     // would wait on workers that may never start (decision:'stop').
     const enabledCarriers = carriers.filter(id => !editMode.bench[id] && !isStandby(id));
-    // Every carrier has walked its draft over and returned to its slot.
+    // Cosmetic-delivery bookkeeping: every carrier has walked its draft over and
+    // returned. This is now FLAVOUR ONLY — it no longer gates whether the
+    // collector may start integrating (the real SSE status does). Kept so we can
+    // OPTIONALLY start integrating on delivery completion even when there is no
+    // SSE-driven collector work (e.g. a plain reader/ctx fallback with no synth).
     const allDelivered = enabledCarriers.every(id => chars[id].state === 'done')
       && sim.handed >= enabledCarriers.length && !sim.synthBusy;
 
     const S = chars[collectorId];
-    // If the collector is itself an SSE-driven worker (e.g. ctx as a fallback),
-    // it must have finished its OWN work before it starts integrating.
-    const collectorReady = !ALL_WORKERS.includes(collectorId)
-      || (taskState[collectorId] === 'done' && (tick - (S ? S.workStart : 0)) >= MIN_WORK)
-      || (S && S.state !== 'working');
-    // Once all carriers delivered: the collector integrates (合成 curates; a
-    // fallback producer just holds a beat), then carries the report to 隊長.
-    if (allDelivered && collectorReady && !sim.handoff && S
-        && S.state !== 'reviewing' && S.state !== 'delivering' && !sim.collecting) {
+    // Does the collector do REAL SSE-driven work of its own? synth always does;
+    // a reader/ctx fallback does; 隊長 as a last-resort producer does not.
+    const collectorSSE = ALL_WORKERS.includes(collectorId) || collectorId === 'synth';
+    // The collector's real work has STARTED per SSE (running/typing/reading/done).
+    const collectorStarted = collectorSSE
+      && (taskState[collectorId] === 'typing' || taskState[collectorId] === 'reading'
+          || taskState[collectorId] === 'done');
+    // The collector's real work is DONE per SSE.
+    const collectorDoneSSE = collectorSSE && taskState[collectorId] === 'done';
+
+    // ── Start integrating: track REAL progress, don't wait on the delivery
+    // animation. 合成 enters 整合中 the moment its SSE status arrives (running or
+    // even already-done if we were behind); a non-SSE fallback producer (no synth,
+    // collector is 隊長-only) has no status of its own, so it falls back to
+    // starting once the cosmetic deliveries have landed. Either way, once started
+    // it plays a visible integrate beat before it may finish.
+    const canStart = collectorStarted || (!collectorSSE && allDelivered);
+    if (canStart && !sim.collecting && !sim.handoff && S
+        && S.state !== 'reviewing' && S.state !== 'delivering' && S.state !== 'done') {
       sim.collecting = true;
-      if (collectorId === 'synth' && synthOn) {
-        S.state = 'reviewing'; S.workStart = tick; S.bubble = ASSIGNMENTS.synth.card;
-        taskState.synth = 'typing';
-      } else {
-        // No 合成 (or the collector is a reader/ctx): brief hold, then carry.
-        S.workStart = tick; S.state = 'reviewing'; S.bubble = '彙整中';
-      }
+      S.state = 'reviewing'; S.workStart = tick;
+      S.asleep = false;
+      S.bubble = (collectorId === 'synth' && synthOn) ? ASSIGNMENTS.synth.card : '彙整中';
+      if (collectorId === 'synth' && synthOn && taskState.synth !== 'done') taskState.synth = 'typing';
     }
-    if (sim.collecting && S && S.state === 'reviewing' && (tick - S.workStart) >= SYNTH_REVIEW
-        && !sim.handoff) {
+
+    // ── Finish integrating → hand off. The collector must have been visibly
+    // integrating for at least SYNTH_REVIEW frames (so it always shows working
+    // before it hands off, even if the SSE `done` already arrived while we were
+    // catching up), AND its real work must be done. A non-SSE fallback producer
+    // has no `done` event, so its own visible beat is the gate.
+    const beatDone = (tick - S.workStart) >= SYNTH_REVIEW;
+    const realDone = collectorSSE ? collectorDoneSSE : true;
+    if (sim.collecting && S && S.state === 'reviewing' && beatDone && realDone && !sim.handoff) {
       S.state = 'done'; S.bubble = ''; if (collectorId === 'synth') taskState.synth = 'done';
       beginHandoff(collectorId);
     }
