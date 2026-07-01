@@ -28,8 +28,8 @@
   const LOGICAL_W = COLS * TILE;          // 320
   const LOGICAL_H = ROWS * TILE;          // 192
 
-  const SPEED  = 0.9;                     // logical px / frame
-  const RUSH_SPEED = 1.9;                 // new assignment: everyone hustles back
+  const SPEED  = 1.25;                    // logical px / frame (~+39% snappier walk)
+  const RUSH_SPEED = 2.6;                 // new assignment: everyone hustles back (~+37%)
   const ASSIGN = 70;                      // frames a talk holds
   const REPORT = 80;
   const MIN_WORK = 150;                   // min visible "working" frames
@@ -92,9 +92,14 @@
     board:   { col: 17,        row: 3  },   // whiteboard (orch presents here)
     orchseat:{ col: 9,         row: 2  },   // 隊長 overseer spot, center-top
   };
-  // Rest-area slots for benched agents (bottom-left lounge, spread so they don't
-  // stack; chosen to dodge the plant tiles at [1,10] / [6,10]).
-  const REST_SLOTS = [[2, 9], [3, 10], [2, 11], [4, 9]];
+  // Rest-area slots for benched/disabled agents. The rest area IS the bottom-right
+  // dining corner now (no separate 休息區). The first two slots are the two
+  // 按摩椅 (massage chairs) — a resting agent naps in a chair; extra slots spread
+  // nearby so multiple benched agents don't stack. Chosen to dodge the coffee
+  // counter [18,8]/cooler [18,9], sofa [14-16,9], table [16,10], plushie/dog/cat
+  // [14,10]/[17,10]/[18,10] and the plant [11,10].
+  const MASSAGE_CHAIRS = [[12, 10], [13, 10]];   // 按摩椅 tiles (dining corner)
+  const REST_SLOTS = [[12, 10], [13, 10], [12, 11], [13, 11]];
   const centreOf = (col, row) => ({ x: col * TILE + 8, y: row * TILE + 8 });
 
   // Blocking floor furniture (besides seats/desks).
@@ -372,6 +377,7 @@
 	    sim.kbOpen = null;
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
+	    sim.handoff = false; sim.handoffStart = 0;   // synth→隊長 report hand-off phase
 	    runDocs.length = 0;
 	    // The office is now always spec-driven: every run works IN PLACE at the
 	    // computed layout (readers‖ → ctx → synth → whiteboard), with docs flying
@@ -432,6 +438,7 @@
 	    sim.customView = false; runDocs.length = 0;   // drop any custom-run rendering
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
+	    sim.handoff = false; sim.handoffStart = 0;
 	    selected = null;
 	    const L = chars.orch;
 	    L.bubble = '各組就位，準備開工！';
@@ -647,36 +654,55 @@
   const ambLocks = { kitchen: false, snack: false, cooler: false };
   const CHATS = ['🙂 歇會', '🥱', '💤 zzz', '🎧', '摸個魚', '🤔', '☕?'];
 
+  // The agent's "home" tile = its current computed layout slot (drag override or
+  // spec-derived), rounded to the grid so A* can route to/from it. This replaces
+  // the old fixed-seat base so ambient errands return the agent to wherever the
+  // layout engine actually placed it.
+  function homeTileOf(id) {
+    const t = targetPos(id);
+    let col = Math.round((t.x - 8) / TILE), row = Math.round((t.y - 8) / TILE);
+    col = Math.max(0, Math.min(COLS - 1, col));
+    row = Math.max(WALL, Math.min(ROWS - 1, row));
+    // If the home tile is non-walkable (furniture), nudge to a walkable neighbour
+    // so the A* return trip always has a valid goal (nothing may throw).
+    if (!walkable[row][col]) {
+      const nb = [[0,0],[1,0],[-1,0],[0,1],[0,-1]].map(([dc,dr]) => [col+dc, row+dr])
+        .find(([nc,nr]) => nc>=0 && nr>=0 && nc<COLS && nr<ROWS && walkable[nr][nc]);
+      if (nb) { col = nb[0]; row = nb[1]; }
+    }
+    return [col, row];
+  }
+
   function ambientTick(e) {
-    // The office is now spec-driven: workers hold their computed pipeline slots
-    // (not fixed seats), so seat-relative ambient trips would teleport them off
-    // their positions. Suppress the walk-away ambient; liveliness now comes from
-    // idle bob, pets, and the working-monitor glow during a run. (Hook: a future
-    // batch could add position-relative ambient that returns to targetPos.)
-    if (e.walkTarget || relayoutActive) return;
+    // The office is spec-driven, so ambient errands are now HOME-RELATIVE: an idle
+    // agent walks from its computed slot to an errand tile and A*-walks back to
+    // that same slot (homeTileOf). Only runs when nothing is being analysed.
+    if (e.walkTarget || relayoutActive) return;                 // mid-reshuffle: don't interfere
     if (sim.active || e.asleep || e.state !== 'idle' || moving(e)) return;
-    return;   // ambient walk-away disabled under the layout engine
+    if (e.id === 'orch' && sim.kbOpen) return;                  // 隊長 busy fetching the wordbook
     if (e.idleTimer == null) e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
     if (--e.idleTimer > 0) return;
     startAmbient(e);
   }
   function finishAmbient(e) {
-    e.state = 'idle'; e.bubble = ''; e.facing = 'down';
+    e.state = 'idle'; e.bubble = ''; e.facing = 'down'; e.ambKind = null;
     e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
   }
-  // walk out to a tile, do a thing for a beat, then walk back to the seat.
+  // Walk out to a tile, do a thing for a beat, then A*-walk back to the agent's
+  // home slot (its computed layout position — not a fixed seat).
   function ambientTrip(e, tile, lock, say, release) {
     e.state = 'amb_walk'; e.ambKind = 'trip'; e.bubble = '';
-    slideTo(e, e.station.approach, () => walkTo(e, tile, () => {
+    const home = homeTileOf(e.id);
+    const goHome = () => walkTo(e, home, () => {
+      if (release) ambLocks[release] = false;
+      finishAmbient(e);
+    });
+    walkTo(e, tile, () => {
+      // A run may have started while walking — bail cleanly back home.
+      if (sim.active) { if (release) ambLocks[release] = false; finishAmbient(e); return; }
       e.facing = 'up'; e.state = 'amb_do'; e.bubble = say; e.timer = AMB_DO;
-      e.onTimer = () => {
-        e.bubble = '';
-        walkTo(e, e.station.approach, () => slideTo(e, e.station.seat, () => {
-          if (release) ambLocks[release] = false;
-          finishAmbient(e);
-        }));
-      };
-    }));
+      e.onTimer = () => { e.bubble = ''; goHome(); };
+    });
   }
   function startAmbient(e) {
     const roll = Math.random();
@@ -735,11 +761,24 @@
     if (!wps.length) return;
     runDocs.push({ x0: w.x, y0: w.y - 4, color: w.role.shirt, wps, seg: 0, t: 0 });
   }
-  // The finale hop: 合成's integrated report flies to the whiteboard easel.
-  function spawnFinalDoc() {
-    const S = chars.synth;
-    runDocs.push({ x0: S.x, y0: S.y - 4, color: S.role.shirt,
-      wps: [{ x: T(WB_TILE[0]) + 8, y: T(WB_TILE[1]) + 6 }], seg: 0, t: 0 });
+  // Who produces the final report to hand to 隊長. Normally 合成; if 合成 is
+  // disabled we fall back to the last active downstream stage (裁定, else the
+  // right-most enabled reader), so the hand-off is robust to a benched synth.
+  function lastProducerId() {
+    if (!editMode.bench.synth) return 'synth';
+    if (!editMode.bench.ctx) return 'ctx';
+    const readers = STAGE1.filter(id => !editMode.bench[id]);
+    if (readers.length) return readers.slice().sort((a, b) => chars[b].x - chars[a].x)[0];
+    return 'orch';
+  }
+  // The human hand-off: the integrated report flies from its producer (合成 /
+  // fallback) to 隊長 (orch). 隊長 then walks to the whiteboard to present it —
+  // more believable than the report teleporting to the board on its own.
+  function spawnHandoffDoc(fromId) {
+    const F = chars[fromId], L = chars.orch;
+    if (!F || fromId === 'orch') return;   // producer IS 隊長 → nothing to fly
+    runDocs.push({ x0: F.x, y0: F.y - 4, color: F.role.shirt,
+      wps: [{ x: L.x, y: L.y - 6 }], seg: 0, t: 0 });
   }
 
   // In-place custom run: no walking. Each enabled worker finishes (real `done`
@@ -758,17 +797,44 @@
     }
     const enabled = ALL_WORKERS.filter(id => !editMode.bench[id]);
     const allWorkersDone = enabled.length > 0 && enabled.every(id => chars[id].state === 'done');
-    // Once all enabled workers handed off and the last doc has landed, 合成 curates.
-    if (allWorkersDone && S.state === 'idle' && !runDocs.length) {
-      S.state = 'reviewing'; S.workStart = tick; S.bubble = ASSIGNMENTS.synth.card;
-      taskState.synth = 'typing';
+    const synthOn = !editMode.bench.synth;
+    // Once all enabled workers handed off and the last doc has landed:
+    //  • synth enabled → 合成 curates, then hands the report to 隊長.
+    //  • synth disabled → skip curation; the last producer hands off directly.
+    if (allWorkersDone && !runDocs.length && !sim.handoff) {
+      if (synthOn && S.state === 'idle') {
+        S.state = 'reviewing'; S.workStart = tick; S.bubble = ASSIGNMENTS.synth.card;
+        taskState.synth = 'typing';
+      } else if (!synthOn) {
+        beginHandoff();   // no 合成 → whoever produced last hands the report to 隊長
+      }
     }
-    if (S.state === 'reviewing' && (tick - S.workStart) >= SYNTH_REVIEW) {
+    if (synthOn && S.state === 'reviewing' && (tick - S.workStart) >= SYNTH_REVIEW && !sim.handoff) {
       S.state = 'done'; S.bubble = ''; taskState.synth = 'done';
-      sim.active = false;
-      spawnFinalDoc();   // 合成 → 白板: the integrated report flies to the easel
-      if (!sim.presented) { sim.presented = true; startPresentInPlace(); }
+      beginHandoff();
     }
+    // Hand-off phase: wait for the report doc to reach 隊長, then let 隊長 present.
+    if (sim.handoff && !sim.presented) {
+      const L = chars.orch;
+      if (!runDocs.length && (tick - sim.handoffStart) >= HANDOFF_MIN) {
+        L.bubble = '';
+        sim.presented = true;
+        startPresentInPlace();
+      }
+    }
+  }
+  const HANDOFF_MIN = 26;   // min frames 隊長 holds the report before presenting
+  // Kick off the synth→隊長 report hand-off: fly the report to 隊長, who receives
+  // it (a brief "拿到報告了" beat) before walking to the whiteboard to present.
+  function beginHandoff() {
+    // Keep sim.active TRUE through the hand-off so updateCustomRun keeps ticking
+    // and can advance the phase; it flips false when 隊長 starts presenting.
+    sim.handoff = true; sim.handoffStart = tick;
+    const producer = lastProducerId();
+    spawnHandoffDoc(producer);
+    const L = chars.orch;
+    L.bubble = '拿到報告了';
+    if (producer !== 'orch' && chars[producer]) chars[producer].bubble = '報告交給隊長';
   }
 
   // Finale: 隊長 walks over to the whiteboard, presents (triggering the report
@@ -790,6 +856,9 @@
   }
   function startPresentInPlace() {
     const L = chars.orch;
+    sim.active = false;   // hand-off complete → run logic ends; the present finale begins
+    // The hand-off is done; clear the producer's "交給隊長" bubble.
+    Object.values(chars).forEach(e => { if (e.id !== 'orch' && e.bubble === '報告交給隊長') e.bubble = ''; });
     // Walk 隊長 to the whiteboard easel, face it, then present.
     L.state = 'walking_to_employee'; L.bubble = '';
     L.walkTarget = null;
@@ -999,18 +1068,25 @@
     rect(x+1,y+7,7,5,'#B07A45'); rect(x,y+8,9,1,'#8A5E32'); rect(x+1,y+11,7,1,WOODLO);
     rect(x+3,y+2,2,6,'#4D7C0F'); rect(x,y+3,4,3,'#65A30D'); rect(x+5,y+2,4,3,'#84CC16'); rect(x+2,y,4,3,'#A3E635');
   }
-  // A small rest-area mat (bottom-left) so benched/disabled agents visibly nap
-  // on a lounge rather than bare floor. Drawn only when someone is benched.
-  function drawRestLounge(){
-    const anyBenched = ALL_WORKERS.concat('synth').some(id => editMode.bench[id]);
-    if (!anyBenched) return;
-    const x = T(1)+2, y = T(9)+4, w = T(4)-4, h = T(3)-6;
-    rect(x, y, w, h, rgba(SOFA, 0.5)); rect(x, y, w, 1, rgba(SOFAHI, 0.6));
-    c.save(); c.strokeStyle = rgba(RUGE, 0.5); c.lineWidth = SCALE;
-    c.strokeRect(px(x+1), px(y+1), px(w-2), px(h-2)); c.restore();
+  // Two massage chairs (按摩椅) in the bottom-right dining corner — this is the
+  // rest area now (the old bottom-left 休息區 is gone). Benched/disabled agents
+  // walk here and nap in a chair (setAsleep/drawAsleep 💤). Drawn as permanent
+  // dining-corner furniture so the corner always reads as a lounge.
+  function drawMassageChair(col, row){
+    const x = T(col)+2, y = T(row)+1;
+    // recliner base + padded back/seat, dark leather with a teal head cushion.
+    rect(x, y+3, 12, 9, '#3B3A42'); rect(x, y+3, 12, 1, '#55535E');   // back
+    rect(x+1, y+9, 10, 3, '#2C2B32');                                 // seat lip
+    rect(x+2, y+1, 8, 3, RUG); rect(x+2, y+1, 8, 1, shade(RUG,1.15)); // head cushion
+    rect(x-1, y+5, 2, 5, '#2C2B32'); rect(x+11, y+5, 2, 5, '#2C2B32');// armrests
+    dot(x+9, y+5, ACCENT);                                            // control light
+  }
+  function drawMassageChairs(){
+    MASSAGE_CHAIRS.forEach(([col, row]) => drawMassageChair(col, row));
+    // Small "休息區" label above the chairs so the corner reads as the rest area.
     c.save(); c.fillStyle = rgba('#1C1917', 0.35);
     c.font = `${9}px system-ui, sans-serif`; c.textAlign = 'left'; c.textBaseline = 'top';
-    c.fillText('休息區', px(x+2), px(y+1)); c.restore();
+    c.fillText('休息區', px(T(MASSAGE_CHAIRS[0][0])+2), px(T(MASSAGE_CHAIRS[0][1])-3)); c.restore();
   }
   function drawSofa(){ const sx=T(14),sy=T(9)+1,sw=T(3);
     rect(sx,sy,sw,4,SOFA); rect(sx,sy,sw,1,SOFAHI); rect(sx,sy+4,sw,3,SOFAHI);
@@ -1020,16 +1096,25 @@
   // centred on the table centre, with the members seated around it. Signals
   // collaboration (vs. separate side-by-side desks = parallel).
   function drawSharedTable(tbl){
-    const cx = tbl.cx * TILE + 8, cy = tbl.cy * TILE + 8;
-    const w = 26, h = 12, x = cx - w/2, y = cy - h/2;
+    // The table + monitors must track the members' ACTUAL rendered positions so a
+    // dragged pod stays co-located (the old tbl.cx/cy computed-band centre went
+    // stale the moment the user dragged the pod, stranding the table/monitors).
+    // Centre the slab on the live centroid of the pod members and size it to span
+    // them (with padding) so it always sits under the agents wherever they are.
+    const live = tbl.members.map(id => chars[id]).filter(Boolean);
+    if (!live.length) return;
+    let sx = 0, sy = 0, minX = Infinity, maxX = -Infinity;
+    live.forEach(e => { sx += e.x; sy += e.y; minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x); });
+    const cx = sx / live.length, cy = sy / live.length;
+    const w = Math.max(26, (maxX - minX) + 16), h = 12, x = cx - w/2, y = cy - h/2;
     rect(x, y, w, h, WOOD); rect(x, y, w, 1, WOODHI); rect(x, y+h-1, w, 1, WOODLO);
     rect(x+2, y+2, w-4, h-4, shade(WOOD, 1.08));            // tabletop inset
     rect(cx-1, cy-1, 3, 4, '#FFFFFF');                      // shared papers in the middle
-    // each member's small monitor on the slab, reflecting their live mode.
-    tbl.members.forEach(id => {
-      const e = chars[id];
+    // each member's small monitor on the slab, anchored above the member's own
+    // live position (so a monitor sits with its agent, not floating on a stale row).
+    live.forEach(e => {
       const mode = vmode(e);
-      const mx = e.x - 4, my = y + 2;
+      const mx = e.x - 4, my = e.y - 8;
       rect(mx-1, my-1, 6, 6, '#34302A'); rect(mx, my, 4, 4, MON);
       drawScreen(mx+0.5, my+0.5, 3, 3, mode, e.role.shirt);
     });
@@ -1322,7 +1407,11 @@
     const sprites = [];
     // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
     computed.tables.forEach(tbl => {
-      sprites.push({ baseY: tbl.cy * TILE + TILE, draw: () => drawSharedTable(tbl) });
+      // baseY from the members' live centroid so the y-sort matches where the
+      // table is actually drawn (tracks a dragged pod, not the stale computed row).
+      const mem = tbl.members.map(id => chars[id]).filter(Boolean);
+      const cy = mem.length ? mem.reduce((s, e) => s + e.y, 0) / mem.length : tbl.cy * TILE + 8;
+      sprites.push({ baseY: cy + 6, draw: () => drawSharedTable(tbl) });
     });
     // Pod members share ONE big table (drawn above) instead of individual desks,
     // so their monitors sit on the shared slab and it reads as "working together".
@@ -1334,7 +1423,7 @@
       const [, dy] = deskOriginFor(s);
       sprites.push({ baseY:dy+TILE, draw:()=>drawDeskSprite(s) });
     });
-    sprites.push({ baseY:T(9),     draw:drawRestLounge });   // bottom-left rest mat (when benched)
+    sprites.push({ baseY:T(10)+12, draw:drawMassageChairs }); // dining-corner rest chairs
     sprites.push({ baseY:T(10),    draw:drawSofa });
     sprites.push({ baseY:T(11),    draw:drawTable });
     sprites.push({ baseY:T(9),     draw:drawCoffeeCounter });   // dining corner
@@ -1912,7 +2001,7 @@
   // Advance layout walks (called each frame from update()). Lerp toward each
   // agent's walkTarget; on arrival, benched agents fall asleep. Returns when all
   // targets are reached (relayoutActive flips false).
-  const LAYOUT_SPEED = 1.4;   // logical px/frame for the reshuffle walk
+  const LAYOUT_SPEED = 1.9;   // logical px/frame for the reshuffle walk (~+36% snappier)
   function stepLayout() {
     if (!relayoutActive) return;
     let anyMoving = false;
@@ -1979,6 +2068,7 @@
     // Edit mode is mutually exclusive with a run.
     sim.active = false; sim.recalling = false; sim.pendingStart = false;
     sim.customView = false; runDocs.length = 0;
+    sim.handoff = false; sim.handoffStart = 0;
     editMode.on = true; editMode.dragId = null;
     selected = null;
     // Freeze everyone: clear paths/timers so the sim never fights the drag.
@@ -2175,6 +2265,7 @@
       meter.mode = 'estimate';   // back to the live estimate for tuning
       sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
       sim.leaderQueue = []; sim.leaderBusy = false;
+      sim.handoff = false; sim.handoffStart = 0;
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;
       // Clear per-agent run state, then snap everyone back to their spec-derived
       // layout slot (computeLayout) — the office rests in its pipeline shape.
