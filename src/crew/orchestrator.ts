@@ -817,11 +817,19 @@ async function curate(
   meter?: UsageMeter
 ): Promise<void> {
   if (!result.jargon.length && !result.summary.key_points.length && !result.comment_digest.camps.length) return
+  // Build the prompt first so we can meter the moment the agent is actually
+  // invoked. The synthesizer legitimately runs long (~40s+) but is called with a
+  // tight budget (timeoutMs 25s, attempts 1), so the call frequently times out
+  // and throws — jumping straight to the catch. Metering the prompt up-front (and
+  // the response below, when we get it) ensures synth's tokens are counted
+  // whenever the call happens, consistent with the other agents, instead of the
+  // `finally` emitting a misleading synth:0 for a call that really ran.
+  const prompt = buildCuratorPrompt(item, result)
   emit({ event: 'status', agent: 'synth', state: 'running', label: bz('整合中…') })
+  meter?.add('synth', prompt.length, 0)
   try {
-    const prompt = buildCuratorPrompt(item, result)
     const text = await callMfAgent(env, env.AGENT_SYNTHESIZER, prompt, { timeoutMs: 25_000, attempts: 1 })
-    meter?.add('synth', prompt.length, text.length)
+    meter?.add('synth', 0, text.length)
     const d = parseLoose<CuratorDecision>(text)
     if (d) applyCuration(result, d)
     emit({ event: 'status', agent: 'synth', state: 'done', label: bz('整合完成!') })
