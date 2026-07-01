@@ -2077,11 +2077,6 @@
     // under the characters (subtler than edit mode) so teaming stays readable in
     // the idle office as well as during a run.
     if (!editMode.on && layoutView()) drawRunPods();
-    // Subtle pipeline flow connectors (隊長→readers→合成→隊長→白板). Drawn UNDER the
-    // sprites so they never obscure bodies/labels; a segment gently lights up while
-    // a document actually travels it, and stays dim otherwise.
-    if (!editMode.on && customRunView()) drawFlowConnectors();
-
     const sprites = [];
     // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
     computed.tables.forEach(tbl => {
@@ -2123,119 +2118,6 @@
     if (customRunView()) drawRunDocs();    // documents are now carried by people; runDocs stays empty (kept as a no-op)
     if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
     drawTokenMeter();                      // live estimate / actual token readout
-  }
-
-  // ─── Pipeline flow connectors ───────────────────────────────────────────────
-  // Thin, low-alpha lines tracing the document pipeline so the workflow reads at a
-  // glance: 隊長→each active reader (opening delivery), each reader→合成 (drafts),
-  // 合成→隊長 (final report), 隊長→白板 (present). A segment is DIM by default and
-  // gently lights up (a brighter stroke + a flowing dash) only while a document is
-  // actually travelling it. Wrapped so it can never throw into the render loop; a
-  // no-op under reduced-motion (customRunView is false there).
-  function segAnchor(id) {
-    // A stationary anchor for an agent — its computed home slot, so lines don't
-    // jitter as carriers walk. Falls back to the live position if unplaced.
-    const t = targetPos(id);
-    return t ? { x: t.x, y: t.y } : { x: chars[id].x, y: chars[id].y };
-  }
-  // Draw one connector segment. lit → brighter + animated flowing dash.
-  function flowSeg(a, b, color, lit) {
-    if (!a || !b) return;
-    c.save();
-    c.lineCap = 'round';
-    // Dim base line always present (the static pipeline skeleton).
-    c.strokeStyle = rgba(color, lit ? 0.12 : 0.08);
-    c.lineWidth = SCALE * 0.8;
-    c.setLineDash([]);
-    c.beginPath(); c.moveTo(px(a.x), px(a.y)); c.lineTo(px(b.x), px(b.y)); c.stroke();
-    if (lit) {
-      // Brighter flowing dash travelling a→b to show the doc in motion.
-      c.strokeStyle = rgba(color, 0.5);
-      c.lineWidth = SCALE;
-      const dash = SCALE * 3, gap = SCALE * 4;
-      c.setLineDash([dash, gap]);
-      c.lineDashOffset = reducedMotion ? 0 : -((tick * 0.9) % (dash + gap));
-      c.beginPath(); c.moveTo(px(a.x), px(a.y)); c.lineTo(px(b.x), px(b.y)); c.stroke();
-      c.setLineDash([]);
-    }
-    c.restore();
-  }
-  function drawFlowConnectors() {
-    try {
-      const activeReader = id => !editMode.bench[id] && !isStandby(id);
-      const collectorId = !editMode.bench.synth ? 'synth' : lastProducerId();
-      const orchA = segAnchor('orch');
-      const collA = (collectorId && chars[collectorId]) ? segAnchor(collectorId) : null;
-      // Representative anchor per reader group (first member of each pod), so a
-      // grouped pod shows one clean spoke instead of overlapping lines.
-      const reps = [];
-      const claimed = new Set();
-      computePods().forEach(pod => {
-        const members = podOrder(pod).filter(activeReader);
-        if (!members.length) return;
-        reps.push(members[0]);
-        members.forEach(id => claimed.add(id));
-      });
-      STAGE1.forEach(id => { if (activeReader(id) && !claimed.has(id)) { reps.push(id); claimed.add(id); } });
-      const ctxActive = activeReader('ctx');
-
-      // 隊長 → reader spokes (delivery in): lit for the reader 隊長 is delivering to.
-      reps.forEach(id => {
-        const lit = sim.delivering && sim.deliverTarget != null && claimedGroupHas(id, sim.deliverTarget);
-        flowSeg(orchA, segAnchor(id), '#FF6600', lit);
-      });
-      if (ctxActive) {
-        const litCtx = sim.delivering && sim.deliverTarget === 'ctx';
-        flowSeg(orchA, segAnchor('ctx'), '#FF6600', litCtx);
-      }
-
-      // reader → 合成 (drafts): lit while a member of that group is carrying a draft
-      // to the collector (state delivering/reporting, and it's not the collector).
-      if (collA) {
-        reps.forEach(id => {
-          if (id === collectorId) return;
-          const lit = groupCarrying(id, collectorId);
-          flowSeg(segAnchor(id), collA, '#3B82F6', lit);
-        });
-        // ctx reports direct to 隊長 in the default pipeline, but in the in-place
-        // custom run it also routes through the collector — draw its draft leg too.
-        if (ctxActive && collectorId !== 'ctx') {
-          const litC = carrierMovingTo('ctx');
-          flowSeg(segAnchor('ctx'), collA, '#3B82F6', litC);
-        }
-      }
-
-      // 合成 → 隊長 (final report): lit during the report hand-off phase.
-      if (collA && collectorId !== 'orch') {
-        flowSeg(collA, orchA, '#EC4899', !!sim.handoff);
-      }
-
-      // 隊長 → 白板 (present): lit while 隊長 walks to / stands at the board.
-      const boardA = centreOf(WB_APPROACH[0], WB_APPROACH[1]);
-      const L = chars.orch;
-      const presenting = L.state === 'walking_to_employee' || L.state === 'presenting' || sim.boardActive;
-      flowSeg(orchA, boardA, '#8B5CF6', presenting);
-    } catch (_) { /* never break the render loop */ }
-  }
-  // Is `deliverTarget` in the same reader group as representative `repId`? (Used so
-  // lighting a pod's spoke works whether we track the rep or an inner member.)
-  function claimedGroupHas(repId, deliverTarget) {
-    if (repId === deliverTarget) return true;
-    const pod = computePods().find(pod => pod.includes(repId));
-    return !!(pod && pod.includes(deliverTarget));
-  }
-  // Is any member of representative `repId`'s group currently carrying a draft to
-  // the collector (walking/handing over, and not the collector itself)?
-  function groupCarrying(repId, collectorId) {
-    const pod = computePods().find(pod => pod.includes(repId)) || [repId];
-    return pod.some(id => id !== collectorId && carrierMovingTo(id));
-  }
-  // A carrier `id` is mid-delivery when it's walking a draft over ('delivering')
-  // or standing at the hand-off beat ('reporting'). Both light the draft leg.
-  function carrierMovingTo(id) {
-    const e = chars[id];
-    if (!e) return false;
-    return e.state === 'delivering' || e.state === 'reporting';
   }
 
   // ─── Custom-layout run overlays ─────────────────────────────────────────────
