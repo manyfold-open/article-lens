@@ -108,6 +108,11 @@ export interface GraphConfig {
   // v1 legacy skip map (kept working; superseded by `nodes` when both present).
   enabled?: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx', boolean>>
   groups?: { members: string[]; mode: 'parallel' | 'relay' }[]
+  // Conditional "escalate" mode (省錢漸進): when true, run a cheap phase first
+  // (only sum + ctx verdict). If the verdict says the item is worth reading,
+  // escalate ("go") and run jargon + comments + synth; otherwise stop and skip
+  // jargon + comments. Falsy/absent → today's full flow, byte-for-byte.
+  escalate?: boolean
 }
 
 // ── SSE event types (§7) ──────────────────────────────────────────
@@ -125,7 +130,11 @@ export interface SSESection { event: 'section'; agent: AgentName; data: unknown 
 // final one (with `total`) may be sent once at the end. `tokens` is the delta,
 // `total`/`byAgent`-derived total is the accumulated run cost.
 export interface SSEUsage { event: 'usage'; agent?: string; tokens: number; total?: number }
-export type SSEEvent = SSEPlan | SSEStatus | SSEStep | SSEResult | SSEError | SSESection | SSEUsage
+// Emitted in escalate mode right after the cheap-phase verdict is read, so the
+// office can react: 'go' → jargon+comments+synth still run; 'stop' → they're
+// skipped. `reason` is a short human-readable note (optional).
+export interface SSEEscalate { event: 'escalate'; decision: 'go' | 'stop'; reason?: string }
+export type SSEEvent = SSEPlan | SSEStatus | SSEStep | SSEResult | SSEError | SSESection | SSEUsage | SSEEscalate
 
 // ── HN Algolia types ──────────────────────────────────────────────
 export interface HNComment {
