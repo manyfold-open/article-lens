@@ -854,7 +854,9 @@
     rect(0, wy-1, LOGICAL_W, 1, BASEB);
     rect(0, wy, LOGICAL_W, 1, rgba('#000000',0.07));
     drawBookshelf(1,5); drawWindow(6,4); drawLangSign(); drawPoster(11); drawClock(13); drawKitchen(15,4);
-    STATIONS.forEach(drawChair);
+    // Chairs are no longer drawn at fixed seats — each agent carries its own
+    // workstation (drawDeskSprite travels with the worker), so fixed chairs at the
+    // old STATIONS seats were orphaned clutter once the layout became spec-driven.
   }
   // Wall sign that switches the language (雙語 / 中 / EN), next to the HN LENS sign.
   function drawLangSign() {
