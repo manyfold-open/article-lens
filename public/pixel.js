@@ -282,10 +282,21 @@
   // reshuffling, or mid-run. layoutView() is the master switch the renderer uses.
   // (customRunView stays for the run finale's doc/pod extras.)
   function layoutView() { return true; }
-  // Bench strip: a labelled lane along the bottom row. Workers dropped here are
-  // disabled. Uses logical coords (full width, bottom tile row).
-  const BENCH = { x: 0, y: LOGICAL_H - TILE, w: LOGICAL_W, h: TILE };
-  function inBench(x, y) { return y >= BENCH.y && x >= BENCH.x && x <= BENCH.x + BENCH.w; }
+  // Disable drop-zone: a small rectangle around the two 按摩椅 (massage chairs) in
+  // the bottom-right dining corner. A worker dropped on/near here is disabled and
+  // naps in a chair; dropped anywhere else it's just placed (enabled). Chairs sit
+  // at MASSAGE_CHAIRS tiles [12,10]/[13,10]; the zone spans those two tiles plus a
+  // little margin so an imprecise drop still lands. Logical (px) coords.
+  const REST_ZONE = {
+    x: T(MASSAGE_CHAIRS[0][0]) - 6,
+    y: T(MASSAGE_CHAIRS[0][1]) - 8,
+    w: (MASSAGE_CHAIRS[1][0] - MASSAGE_CHAIRS[0][0] + 1) * TILE + 12,
+    h: TILE + 14,
+  };
+  function inRestZone(x, y) {
+    return x >= REST_ZONE.x && x <= REST_ZONE.x + REST_ZONE.w
+        && y >= REST_ZONE.y && y <= REST_ZONE.y + REST_ZONE.h;
+  }
   const pets = {
     pika: { id:'pika', kind:'pika', x:T(18)+8, y:T(10)+10, tile:[18,10], path:null, onArrive:null, facing:'left', state:'idle', timer:80, onTimer:null, bubble:'', card:'' },
     dog:  { id:'dog',  kind:'dog',  x:T(17)+8, y:T(10)+8,  tile:[17,10], path:null, onArrive:null, facing:'left', state:'idle', timer:120, onTimer:null, bubble:'', card:'' },
@@ -2110,17 +2121,22 @@
     }
   }
 
-  // Bench strip + translucent pod rects, drawn before characters so they read
-  // clearly underneath them.
+  // Rest-corner drop-zone highlight + translucent pod rects, drawn before
+  // characters so they read clearly underneath them.
   function drawEditUnderlay() {
-    // Bench / 休息區 strip along the bottom.
-    rect(BENCH.x, BENCH.y, BENCH.w, BENCH.h, rgba('#000000', 0.10));
-    rect(BENCH.x, BENCH.y, BENCH.w, 1, rgba('#000000', 0.18));
+    // Subtle highlight around the two massage chairs — the "拖到這裡 = 停用 / 休息區"
+    // drop-zone. A soft wash + dashed outline so it reads as a target, and a
+    // hint label just above the chairs.
     c.save();
-    c.fillStyle = rgba('#1C1917', 0.45);
-    c.font = `${11}px system-ui, sans-serif`;
-    c.textAlign = 'left'; c.textBaseline = 'middle';
-    c.fillText('休息區 / bench — 拖進來休息', px(BENCH.x + 3), px(BENCH.y + BENCH.h / 2));
+    rect(REST_ZONE.x, REST_ZONE.y, REST_ZONE.w, REST_ZONE.h, rgba('#F59E0B', 0.14));
+    c.strokeStyle = rgba('#B45309', 0.5); c.lineWidth = SCALE;
+    if (c.setLineDash) c.setLineDash([3 * SCALE, 3 * SCALE]);
+    c.strokeRect(px(REST_ZONE.x), px(REST_ZONE.y), px(REST_ZONE.w), px(REST_ZONE.h));
+    if (c.setLineDash) c.setLineDash([]);
+    c.fillStyle = rgba('#1C1917', 0.55);
+    c.font = `${9}px system-ui, sans-serif`;
+    c.textAlign = 'center'; c.textBaseline = 'bottom';
+    c.fillText('休息區 · 拖到這裡=停用', px(REST_ZONE.x + REST_ZONE.w / 2), px(REST_ZONE.y - 1));
     c.restore();
     // Pod rects (only multi-member pods get a visible cluster box).
     computePods().forEach(pod => {
@@ -2956,11 +2972,13 @@
     if (!editMode.on || !editMode.dragId) return;
     const id = editMode.dragId;
     const e = chars[id];
-    // Only the 4 spec-node workers get disabled by the bench. Infra agents
-    // (orch/synth) can be dropped anywhere — including over the bench lane —
-    // without being "benched off"; they have no enable/disable.
+    // Only the 4 spec-node workers get disabled. Dropping one on/near the
+    // massage-chair rest corner disables it (naps there); dropping it anywhere
+    // else places it (enabled). Infra agents (orch/synth) can be dropped anywhere
+    // — including over the rest corner — without being disabled; they have no
+    // enable/disable.
     if (!INFRA.includes(id)) {
-      if (inBench(e.x, e.y)) editMode.bench[id] = true;
+      if (inRestZone(e.x, e.y)) editMode.bench[id] = true;
       else delete editMode.bench[id];
     }
     editMode.dragId = null;
