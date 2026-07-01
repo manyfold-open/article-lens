@@ -204,6 +204,7 @@
     badgeDragStart: null,         // {x,y} pointer-down pos, for the click-vs-drag threshold
     bench: Object.create(null),   // id → true when disabled (benched)
     podModes: Object.create(null),// "a,b,c" (sorted) → 'parallel' | 'relay'
+    groups: [],                   // fixed multi-agent pods captured when leaving edit mode
     layout: Object.create(null),  // id → {x,y} custom positions (config source of truth)
     effort: Object.create(null),  // id → 'low' | 'med' | 'high' (default 'med')
     replicas: Object.create(null),// id → 2 | 3 (default 1; only stored when >1)
@@ -738,7 +739,7 @@
 	    const targets = [];
 	    const claimed = new Set();
 	    // One stop per reader pod (first in run order), so a pod is kicked off once.
-	    computePods().forEach(pod => {
+	    workflowPods().forEach(pod => {
 	      const members = podOrder(pod).filter(activeReader);
 	      if (!members.length) return;
 	      targets.push(members[0]);
@@ -1153,7 +1154,7 @@
   // Read once at run start so the chain stays stable for the whole run.
   function relayChainsSnapshot() {
     const chains = [];
-    computePods().forEach(pod => {
+    workflowPods().forEach(pod => {
       if (pod.length < 2) return;                       // singletons: not a relay line
       if (podModeOf(pod) !== 'relay') return;           // parallel pods: unchanged
       const chain = podOrder(pod).filter(id => !editMode.bench[id]);
@@ -2125,7 +2126,7 @@
   // For relay pods the members are numbered 1→2→… in run order, and the
   // currently-active member (working) gets a brighter ring.
   function drawRunPods() {
-    computePods().forEach(pod => {
+    workflowPods().forEach(pod => {
       if (pod.length < 2) return;
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       pod.forEach(id => { const e = posOf(id);   // group box tracks the grouping coords (layout), not the live/wandering sprite — otherwise it stretches across the room
@@ -2490,6 +2491,32 @@
     }
     return pods;
   }
+  function normalizePodMembers(members) {
+    const seen = new Set();
+    return (Array.isArray(members) ? members : [])
+      .filter(id => STAGE1.includes(id) && !editMode.bench[id] && !seen.has(id) && seen.add(id));
+  }
+  function capturePods() {
+    editMode.groups = computePods()
+      .map(pod => normalizePodMembers(pod))
+      .filter(pod => pod.length >= 2)
+      .map(pod => ({ members: podOrder(pod), mode: podModeOf(pod) }));
+  }
+  function workflowPods() {
+    if (editMode.on || !editMode.groups.length) return computePods();
+    const claimed = new Set();
+    const pods = [];
+    editMode.groups.forEach(group => {
+      const members = normalizePodMembers(group.members);
+      if (members.length < 2 || members.some(id => claimed.has(id))) return;
+      members.forEach(id => claimed.add(id));
+      pods.push(members);
+    });
+    STAGE1.forEach(id => {
+      if (!editMode.bench[id] && !claimed.has(id)) pods.push([id]);
+    });
+    return pods;
+  }
   function podModeOf(ids) { return editMode.podModes[podKey(ids)] === 'relay' ? 'relay' : 'parallel'; }
   // Relay runs in listed order — order members left-to-right (then top-to-bottom).
   function podOrder(ids) {
@@ -2519,7 +2546,7 @@
     nodes.synth = { enabled: synthEnabled };
 
     // Pods (legacy groups) — kept working; only emitted when pods exist.
-    const pods = computePods();
+    const pods = workflowPods();
     const groups = [];
     for (const pod of pods) {
       const mode = podModeOf(pod);
@@ -2594,6 +2621,7 @@
     // clean default room (workers back at their seats), then apply the spec.
     editMode.layout = Object.create(null);
     editMode.podModes = Object.create(null);
+    editMode.groups = [];
     editMode.bench = Object.create(null);
     editMode.effort = Object.create(null);
     editMode.replicas = Object.create(null);
@@ -2686,7 +2714,7 @@
 
       // Group the enabled readers by pod: parallel members joined by ∥, relay
       // members joined by → in run order. Ungrouped readers run in parallel (∥).
-      const pods = computePods().filter(pod => pod.some(id => !editMode.bench[id]));
+      const pods = workflowPods().filter(pod => pod.some(id => !editMode.bench[id]));
       const podStrs = [];
       const grouped = new Set();
       for (const pod of pods) {
@@ -2727,7 +2755,7 @@
     // Carry each pod's collaboration mode so the layout can arrange a relay pod
     // as a left→right conveyor line (ordered, separate desks) instead of the
     // shared table a parallel pod uses.
-    const pods = computePods();
+    const pods = workflowPods();
     return { nodes, pods, podModes: pods.map(podModeOf) };
   }
 
@@ -2934,7 +2962,11 @@
       for (const id of EFFORT_NODES) if (effortOf(id) !== 'med') effort[id] = effortOf(id);
       const replicas = {};
       for (const id of REPLICA_NODES) if (replicasOf(id) > 1) replicas[id] = replicasOf(id);
-      const data = { v: 2, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes, effort, replicas };
+      const groups = (editMode.groups || []).map(g => ({
+        members: normalizePodMembers(g.members),
+        mode: g.mode === 'relay' ? 'relay' : 'parallel',
+      })).filter(g => g.members.length >= 2);
+      const data = { v: 2, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes, groups, effort, replicas };
       localStorage.setItem(GRAPH_LS_KEY, JSON.stringify(data));
     } catch (_) { /* storage may be unavailable */ }
   }
@@ -2947,6 +2979,16 @@
     editMode.podModes = Object.create(null);
     if (data.podModes && typeof data.podModes === 'object') {
       for (const k in data.podModes) if (data.podModes[k] === 'relay') editMode.podModes[k] = 'relay';
+    }
+    editMode.groups = [];
+    if (Array.isArray(data.groups)) {
+      editMode.groups = data.groups.map(g => ({
+        members: normalizePodMembers(g.members),
+        mode: g?.mode === 'relay' ? 'relay' : 'parallel',
+      })).filter(g => g.members.length >= 2);
+      editMode.groups.forEach(g => {
+        if (g.mode === 'relay') editMode.podModes[podKey(g.members)] = 'relay';
+      });
     }
     editMode.effort = Object.create(null);
     if (data.effort && typeof data.effort === 'object') {
@@ -3010,6 +3052,7 @@
     if (!editMode.on) return;
     editMode.on = false; editMode.dragId = null;
     editMode.badgeDrag = null; editMode.badgeDragStart = null; editMode._badgeLast = null;
+    capturePods();
     persistGraph();
     Object.values(chars).forEach(e => { e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND); });
     // Re-layout on exit: bench/effort changes reflow undragged agents into the
