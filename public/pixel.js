@@ -197,6 +197,8 @@
   const editMode = {
     on: false,
     dragId: null,                 // id currently being dragged
+    dragGroup: [],                // other pod members translated with a group drag
+    dragLast: null,               // dragged agent's last clamped pos (for delta calc)
     bench: Object.create(null),   // id → true when disabled (benched)
     podModes: Object.create(null),// "a,b,c" (sorted) → 'parallel' | 'relay'
     layout: Object.create(null),  // id → {x,y} custom positions (config source of truth)
@@ -543,6 +545,7 @@
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
 	    sim.handoff = false; sim.handoffStart = 0;   // synth→隊長 report hand-off phase
+	    sim.delivering = false; sim.delivered = false; sim.deliverTarget = null;  // opening task-delivery tour phase
 	    sim.collecting = false;                      // collector integration phase not yet begun
 	    // Relay pods: each becomes a conveyor line — the doc is carried person→
 	    // person in podOrder, and the LAST member delivers the combined doc to the
@@ -655,13 +658,19 @@
 	    computed = computeLayout(specSnapshot());   // ensure targets reflect the current spec
 	    sim.customView = true;   // keep traveling desks/pods/docs rendered through the finale
 	    const L = chars.orch;
-	    // 隊長 WALKS from its current spot to the overseer slot, then faces the room
-	    // and shows a directing bubble (no teleport).
+	    sim.delivering = false; sim.delivered = false;
+	    // 隊長 WALKS from its current spot to the overseer slot, then hands the task
+	    // out to the active readers (a brisk opening-delivery tour) before settling
+	    // as overseer. The delivery is purely the leader's route — readers already
+	    // start working on arrival at their slots (below), so the leader never gates
+	    // them behind reality (SSE running arriving first just means the hand-off is
+	    // a quick catch-up gesture). No teleport.
 	    { const t = targetPos('orch');
 	      L.bubble = '各組就位，開工！';
 	      walkIntoRun(L, t.x, t.y, () => {
 	        L.state = 'idle'; L.facing = 'down';
-	        L.timer = 90; L.onTimer = () => { if (sim.active) L.bubble = ''; };
+	        L.timer = 90; L.onTimer = () => { if (sim.active && !sim.delivering) L.bubble = ''; };
+	        beginTaskDelivery();
 	      }); }
 	    // Rest-corner slots for anyone sleeping this run (benched OR escalate-standby),
 	    // assigned in a stable order so nobody stacks on the same chair (each gets a
@@ -710,6 +719,93 @@
 	        walkIntoRun(S, t.x, t.y, () => { S.state = 'idle'; S.facing = 'down'; });
 	      }
 	    }
+	  }
+
+	  // ─── Opening delivery: 隊長 hands the task to the active readers ─────────────
+	  // Bubbles 隊長 says as it hands over the task (📋) at the start of a run.
+	  const DELIVER_ORDERS = ['這篇交給你', '開始囉', '麻煩你了', '就靠你了'];
+	  const DELIVER_HOLD = 22;   // frames 隊長 pauses at each reader for the hand-off beat
+
+	  // Which agents 隊長 delivers to, once per group: the FIRST member (podOrder) of
+	  // each active reader pod, plus every active solo reader, plus ctx when active.
+	  // Skips benched + escalate-standby workers. Robust to 1–3 readers, relay pods
+	  // (delivers to the first member), quick-scan/escalate (only the active ones).
+	  function deliveryTargets() {
+	    const activeReader = id => !editMode.bench[id] && !isStandby(id);
+	    const targets = [];
+	    const claimed = new Set();
+	    // One stop per reader pod (first in run order), so a pod is kicked off once.
+	    computePods().forEach(pod => {
+	      const members = podOrder(pod).filter(activeReader);
+	      if (!members.length) return;
+	      targets.push(members[0]);
+	      members.forEach(id => claimed.add(id));
+	    });
+	    // Any active reader not captured by a pod (defensive; computePods already
+	    // returns singletons as length-1 pods, so this is a belt-and-braces sweep).
+	    STAGE1.forEach(id => { if (activeReader(id) && !claimed.has(id)) targets.push(id); });
+	    // ctx is a solo pipeline node — give it its task too when active.
+	    if (activeReader('ctx')) targets.push('ctx');
+	    // Only real, present entities that aren't the leader itself.
+	    return targets.filter(id => id !== 'orch' && chars[id]);
+	  }
+
+	  // Kick off the brisk hand-off tour: 隊長 carries a 📋 to each delivery target,
+	  // pauses for a beat with a bubble (which reads as "kicking off" that reader),
+	  // then returns to its overseer spot. This NEVER changes reader work state —
+	  // readers already start on arrival / SSE — so it can't hold anyone behind
+	  // reality, and it can't soft-lock (each step is guarded + always converges).
+	  function beginTaskDelivery() {
+	    if (!sim.active || sim.handoff || sim.presented) return;
+	    if (sim.delivered) return;
+	    const targets = deliveryTargets();
+	    sim.delivering = true;
+	    deliverTaskStep(targets, 0);
+	  }
+	  // Return 隊長 to its overseer slot and settle it as the room's overseer.
+	  function endTaskDelivery() {
+	    const L = chars.orch;
+	    sim.delivering = false; sim.delivered = true; sim.deliverTarget = null;
+	    L.carryDoc = false;
+	    if (!sim.active || sim.handoff || sim.presented) return;   // finale owns L now
+	    const t = targetPos('orch');
+	    L.state = 'delivering';
+	    walkXY(L, t.x, t.y, () => {
+	      // Don't stomp the finale if it began while we were walking back.
+	      if (sim.handoff || sim.presented) return;
+	      L.state = 'idle'; L.facing = 'down'; L.bubble = '各組開工，我盯著';
+	      L.timer = 70; L.onTimer = () => { if (sim.active && !sim.delivering) L.bubble = ''; };
+	    }, 'task');
+	  }
+	  function deliverTaskStep(targets, i) {
+	    const L = chars.orch;
+	    // Abort cleanly if the run moved on (finished fast / entered the finale) — the
+	    // finale (beginHandoff/startPresentInPlace) takes over 隊長 from here.
+	    if (!sim.active || sim.handoff || sim.presented) { sim.delivering = false; L.carryDoc = false; return; }
+	    if (i >= targets.length) { endTaskDelivery(); return; }
+	    const w = chars[targets[i]];
+	    // Target vanished / benched mid-tour (e.g. spec churn): skip to the next.
+	    if (!w || editMode.bench[targets[i]] || isStandby(targets[i])) { deliverTaskStep(targets, i + 1); return; }
+	    sim.deliverTarget = targets[i];   // lights the 隊長→this-reader flow connector
+	    L.carryDoc = true;   // 隊長 carries the 📋 task on its route
+	    L.bubble = '';
+	    const spot = handoffSpotFor(w);
+	    L.state = 'delivering';
+	    walkXY(L, spot.x, spot.y, () => {
+	      if (!sim.active || sim.handoff || sim.presented) { sim.delivering = false; L.carryDoc = false; sim.deliverTarget = null; return; }
+	      faceToward(L, w.tile);
+	      L.state = 'assigning';
+	      L.bubble = DELIVER_ORDERS[i % DELIVER_ORDERS.length];
+	      // A brief acknowledging bubble on the reader if it isn't mid-talking.
+	      if (w.state === 'working' && !w.bubble) w.bubble = '收到！';
+	      L.timer = DELIVER_HOLD;
+	      L.onTimer = () => {
+	        L.bubble = '';
+	        if (w.bubble === '收到！') w.bubble = '';
+	        sim.deliverTarget = null;
+	        deliverTaskStep(targets, i + 1);
+	      };
+	    }, 'task');
 	  }
 
 	  // New analysis incoming: instead of recalling everyone to fixed seats, the
@@ -1311,6 +1407,11 @@
     // and can advance; it flips false when 隊長 starts presenting.
     sim.handoff = true; sim.handoffStart = tick;
     const L = chars.orch;
+    // The finale owns 隊長 now: cancel any in-flight opening-delivery walk/timer so
+    // its callbacks can't fight the hand-off (its own guards also bail on sim.handoff).
+    sim.delivering = false; sim.delivered = true;
+    L.walkXY = null; L.path = null; L.onArrive = null; L.timer = 0; L.onTimer = null;
+    L.carryDoc = false; L.bubble = '';
     const producer = producerId || lastProducerId();
     const F = chars[producer];
     if (!F || producer === 'orch') {
@@ -1973,6 +2074,10 @@
     // under the characters (subtler than edit mode) so teaming stays readable in
     // the idle office as well as during a run.
     if (!editMode.on && layoutView()) drawRunPods();
+    // Subtle pipeline flow connectors (隊長→readers→合成→隊長→白板). Drawn UNDER the
+    // sprites so they never obscure bodies/labels; a segment gently lights up while
+    // a document actually travels it, and stays dim otherwise.
+    if (!editMode.on && customRunView()) drawFlowConnectors();
 
     const sprites = [];
     // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
@@ -2015,6 +2120,119 @@
     if (customRunView()) drawRunDocs();    // documents are now carried by people; runDocs stays empty (kept as a no-op)
     if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
     drawTokenMeter();                      // live estimate / actual token readout
+  }
+
+  // ─── Pipeline flow connectors ───────────────────────────────────────────────
+  // Thin, low-alpha lines tracing the document pipeline so the workflow reads at a
+  // glance: 隊長→each active reader (opening delivery), each reader→合成 (drafts),
+  // 合成→隊長 (final report), 隊長→白板 (present). A segment is DIM by default and
+  // gently lights up (a brighter stroke + a flowing dash) only while a document is
+  // actually travelling it. Wrapped so it can never throw into the render loop; a
+  // no-op under reduced-motion (customRunView is false there).
+  function segAnchor(id) {
+    // A stationary anchor for an agent — its computed home slot, so lines don't
+    // jitter as carriers walk. Falls back to the live position if unplaced.
+    const t = targetPos(id);
+    return t ? { x: t.x, y: t.y } : { x: chars[id].x, y: chars[id].y };
+  }
+  // Draw one connector segment. lit → brighter + animated flowing dash.
+  function flowSeg(a, b, color, lit) {
+    if (!a || !b) return;
+    c.save();
+    c.lineCap = 'round';
+    // Dim base line always present (the static pipeline skeleton).
+    c.strokeStyle = rgba(color, lit ? 0.12 : 0.08);
+    c.lineWidth = SCALE * 0.8;
+    c.setLineDash([]);
+    c.beginPath(); c.moveTo(px(a.x), px(a.y)); c.lineTo(px(b.x), px(b.y)); c.stroke();
+    if (lit) {
+      // Brighter flowing dash travelling a→b to show the doc in motion.
+      c.strokeStyle = rgba(color, 0.5);
+      c.lineWidth = SCALE;
+      const dash = SCALE * 3, gap = SCALE * 4;
+      c.setLineDash([dash, gap]);
+      c.lineDashOffset = reducedMotion ? 0 : -((tick * 0.9) % (dash + gap));
+      c.beginPath(); c.moveTo(px(a.x), px(a.y)); c.lineTo(px(b.x), px(b.y)); c.stroke();
+      c.setLineDash([]);
+    }
+    c.restore();
+  }
+  function drawFlowConnectors() {
+    try {
+      const activeReader = id => !editMode.bench[id] && !isStandby(id);
+      const collectorId = !editMode.bench.synth ? 'synth' : lastProducerId();
+      const orchA = segAnchor('orch');
+      const collA = (collectorId && chars[collectorId]) ? segAnchor(collectorId) : null;
+      // Representative anchor per reader group (first member of each pod), so a
+      // grouped pod shows one clean spoke instead of overlapping lines.
+      const reps = [];
+      const claimed = new Set();
+      computePods().forEach(pod => {
+        const members = podOrder(pod).filter(activeReader);
+        if (!members.length) return;
+        reps.push(members[0]);
+        members.forEach(id => claimed.add(id));
+      });
+      STAGE1.forEach(id => { if (activeReader(id) && !claimed.has(id)) { reps.push(id); claimed.add(id); } });
+      const ctxActive = activeReader('ctx');
+
+      // 隊長 → reader spokes (delivery in): lit for the reader 隊長 is delivering to.
+      reps.forEach(id => {
+        const lit = sim.delivering && sim.deliverTarget != null && claimedGroupHas(id, sim.deliverTarget);
+        flowSeg(orchA, segAnchor(id), '#FF6600', lit);
+      });
+      if (ctxActive) {
+        const litCtx = sim.delivering && sim.deliverTarget === 'ctx';
+        flowSeg(orchA, segAnchor('ctx'), '#FF6600', litCtx);
+      }
+
+      // reader → 合成 (drafts): lit while a member of that group is carrying a draft
+      // to the collector (state delivering/reporting, and it's not the collector).
+      if (collA) {
+        reps.forEach(id => {
+          if (id === collectorId) return;
+          const lit = groupCarrying(id, collectorId);
+          flowSeg(segAnchor(id), collA, '#3B82F6', lit);
+        });
+        // ctx reports direct to 隊長 in the default pipeline, but in the in-place
+        // custom run it also routes through the collector — draw its draft leg too.
+        if (ctxActive && collectorId !== 'ctx') {
+          const litC = carrierMovingTo('ctx');
+          flowSeg(segAnchor('ctx'), collA, '#3B82F6', litC);
+        }
+      }
+
+      // 合成 → 隊長 (final report): lit during the report hand-off phase.
+      if (collA && collectorId !== 'orch') {
+        flowSeg(collA, orchA, '#EC4899', !!sim.handoff);
+      }
+
+      // 隊長 → 白板 (present): lit while 隊長 walks to / stands at the board.
+      const boardA = centreOf(WB_APPROACH[0], WB_APPROACH[1]);
+      const L = chars.orch;
+      const presenting = L.state === 'walking_to_employee' || L.state === 'presenting' || sim.boardActive;
+      flowSeg(orchA, boardA, '#8B5CF6', presenting);
+    } catch (_) { /* never break the render loop */ }
+  }
+  // Is `deliverTarget` in the same reader group as representative `repId`? (Used so
+  // lighting a pod's spoke works whether we track the rep or an inner member.)
+  function claimedGroupHas(repId, deliverTarget) {
+    if (repId === deliverTarget) return true;
+    const pod = computePods().find(pod => pod.includes(repId));
+    return !!(pod && pod.includes(deliverTarget));
+  }
+  // Is any member of representative `repId`'s group currently carrying a draft to
+  // the collector (walking/handing over, and not the collector itself)?
+  function groupCarrying(repId, collectorId) {
+    const pod = computePods().find(pod => pod.includes(repId)) || [repId];
+    return pod.some(id => id !== collectorId && carrierMovingTo(id));
+  }
+  // A carrier `id` is mid-delivery when it's walking a draft over ('delivering')
+  // or standing at the hand-off beat ('reporting'). Both light the draft leg.
+  function carrierMovingTo(id) {
+    const e = chars[id];
+    if (!e) return false;
+    return e.state === 'delivering' || e.state === 'reporting';
   }
 
   // ─── Custom-layout run overlays ─────────────────────────────────────────────
@@ -2878,8 +3096,10 @@
     sim.active = false; sim.recalling = false; sim.pendingStart = false;
     sim.customView = false; runDocs.length = 0;
     sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
+    sim.delivering = false; sim.delivered = false; sim.deliverTarget = null;
     sim.synthBusy = false; sim.synthQueue = []; sim.handed = 0;
     editMode.on = true; editMode.dragId = null;
+    editMode.dragGroup = []; editMode.dragLast = null;
     selected = null;
     // Freeze everyone: clear paths/timers so the sim never fights the drag.
     Object.values(chars).forEach(e => {
@@ -2954,6 +3174,16 @@
     if (id && DRAGGABLE.includes(id)) {
       editMode.dragId = id;
       chars[id].path = null; chars[id].onArrive = null;
+      // Group drag: if the grabbed agent belongs to a multi-member pod, capture
+      // that pod's OTHER members once at grab time so the whole cluster (and its
+      // shared table, which reads targetPos of members) translates together and
+      // stays intact. Membership is frozen for the drag so mid-move proximity
+      // shifts can't add/drop members. Solo agents (and infra orch/synth/ctx,
+      // which are never podded) get an empty group and move alone.
+      editMode.dragGroup = [];
+      const pod = computePods().find(pod => pod.length >= 2 && pod.includes(id));
+      if (pod) editMode.dragGroup = pod.filter(m => m !== id);
+      editMode.dragLast = { x: chars[id].x, y: chars[id].y };
       ev.preventDefault();
     }
   }
@@ -2961,10 +3191,28 @@
     if (!editMode.on || !editMode.dragId) return;
     const p = locateLogical(ev);
     const id = editMode.dragId, e = chars[id];
-    e.x = clampX(p.x); e.y = clampY(p.y);
+    const nx = clampX(p.x), ny = clampY(p.y);
+    // Actual delta applied to the dragged agent AFTER clamping, so pod members
+    // translate by exactly the same amount and keep their relative offsets.
+    const last = editMode.dragLast || { x: e.x, y: e.y };
+    const dx = nx - last.x, dy = ny - last.y;
+    e.x = nx; e.y = ny;
     e.path = null;
     e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
     editMode.layout[id] = { x: e.x, y: e.y };   // config source of truth
+    // Translate the frozen pod group by the same (clamped) delta. Each member's
+    // move is itself clamped to the room; the delta is measured from the dragged
+    // agent's pre-clamp target so members drift with it without accumulating.
+    const group = editMode.dragGroup || [];
+    for (const mid of group) {
+      const m = chars[mid];
+      if (!m) continue;
+      m.x = clampX(m.x + dx); m.y = clampY(m.y + dy);
+      m.path = null; m.onArrive = null;
+      m.tile = [Math.round((m.x - 8) / TILE), Math.round((m.y - 8) / TILE)];
+      editMode.layout[mid] = { x: m.x, y: m.y };
+    }
+    editMode.dragLast = { x: e.x, y: e.y };
     ev.preventDefault();
     if (reducedMotion) render();
   }
@@ -2982,6 +3230,8 @@
       else delete editMode.bench[id];
     }
     editMode.dragId = null;
+    editMode.dragGroup = [];
+    editMode.dragLast = null;
     persistGraph();
     if (onSpecChange) onSpecChange();
     if (reducedMotion) render();
@@ -3094,6 +3344,7 @@
       sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
       sim.leaderQueue = []; sim.leaderBusy = false;
       sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
+      sim.delivering = false; sim.delivered = false;
       sim.relayChains = []; sim.relayState = Object.create(null); sim.relayMembers = new Set();
       sim.escalate = false; sim.escalateDecided = false; sim.escalateStandby = new Set();
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;
