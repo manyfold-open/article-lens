@@ -188,6 +188,8 @@
     layout: Object.create(null),  // id → {x,y} custom positions (config source of truth)
     effort: Object.create(null),  // id → 'low' | 'med' | 'high' (default 'med')
     replicas: Object.create(null),// id → 2 | 3 (default 1; only stored when >1)
+    escalate: false,              // 💸 thrifty: run sum+ctx first, escalate to jargon+comments only if worth it
+    escalateCandidates: ['jargon', 'comments'],   // the "on standby" workers in escalate mode
     badges: [],                   // per-frame clickable mode badges {x,y,w,h,key}
     effortBadges: [],             // per-frame clickable effort badges {x,y,w,h,id}
     replicaBadges: [],            // per-frame clickable replica badges {x,y,w,h,id}
@@ -220,6 +222,9 @@
     let total = 0;
     for (const id of EFFORT_NODES) {
       if (editMode.bench[id]) continue;
+      // 💸 escalate: jargon+comments are runtime candidates — exclude them from the
+      // cheap floor (they only cost tokens if the backend decides to escalate).
+      if (editMode.escalate && editMode.escalateCandidates.includes(id)) continue;
       // vote ×N: running an agent N times costs ~N× its per-run tokens.
       total += TOKEN_COST[id][effortOf(id)] * replicasOf(id);
     }
@@ -238,7 +243,8 @@
       || Object.keys(editMode.bench).length > 0
       || Object.keys(editMode.podModes).length > 0
       || EFFORT_NODES.some(id => effortOf(id) !== 'med')    // non-default effort counts
-      || REPLICA_NODES.some(id => replicasOf(id) > 1);      // vote ×N counts
+      || REPLICA_NODES.some(id => replicasOf(id) > 1)       // vote ×N counts
+      || editMode.escalate;                                 // 💸 thrifty escalate mode counts
   }
   // The single source of truth for "custom run": identical to the gate app.js
   // uses to decide whether to send &graph (getGraphConfig() non-null). When this
@@ -403,7 +409,18 @@
 
 	  function startRun() {
 	    if (editMode.on) exitEditMode();   // a run is mutually exclusive with editing
-	    if (reducedMotion) return;
+	    if (reducedMotion) {
+	      // No sim under reduced-motion, but still reflect escalate standby statically:
+	      // the candidates show asleep until an escalate 'go' decision wakes them.
+	      sim.escalate = !!editMode.escalate;
+	      sim.escalateDecided = false;
+	      sim.escalateStandby = new Set(
+	        sim.escalate ? editMode.escalateCandidates.filter(id => ALL_WORKERS.includes(id) && !editMode.bench[id]) : []
+	      );
+	      sim.escalateStandby.forEach(id => { if (chars[id]) { chars[id].asleep = true; chars[id].bubble = '💤 待命'; } });
+	      if (sim.escalate) render();
+	      return;
+	    }
 	    if (sim.recalling) { sim.pendingStart = true; return; }
 	    if (sim.active) return;
 	    cancelAmbientAndSideJobs();
@@ -430,11 +447,76 @@
 	      sim.relayState[ci] = { i: 0, busy: false, delivered: false };
 	    });
 	    runDocs.length = 0;
+	    // 💸 escalate: latch which candidates start "on standby" (asleep in the
+	    // dining corner) for THIS run. They are enabled but deferred — excluded from
+	    // finish/carrier expectations until an `escalate` decision wakes them (go)
+	    // or the run wraps without them (stop). Snapshot once so mid-run spec edits
+	    // can't change the choreography.
+	    sim.escalate = !!editMode.escalate;
+	    sim.escalateDecided = false;
+	    sim.escalateStandby = new Set(
+	      sim.escalate ? editMode.escalateCandidates.filter(id => ALL_WORKERS.includes(id) && !editMode.bench[id]) : []
+	    );
 	    // The office is now always spec-driven: every run works IN PLACE at the
 	    // computed layout (readers‖ → ctx → synth → whiteboard), with docs flying
 	    // left→right. This unifies the old default+custom paths behind one engine.
 	    sim.customRun = true;
 	    startCustomRun();
+	  }
+	  // True while `id` is an escalate candidate still on standby (asleep, deferred)
+	  // this run — treated like "temporarily benched" for finish/carrier logic.
+	  function isStandby(id) { return !!(sim.escalateStandby && sim.escalateStandby.has(id)); }
+
+	  // 💸 escalate decision from the backend (SSE `escalate` event), forwarded by
+	  // app.js. 'go' → wake the standby candidates: they get up from the dining
+	  // corner and WALK into their reader slots, then work + deliver normally.
+	  // 'stop' → they stay asleep; the run wraps up with just the already-working
+	  // agents (sum+ctx→synth→隊長→whiteboard). Robust to being called never / twice /
+	  // after the run has moved on: no-ops safely and never leaves anyone stuck.
+	  function escalateDecision(decision) {
+	    if (reducedMotion) { escalateDecisionReduced(decision); return; }
+	    if (!sim.active || !sim.escalate) return;      // not an escalate run: ignore
+	    if (sim.escalateDecided) return;               // decision is one-shot per run
+	    sim.escalateDecided = true;
+	    const standby = Array.from(sim.escalateStandby || []);
+	    if (decision === 'go') wakeEscalateCandidates(standby);
+	    // 'stop' (or anything else): leave them asleep. They're already excluded from
+	    // carrier/finish expectations, so the run wraps with just the active agents.
+	    else standby.forEach(id => { const e = chars[id]; if (e && e.asleep) e.bubble = ''; });
+	  }
+	  // Wake the given standby workers: clear their standby flag so they count as
+	  // carriers again, then walk each from the corner to its computed reader slot
+	  // and start working in place (SSE `status` events then drive them as usual).
+	  function wakeEscalateCandidates(ids) {
+	    ids.forEach(id => {
+	      const e = chars[id];
+	      if (!e) return;
+	      if (sim.escalateStandby) sim.escalateStandby.delete(id);   // now a real carrier
+	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
+	      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
+	      e.asleep = false; e.bubble = '值得讀，開工！';
+	      e.state = 'delivering';   // transient "moving" state so nothing else grabs it
+	      const t = targetPos(id);  // its computed reader slot (all-enabled escalate spec)
+	      walkXY(e, t.x, t.y, () => {
+	        e.x = t.x; e.y = t.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+	        e.facing = 'down'; e.bubble = '';
+	        e.state = 'working'; e.workStart = tick;   // work in place; SSE drives the monitor
+	      });
+	    });
+	  }
+	  // Reduced-motion escalate: no walking — reflect states statically. 'go' wakes
+	  // the candidates into a working state in place; 'stop' leaves them asleep.
+	  function escalateDecisionReduced(decision) {
+	    if (!sim.escalate || sim.escalateDecided) return;
+	    sim.escalateDecided = true;
+	    const standby = Array.from(sim.escalateStandby || []);
+	    standby.forEach(id => {
+	      const e = chars[id]; if (!e) return;
+	      if (decision === 'go') {
+	        if (sim.escalateStandby) sim.escalateStandby.delete(id);
+	        e.asleep = false; e.state = 'working'; e.workStart = tick; e.bubble = '';
+	      }
+	    });
 	  }
 
 	  // Spec-driven run: workers stay at their COMPUTED positions (targetPos) and
@@ -450,6 +532,9 @@
 	    { const t = targetPos('orch'); L.x = t.x; L.y = t.y; L.tile = [Math.round((L.x-8)/TILE), Math.round((L.y-8)/TILE)]; }
 	    L.walkTarget = null; L.state = 'idle'; L.facing = 'down'; L.bubble = '各組就位，開工！';
 	    L.timer = 90; L.onTimer = () => { if (sim.active) L.bubble = ''; };
+	    // Rest-corner slots for anyone sleeping this run (benched OR escalate-standby),
+	    // assigned in a stable order so nobody stacks on the same chair.
+	    let restIdx = 0;
 	    ALL_WORKERS.forEach(id => {
 	      const e = chars[id];
 	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null; e.walkTarget = null; e.walkXY = null;
@@ -459,7 +544,16 @@
 	      e.x = p.x; e.y = p.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
 	      if (editMode.bench[id]) {
 	        // Benched → disabled: greyed, asleep, never assigned, no handoff.
+	        const slot = REST_SLOTS[restIdx++ % REST_SLOTS.length]; const rc = centreOf(slot[0], slot[1]);
+	        e.x = rc.x; e.y = rc.y; e.tile = slot.slice();
 	        e.asleep = true; e.state = 'idle'; e.bubble = ''; e.facing = 'down';
+	        delete taskState[id];
+	      } else if (isStandby(id)) {
+	        // 💸 escalate candidate on standby: sleeps in the dining corner ("待命"),
+	        // deferred until the backend's escalate decision. Woken by escalateDecision('go').
+	        const slot = REST_SLOTS[restIdx++ % REST_SLOTS.length]; const rc = centreOf(slot[0], slot[1]);
+	        e.x = rc.x; e.y = rc.y; e.tile = slot.slice();
+	        e.asleep = true; e.state = 'idle'; e.bubble = '💤 待命'; e.facing = 'down';
 	        delete taskState[id];
 	      } else {
 	        e.asleep = false; e.facing = 'down';
@@ -847,6 +941,7 @@
 
     for (const id of carriers) {
       if (editMode.bench[id]) continue;   // disabled: never finishes, never delivers
+      if (isStandby(id)) continue;        // 💸 escalate candidate on standby: deferred until 'go'
       // Relay-pod members are driven by the conveyor (stepRelayChains), not the
       // independent carry-to-collector path — skip them here.
       if (sim.relayMembers && sim.relayMembers.has(id)) continue;
@@ -864,7 +959,9 @@
     // carries the combined doc to the collector).
     stepRelayChains(collectorId);
 
-    const enabledCarriers = carriers.filter(id => !editMode.bench[id]);
+    // Standby escalate candidates are excluded until woken — otherwise the run
+    // would wait on workers that may never start (decision:'stop').
+    const enabledCarriers = carriers.filter(id => !editMode.bench[id] && !isStandby(id));
     // Every carrier has walked its draft over and returned to its slot.
     const allDelivered = enabledCarriers.every(id => chars[id].state === 'done')
       && sim.handed >= enabledCarriers.length && !sim.synthBusy;
@@ -1983,7 +2080,10 @@
     const est = estimateTokens();
     const isActual = meter.mode === 'actual';
     const val = isActual ? meter.actual : est;
-    const label = isActual ? '實際 ' + fmtKPlain(val) : '預估 ' + fmtK(val);
+    // 💸 escalate estimate shows the cheap floor with a "↑" — final cost depends on
+    // the runtime go/stop decision, so it can only grow from here.
+    const estLabel = editMode.escalate ? '預估 ' + fmtK(val) + '↑' : '預估 ' + fmtK(val);
+    const label = isActual ? '實際 ' + fmtKPlain(val) : estLabel;
     const w = 58, h = 20;
     const x = LOGICAL_W - w - 4, y = WALL * TILE + 3;
     c.save();
@@ -2148,10 +2248,14 @@
     const nonDefaultEffort = EFFORT_NODES.some(id => effortOf(id) !== 'med');
     const nonDefaultReplicas = REPLICA_NODES.some(id => replicasOf(id) > 1);
 
-    // Full default spec → null (no &graph, unchanged behaviour).
-    if (!anyDisabled && defaultGroup && !nonDefaultEffort && !nonDefaultReplicas) return null;
+    // Full default spec → null (no &graph, unchanged behaviour). Escalate mode is
+    // never "default" even when nodes/effort are all-med, so it always emits.
+    if (!editMode.escalate && !anyDisabled && defaultGroup && !nonDefaultEffort && !nonDefaultReplicas) return null;
 
     const cfg = { v: 2, nodes };
+    // 💸 thrifty: run sum+ctx first, then EITHER run jargon+comments (worth it) or
+    // skip them. jargon+comments are runtime "candidates"; the backend decides.
+    if (editMode.escalate) cfg.escalate = true;
     // Attach groups only when a non-default pod arrangement exists (a real
     // multi-member pod that isn't just the default single-parallel group).
     const realPods = groups.filter(g => g.members.length >= 2);
@@ -2190,6 +2294,12 @@
       comments: { enabled: true, effort: 'med', replicas: 2 },
       ctx: { enabled: true }, synth: { enabled: true },
     },
+    thrifty: {   // 💸 省錢漸進: sum+ctx run first; jargon+comments are runtime
+      // "candidates" — the backend escalates to them only if worth reading.
+      escalate: true,
+      sum: { enabled: true, effort: 'med' }, jargon: { enabled: true, effort: 'med' },
+      comments: { enabled: true, effort: 'med' }, ctx: { enabled: true }, synth: { enabled: true },
+    },
   };
 
   function applyPreset(name) {
@@ -2202,6 +2312,7 @@
     editMode.bench = Object.create(null);
     editMode.effort = Object.create(null);
     editMode.replicas = Object.create(null);
+    editMode.escalate = !!spec.escalate;   // 💸 thrifty escalate mode (top-level flag)
     for (const id of EDITABLE.concat('synth')) {
       const node = spec[id];
       if (!node) continue;
@@ -2608,7 +2719,7 @@
       if (cfg.groups) return null;
       const bench = id => !!editMode.bench[id];
       const eff = id => effortOf(id);
-      const matches = spec => EDITABLE.concat('synth').every(id => {
+      const matches = spec => (!!spec.escalate === !!editMode.escalate) && EDITABLE.concat('synth').every(id => {
         const n = spec[id]; if (!n) return true;
         if ((n.enabled === false) !== bench(id)) return false;
         if (EFFORT_NODES.includes(id) && n.enabled !== false) {
@@ -2621,7 +2732,7 @@
         }
         return true;
       });
-      for (const name of ['quick', 'jargon', 'deep', 'reliable']) if (matches(PRESETS[name])) return name;
+      for (const name of ['quick', 'jargon', 'deep', 'reliable', 'thrifty']) if (matches(PRESETS[name])) return name;
       return null;
     },
     // Live estimate in tokens (for the picker labels, etc.).
@@ -2649,6 +2760,14 @@
       // A benched worker is disabled for this run: keep it asleep, ignore any
       // stray state so "who's disabled" stays unambiguous at a glance.
       if (customRunActive() && editMode.bench[id]) return;
+      // 💸 escalate FALLBACK: if a standby candidate starts getting real activity
+      // (running/typing/reading) but no escalate decision has arrived yet, treat it
+      // as 'go' so it wakes and joins in — it must never stay stuck asleep mid-run.
+      // Works in both animated (customRunActive) and reduced-motion runs.
+      if (sim.escalate && !sim.escalateDecided && isStandby(id)
+          && (state === 'typing' || state === 'reading' || state === 'done')) {
+        escalateDecision('go');
+      }
       taskState[id] = state;
       if (chars[id].asleep) {
         chars[id].bubble = '';
@@ -2670,6 +2789,10 @@
 	    celebrate(id) { if (chars[id]) { taskState[id] = 'done'; if (reducedMotion) render(); } },
 	    receiveTask() { receiveTask(); },
 	    startRun() { startRun(); },
+	    // 💸 escalate decision from the backend SSE `escalate` event: 'go' wakes the
+	    // standby candidates (jargon+comments) from the dining corner into their
+	    // reader slots; 'stop' leaves them asleep. Safe to call never / twice / late.
+	    escalateDecision(decision) { escalateDecision(decision); },
     setClickHandler(fn) { clickHandler = typeof fn === 'function' ? fn : null; },
     setHoverHandler(fn) { hoverHandler = typeof fn === 'function' ? fn : null; },
     setSelected(id) { selected = chars[id] ? id : null; if (reducedMotion) render(); },
@@ -2688,6 +2811,7 @@
       sim.leaderQueue = []; sim.leaderBusy = false;
       sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
       sim.relayChains = []; sim.relayState = Object.create(null); sim.relayMembers = new Set();
+      sim.escalate = false; sim.escalateDecided = false; sim.escalateStandby = new Set();
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;
       // Clear per-agent run state, then snap everyone back to their spec-derived
       // layout slot (computeLayout) — the office rests in its pipeline shape.
