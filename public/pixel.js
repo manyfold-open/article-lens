@@ -28,8 +28,8 @@
   const LOGICAL_W = COLS * TILE;          // 320
   const LOGICAL_H = ROWS * TILE;          // 192
 
-  const SPEED  = 1.25;                    // logical px / frame (~+39% snappier walk)
-  const RUSH_SPEED = 2.6;                 // new assignment: everyone hustles back (~+37%)
+  const SPEED  = 1.03;                    // logical px / frame (~+15% over original 0.9)
+  const RUSH_SPEED = 2.15;                // new assignment: everyone hustles back (~+13% over original 1.9)
   const ASSIGN = 70;                      // frames a talk holds
   const REPORT = 80;
   const MIN_WORK = 150;                   // min visible "working" frames
@@ -265,10 +265,32 @@
     const dx = tile[0] - e.tile[0], dy = tile[1] - e.tile[1];
     e.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
   }
-  function moving(e) { return e.path && e.path.length > 0; }
+  function moving(e) { return !!e.walkXY || (e.path && e.path.length > 0); }
+  // Free-floating straight-line walk toward a logical-px point (tx,ty). Unlike
+  // walkTo (A* over the tile grid) this works from/to the arbitrary computed
+  // positions agents occupy during an in-place custom run. rush → RUSH_SPEED.
+  function walkXY(e, tx, ty, cb, rush) {
+    e.path = null; e.onArrive = null;
+    e.walkXY = { tx, ty, cb: cb || null, rush: !!rush };
+  }
 
 	  function stepEntity(e) {
 	    if (e.timer > 0) { e.timer--; if (e.timer === 0 && e.onTimer) { const t = e.onTimer; e.onTimer = null; t(); } }
+	    // Free-floating straight-line walk (used for in-place custom-run human
+	    // deliveries where positions aren't tile-locked so A* can't be used).
+	    if (e.walkXY) {
+	      const w = e.walkXY;
+	      const dx = w.tx - e.x, dy = w.ty - e.y, d = Math.hypot(dx, dy);
+	      const sp = w.rush ? RUSH_SPEED : SPEED;
+	      if (d <= sp) {
+	        e.x = w.tx; e.y = w.ty; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+	        e.walkXY = null; const cb = w.cb; if (cb) cb();
+	      } else {
+	        e.x += dx / d * sp; e.y += dy / d * sp;
+	        e.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+	      }
+	      return;
+	    }
 	    if (!e.path || !e.path.length) return;
 	    const [tc, tr] = e.path[0];
 	    const tx = tc*TILE + 8, ty = tr*TILE + 8;
@@ -378,6 +400,7 @@
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
 	    sim.handoff = false; sim.handoffStart = 0;   // synth→隊長 report hand-off phase
+	    sim.collecting = false;                      // collector integration phase not yet begun
 	    runDocs.length = 0;
 	    // The office is now always spec-driven: every run works IN PLACE at the
 	    // computed layout (readers‖ → ctx → synth → whiteboard), with docs flying
@@ -401,7 +424,7 @@
 	    L.timer = 90; L.onTimer = () => { if (sim.active) L.bubble = ''; };
 	    ALL_WORKERS.forEach(id => {
 	      const e = chars[id];
-	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null; e.walkTarget = null;
+	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null; e.walkTarget = null; e.walkXY = null;
 	      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
 	      // Place the worker at its computed slot (drag override wins) and freeze it.
 	      const p = targetPos(id);
@@ -417,7 +440,7 @@
 	    });
 	    // 合成 also works in place at its computed 校對 desk (no desk recall).
 	    const S = chars.synth;
-	    S.path = null; S.onArrive = null; S.timer = 0; S.onTimer = null; S.walkTarget = null;
+	    S.path = null; S.onArrive = null; S.timer = 0; S.onTimer = null; S.walkTarget = null; S.walkXY = null;
 	    S._queuedDeliver = false; S._returningToDesk = false;
 	    { const t = targetPos('synth'); S.x = t.x; S.y = t.y; S.tile = [Math.round((S.x-8)/TILE), Math.round((S.y-8)/TILE)]; }
 	    if (editMode.bench.synth) { S.asleep = true; }
@@ -438,7 +461,7 @@
 	    sim.customView = false; runDocs.length = 0;   // drop any custom-run rendering
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
-	    sim.handoff = false; sim.handoffStart = 0;
+	    sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
 	    selected = null;
 	    const L = chars.orch;
 	    L.bubble = '各組就位，準備開工！';
@@ -746,21 +769,6 @@
     petTick();
   }
 
-  // Document flow, left→right down the pipeline. A finished agent emits a small
-  // 📄 that hops through the downstream stages so you can read the workflow
-  // direction: readers → 裁定(ctx) → 校對(synth) → 白板(whiteboard). Stages that
-  // are disabled are skipped. Endpoints resolve from live positions at spawn.
-  function spawnPipelineDoc(fromId) {
-    const w = chars[fromId];
-    const wps = [];                                    // ordered waypoints (x,y)
-    const push = id => { if (!editMode.bench[id]) wps.push({ x: chars[id].x, y: chars[id].y - 4 }); };
-    // A reader's doc visits 裁定(ctx) on the way to 校對(synth); ctx's own doc
-    // goes straight to synth. This reads as the L→R collect step.
-    if (fromId !== 'ctx') push('ctx');
-    push('synth');
-    if (!wps.length) return;
-    runDocs.push({ x0: w.x, y0: w.y - 4, color: w.role.shirt, wps, seg: 0, t: 0 });
-  }
   // Who produces the final report to hand to 隊長. Normally 合成; if 合成 is
   // disabled we fall back to the last active downstream stage (裁定, else the
   // right-most enabled reader), so the hand-off is robust to a benched synth.
@@ -771,70 +779,135 @@
     if (readers.length) return readers.slice().sort((a, b) => chars[b].x - chars[a].x)[0];
     return 'orch';
   }
-  // The human hand-off: the integrated report flies from its producer (合成 /
-  // fallback) to 隊長 (orch). 隊長 then walks to the whiteboard to present it —
-  // more believable than the report teleporting to the board on its own.
-  function spawnHandoffDoc(fromId) {
-    const F = chars[fromId], L = chars.orch;
-    if (!F || fromId === 'orch') return;   // producer IS 隊長 → nothing to fly
-    runDocs.push({ x0: F.x, y0: F.y - 4, color: F.role.shirt,
-      wps: [{ x: L.x, y: L.y - 6 }], seg: 0, t: 0 });
+  // Where a carrier stands to hand a document to `target` (just to its left, or
+  // right if the target sits near the left edge). A small offset so the two
+  // sprites don't overlap during the beat.
+  function handoffSpotFor(target) {
+    const leftOK = target.x - 14 > TILE;             // stand to the left unless near the wall
+    return { x: target.x + (leftOK ? -14 : 14), y: target.y };
   }
+  // Draft/handover bubbles readers say when they set a doc down at 合成.
+  const DELIVER_SAYS = ['交給你了', '這是我的部分', '我的稿子', '整理好了'];
 
-  // In-place custom run: no walking. Each enabled worker finishes (real `done`
-  // + MIN_WORK) → emits a doc that flies rightward down the pipeline → marked
-  // done. When every enabled worker has handed off, 合成 integrates, then 隊長
-  // presents (existing reveal).
+  // In-place custom run: PEOPLE carry documents. Each enabled worker finishes
+  // (real `done` + MIN_WORK) → queues to walk its draft to the collector (合成,
+  // or a fallback producer if 合成 is benched), hands it over, and walks back to
+  // its slot → done. Deliveries are SERIALIZED so carriers don't pile up. When
+  // every enabled worker has delivered, the collector integrates, then walks the
+  // final report to 隊長, who walks to the whiteboard and presents.
   function updateCustomRun() {
-    const S = chars.synth;
-    for (const id of ALL_WORKERS) {
-      if (editMode.bench[id]) continue;   // disabled: never finishes, never hands off
+    // The collector everyone delivers to. If 合成 is benched, deliveries route to
+    // the fallback producer instead (which itself later carries to 隊長).
+    const synthOn = !editMode.bench.synth;
+    const collectorId = synthOn ? 'synth' : lastProducerId();
+    const carriers = ALL_WORKERS.filter(id => id !== collectorId);   // exclude the collector itself
+
+    for (const id of carriers) {
+      if (editMode.bench[id]) continue;   // disabled: never finishes, never delivers
       const w = chars[id];
-      if (w.state === 'working' && taskState[id] === 'done' && (tick - w.workStart) >= MIN_WORK) {
-        w.state = 'done'; w.bubble = '';
-        spawnPipelineDoc(id);   // 📄 flies rightward down the pipeline
+      if (w.state === 'working' && taskState[id] === 'done' && (tick - w.workStart) >= MIN_WORK
+          && !w._queuedDeliver) {
+        w._queuedDeliver = true;
+        w.state = 'waiting'; w.bubble = '';
+        sim.synthQueue.push(id);
+        tryCarryToSynth();
       }
     }
-    const enabled = ALL_WORKERS.filter(id => !editMode.bench[id]);
-    const allWorkersDone = enabled.length > 0 && enabled.every(id => chars[id].state === 'done');
-    const synthOn = !editMode.bench.synth;
-    // Once all enabled workers handed off and the last doc has landed:
-    //  • synth enabled → 合成 curates, then hands the report to 隊長.
-    //  • synth disabled → skip curation; the last producer hands off directly.
-    if (allWorkersDone && !runDocs.length && !sim.handoff) {
-      if (synthOn && S.state === 'idle') {
+
+    const enabledCarriers = carriers.filter(id => !editMode.bench[id]);
+    // Every carrier has walked its draft over and returned to its slot.
+    const allDelivered = enabledCarriers.every(id => chars[id].state === 'done')
+      && sim.handed >= enabledCarriers.length && !sim.synthBusy;
+
+    const S = chars[collectorId];
+    // If the collector is itself an SSE-driven worker (e.g. ctx as a fallback),
+    // it must have finished its OWN work before it starts integrating.
+    const collectorReady = !ALL_WORKERS.includes(collectorId)
+      || (taskState[collectorId] === 'done' && (tick - (S ? S.workStart : 0)) >= MIN_WORK)
+      || (S && S.state !== 'working');
+    // Once all carriers delivered: the collector integrates (合成 curates; a
+    // fallback producer just holds a beat), then carries the report to 隊長.
+    if (allDelivered && collectorReady && !sim.handoff && S
+        && S.state !== 'reviewing' && S.state !== 'delivering' && !sim.collecting) {
+      sim.collecting = true;
+      if (collectorId === 'synth' && synthOn) {
         S.state = 'reviewing'; S.workStart = tick; S.bubble = ASSIGNMENTS.synth.card;
         taskState.synth = 'typing';
-      } else if (!synthOn) {
-        beginHandoff();   // no 合成 → whoever produced last hands the report to 隊長
+      } else {
+        // No 合成 (or the collector is a reader/ctx): brief hold, then carry.
+        S.workStart = tick; S.state = 'reviewing'; S.bubble = '彙整中';
       }
     }
-    if (synthOn && S.state === 'reviewing' && (tick - S.workStart) >= SYNTH_REVIEW && !sim.handoff) {
-      S.state = 'done'; S.bubble = ''; taskState.synth = 'done';
-      beginHandoff();
-    }
-    // Hand-off phase: wait for the report doc to reach 隊長, then let 隊長 present.
-    if (sim.handoff && !sim.presented) {
-      const L = chars.orch;
-      if (!runDocs.length && (tick - sim.handoffStart) >= HANDOFF_MIN) {
-        L.bubble = '';
-        sim.presented = true;
-        startPresentInPlace();
-      }
+    if (sim.collecting && S && S.state === 'reviewing' && (tick - S.workStart) >= SYNTH_REVIEW
+        && !sim.handoff) {
+      S.state = 'done'; S.bubble = ''; if (collectorId === 'synth') taskState.synth = 'done';
+      beginHandoff(collectorId);
     }
   }
   const HANDOFF_MIN = 26;   // min frames 隊長 holds the report before presenting
-  // Kick off the synth→隊長 report hand-off: fly the report to 隊長, who receives
-  // it (a brief "拿到報告了" beat) before walking to the whiteboard to present.
-  function beginHandoff() {
+
+  // Serialized reader→collector delivery: one carrier walks its draft to the
+  // collector at a time, pauses (bubble), then walks back to its slot → done.
+  function tryCarryToSynth() {
+    if (sim.synthBusy || !sim.synthQueue.length) return;
+    const collectorId = !editMode.bench.synth ? 'synth' : lastProducerId();
+    const S = chars[collectorId];
+    const w = chars[sim.synthQueue.shift()];
+    if (!w || !S || w === S) { sim.handed++; tryCarryToSynth(); return; }
+    sim.synthBusy = true;
+    const home = { x: w.x, y: w.y };                 // its computed slot, to return to
+    const spot = handoffSpotFor(S);
+    w.state = 'delivering'; w.bubble = '';
+    walkXY(w, spot.x, spot.y, () => {
+      faceToward(w, S.tile);
+      w.state = 'reporting';   // stand + talk during the hand-over beat
+      w.bubble = DELIVER_SAYS[Math.floor(Math.random() * DELIVER_SAYS.length)];
+      if (!S.bubble) S.bubble = '收到';
+      w.timer = REPORT;
+      w.onTimer = () => {
+        w.bubble = ''; if (S.bubble === '收到') S.bubble = '';
+        w.state = 'delivering';
+        walkXY(w, home.x, home.y, () => {
+          w.state = 'done'; w.facing = 'down';
+          sim.synthBusy = false; sim.handed++;
+          tryCarryToSynth();
+        });
+      };
+    });
+  }
+
+  // Report hand-off: the collector (producer) carries the integrated report to
+  // 隊長, hands it over ("報告好了"), then 隊長 walks to the whiteboard to present.
+  function beginHandoff(producerId) {
     // Keep sim.active TRUE through the hand-off so updateCustomRun keeps ticking
-    // and can advance the phase; it flips false when 隊長 starts presenting.
+    // and can advance; it flips false when 隊長 starts presenting.
     sim.handoff = true; sim.handoffStart = tick;
-    const producer = lastProducerId();
-    spawnHandoffDoc(producer);
     const L = chars.orch;
-    L.bubble = '拿到報告了';
-    if (producer !== 'orch' && chars[producer]) chars[producer].bubble = '報告交給隊長';
+    const producer = producerId || lastProducerId();
+    const F = chars[producer];
+    if (!F || producer === 'orch') {
+      // Producer IS 隊長 (nothing enabled downstream) → 隊長 already holds it.
+      L.bubble = '拿到報告了';
+      L.timer = HANDOFF_MIN;
+      L.onTimer = () => { if (!sim.presented) { sim.presented = true; startPresentInPlace(); } };
+      return;
+    }
+    const home = { x: F.x, y: F.y };
+    const spot = handoffSpotFor(L);
+    F.state = 'delivering'; F.bubble = '';
+    walkXY(F, spot.x, spot.y, () => {
+      faceToward(F, L.tile);
+      F.state = 'reporting';   // stand + talk during the hand-over beat
+      F.bubble = '報告好了'; L.bubble = '拿到報告了';
+      F.timer = REPORT;
+      F.onTimer = () => {
+        F.bubble = '';
+        F.state = 'delivering';
+        walkXY(F, home.x, home.y, () => { F.state = 'done'; F.facing = 'down'; });
+        L.timer = HANDOFF_MIN;
+        L.onTimer = () => { if (!sim.presented) { L.bubble = ''; sim.presented = true; startPresentInPlace(); } };
+      };
+    });
   }
 
   // Finale: 隊長 walks over to the whiteboard, presents (triggering the report
@@ -844,7 +917,7 @@
   function present_settle() {
     const L = chars.orch;
     Object.values(chars).forEach(e => {
-      e.statusText = ''; e._report = ''; e._queuedDeliver = false;
+      e.statusText = ''; e._report = ''; e._queuedDeliver = false; e.walkXY = null;
     });
     L.bubble = ''; L.state = 'returning';
     // Walk 隊長 back to its overseer slot (free-floating target, via the layout lerp).
@@ -1440,7 +1513,7 @@
     Object.values(pets).forEach(drawBubble);
     if (selected && chars[selected]) drawSelectionMarker(chars[selected]);
     if (fly) drawFlyingBook();
-    if (customRunView()) drawRunDocs();    // result docs flying left→right down the pipeline
+    if (customRunView()) drawRunDocs();    // documents are now carried by people; runDocs stays empty (kept as a no-op)
     if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
     drawTokenMeter();                      // live estimate / actual token readout
   }
@@ -2001,7 +2074,7 @@
   // Advance layout walks (called each frame from update()). Lerp toward each
   // agent's walkTarget; on arrival, benched agents fall asleep. Returns when all
   // targets are reached (relayoutActive flips false).
-  const LAYOUT_SPEED = 1.9;   // logical px/frame for the reshuffle walk (~+36% snappier)
+  const LAYOUT_SPEED = 1.6;   // logical px/frame for the reshuffle walk (~+14% over original 1.4)
   function stepLayout() {
     if (!relayoutActive) return;
     let anyMoving = false;
@@ -2068,12 +2141,14 @@
     // Edit mode is mutually exclusive with a run.
     sim.active = false; sim.recalling = false; sim.pendingStart = false;
     sim.customView = false; runDocs.length = 0;
-    sim.handoff = false; sim.handoffStart = 0;
+    sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
+    sim.synthBusy = false; sim.synthQueue = []; sim.handed = 0;
     editMode.on = true; editMode.dragId = null;
     selected = null;
     // Freeze everyone: clear paths/timers so the sim never fights the drag.
     Object.values(chars).forEach(e => {
-      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
+      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null; e.walkXY = null;
+      e._queuedDeliver = false;
       e.bubble = ''; e.ambKind = null;
       if (e.state !== 'idle') e.state = 'idle';
     });
@@ -2265,12 +2340,12 @@
       meter.mode = 'estimate';   // back to the live estimate for tuning
       sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
       sim.leaderQueue = []; sim.leaderBusy = false;
-      sim.handoff = false; sim.handoffStart = 0;
+      sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;
       // Clear per-agent run state, then snap everyone back to their spec-derived
       // layout slot (computeLayout) — the office rests in its pipeline shape.
       STATIONS.forEach(s => { const e = chars[s.id];
-        e.path = null; e.onArrive = null; e.walkTarget = null; e.facing = 'down'; e.state = 'idle';
+        e.path = null; e.onArrive = null; e.walkTarget = null; e.walkXY = null; e.facing = 'down'; e.state = 'idle';
 	        e.timer = 0; e.onTimer = null; e.bubble = ''; e._report = ''; e.statusText = ''; e.workStart = 0; e.asleep = false;
 	        e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
         e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
