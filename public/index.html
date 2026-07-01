@@ -177,6 +177,28 @@
       font-weight: 800;
     }
 
+    /* Column wrapper: keeps the segmented control on its row and hangs a
+       one-line description caption directly beneath it without altering the
+       fixed-height topbar flex row. */
+    .preset-col {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      min-width: 0;
+    }
+    .preset-caption {
+      font-family: var(--body);
+      font-size: 10.5px;
+      line-height: 1.2;
+      color: var(--muted);
+      text-align: center;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     /* ── Edit-office toggle ──────────────────────────────────────────────── */
     .edit-toggle {
       font-family: var(--body);
@@ -1595,6 +1617,7 @@
       .toggle-btn { font-size: 10px; padding: 4px 8px; }
       .kb-pill { font-size: 11px; padding: 4px 10px; }
       .preset-btn { font-size: 10px; padding: 4px 7px; }
+      .preset-caption { font-size: 9.5px; white-space: normal; }
 
       /* On mobile the canvas is width-driven (height:auto), so let the wrap
          size to it instead of clipping the taller top-down room. */
@@ -1662,19 +1685,28 @@
 <header class="topbar">
   <a class="logo" href="/">HN Lens <span class="accent">📰</span></a>
   <div class="topbar-right">
-    <div id="preset-picker" class="preset-picker" role="group" aria-label="任務模式 / Task preset">
-      <button class="preset-btn" data-preset="quick" type="button"
-        title="⚡ 快速掃描：只跑摘要(低)+判讀，省 token">⚡ 快速掃描</button>
-      <button class="preset-btn active" data-preset="standard" type="button"
-        title="📄 標準：全員中檔，完整報告（預設）">📄 標準</button>
-      <button class="preset-btn" data-preset="jargon" type="button"
-        title="🎯 術語特訓：術語(高，跑2次投票)+判讀，摘要(低)，關掉留言">🎯 術語特訓</button>
-      <button class="preset-btn" data-preset="reliable" type="button"
-        title="🛡️ 可靠：全員中檔、各跑2次再合併，最穩定（約2倍 token）">🛡️ 可靠</button>
-      <button class="preset-btn" data-preset="deep" type="button"
-        title="🔬 深度精讀：全員高檔，最完整">🔬 深度精讀</button>
-      <button class="preset-btn" data-preset="thrifty" type="button"
-        title="💸 省錢漸進：先跑摘要+判讀，值得讀才叫醒術語+留言（待命中），最省 token">💸 省錢漸進</button>
+    <div class="preset-col">
+      <div id="preset-picker" class="preset-picker" role="group" aria-label="任務模式 / Task preset">
+        <button class="preset-btn" data-preset="quick" type="button"
+          data-desc="只跑摘要＋判讀，最快最省 · 先看值不值得讀"
+          title="⚡ 快速掃描：只跑摘要(低)+判讀，省 token">⚡ 快速掃描</button>
+        <button class="preset-btn active" data-preset="standard" type="button"
+          data-desc="全員並行 · 完整報告（摘要／術語／留言／判讀）"
+          title="📄 標準：全員中檔，完整報告（預設）">📄 標準</button>
+        <button class="preset-btn" data-preset="jargon" type="button"
+          data-desc="術語火力全開＋跑兩份不漏、關掉留言 · 專攻看懂術語"
+          title="🎯 術語特訓：術語(高，跑2次投票)+判讀，摘要(低)，關掉留言">🎯 術語特訓</button>
+        <button class="preset-btn" data-preset="reliable" type="button"
+          data-desc="每位讀者跑兩份投票合併 · 盡量不漏（約 2× token）"
+          title="🛡️ 可靠：全員中檔、各跑2次再合併，最穩定（約2倍 token）">🛡️ 可靠</button>
+        <button class="preset-btn" data-preset="deep" type="button"
+          data-desc="全員高強度 · 最完整周全（較慢較貴）"
+          title="🔬 深度精讀：全員高檔，最完整">🔬 深度精讀</button>
+        <button class="preset-btn" data-preset="thrifty" type="button"
+          data-desc="先摘要＋判讀，值得讀才叫醒術語＋留言 · 最省 token"
+          title="💸 省錢漸進：先跑摘要+判讀，值得讀才叫醒術語+留言（待命中），最省 token">💸 省錢漸進</button>
+      </div>
+      <div id="preset-caption" class="preset-caption" aria-live="polite"></div>
     </div>
     <button id="edit-toggle" class="edit-toggle" type="button" aria-pressed="false"
       title="編排辦公室：拖曳小幫手分組、設定協作模式、停用 / Arrange the office">🛠️ 編排辦公室</button>

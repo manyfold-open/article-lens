@@ -158,9 +158,18 @@ function syncPresetPicker() {
   const pa = window.pixelAgents;
   if (!pa || !pa.getActivePreset) return;
   const active = pa.getActivePreset();
+  let activeBtn = null;
   document.querySelectorAll('.preset-btn[data-preset]').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.preset === active);
+    const on = btn.dataset.preset === active;
+    btn.classList.toggle('active', on);
+    if (on) activeBtn = btn;
   });
+  const caption = document.getElementById('preset-caption');
+  if (caption) {
+    caption.textContent = activeBtn
+      ? (activeBtn.dataset.desc || '')
+      : '🛠️ 自訂編排 · 你手動調整過，不符合任何範本';
+  }
 }
 
 // ── Edit-office mode toggle ─────────────────────────────────────────────────
