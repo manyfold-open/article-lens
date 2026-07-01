@@ -186,6 +186,7 @@
   const INFRA = ['orch', 'synth'];
   const STAGE1 = ['sum', 'jargon', 'comments'];          // can be podded
   const POD_DIST = TILE * 1.2;                            // cluster radius (logical px)
+  const BADGE_DRAG_THRESH = 4;                            // px the badge must move before a click becomes a group-drag
   const GRAPH_LS_KEY = 'alens.graph';
   // Which workers expose an effort knob (low/med/high). ctx/synth have no effort.
   const EFFORT_NODES = ['sum', 'jargon', 'comments'];
@@ -199,6 +200,8 @@
     dragId: null,                 // id currently being dragged
     dragGroup: [],                // other pod members translated with a group drag
     dragLast: null,               // dragged agent's last clamped pos (for delta calc)
+    badgeDrag: null,              // active pod-badge grab: {key, members:[ids], moved:bool} — the group move-handle
+    badgeDragStart: null,         // {x,y} pointer-down pos, for the click-vs-drag threshold
     bench: Object.create(null),   // id → true when disabled (benched)
     podModes: Object.create(null),// "a,b,c" (sorted) → 'parallel' | 'relay'
     layout: Object.create(null),  // id → {x,y} custom positions (config source of truth)
@@ -2466,7 +2469,7 @@
     c.fillStyle = rgba('#1C1917', 0.62);
     c.font = `${10}px system-ui, sans-serif`;
     c.textAlign = 'center'; c.textBaseline = 'top';
-    c.fillText('編輯模式：拖曳任何人（含隊長/合成）擺位、點徽章切換平行/接力、把小幫手拖到休息區停用',
+    c.fillText('編輯模式：拖角色=單獨移動（拖開=脫離群組）、拖 平行/接力 標籤=整組移動、點標籤=切換模式、拖到休息區=停用',
       px(LOGICAL_W / 2), px(WALL * TILE + 2));
     c.restore();
   }
@@ -3100,6 +3103,7 @@
     sim.synthBusy = false; sim.synthQueue = []; sim.handed = 0;
     editMode.on = true; editMode.dragId = null;
     editMode.dragGroup = []; editMode.dragLast = null;
+    editMode.badgeDrag = null; editMode.badgeDragStart = null; editMode._badgeLast = null;
     selected = null;
     // Freeze everyone: clear paths/timers so the sim never fights the drag.
     Object.values(chars).forEach(e => {
@@ -3123,6 +3127,7 @@
   function exitEditMode() {
     if (!editMode.on) return;
     editMode.on = false; editMode.dragId = null;
+    editMode.badgeDrag = null; editMode.badgeDragStart = null; editMode._badgeLast = null;
     persistGraph();
     Object.values(chars).forEach(e => { e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND); });
     // Re-layout on exit: bench/effort changes reflow undragged agents into the
@@ -3160,35 +3165,66 @@
         return;
       }
     }
-    // Mode badge click (cycles parallel↔relay).
+    // Mode badge = the pod's GROUP move-handle. Grabbing it starts a group-drag of
+    // that pod's members (frozen at grab time so mid-move proximity shifts can't
+    // add/drop members). Whether this ends up a click (toggle mode) or a drag
+    // (relocate the group) is decided in editPointerUp by BADGE_DRAG_THRESH.
     for (const b of editMode.badges) {
       if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
-        editMode.podModes[b.key] = editMode.podModes[b.key] === 'relay' ? 'parallel' : 'relay';
-        persistGraph(); if (reducedMotion) render();
-        if (onSpecChange) onSpecChange();
+        const pod = computePods().find(pd => pd.length >= 2 && podKey(pd) === b.key);
+        const members = pod ? pod.slice() : [];
+        editMode.badgeDrag = { key: b.key, members, moved: false };
+        editMode.badgeDragStart = { x: p.x, y: p.y };
+        members.forEach(mid => { const m = chars[mid]; if (m) { m.path = null; m.onArrive = null; } });
         ev.preventDefault();
         return;
       }
     }
     const id = locate(ev);
     if (id && DRAGGABLE.includes(id)) {
+      // Individual-agent drag moves ONLY that agent. Pulling it beyond POD_DIST of
+      // the others naturally separates/ungroups it (pods are proximity-based via
+      // computePods/posOf); dragging it near another groups them. The whole group
+      // now moves only via its badge handle (see the badge branch above).
       editMode.dragId = id;
       chars[id].path = null; chars[id].onArrive = null;
-      // Group drag: if the grabbed agent belongs to a multi-member pod, capture
-      // that pod's OTHER members once at grab time so the whole cluster (and its
-      // shared table, which reads targetPos of members) translates together and
-      // stays intact. Membership is frozen for the drag so mid-move proximity
-      // shifts can't add/drop members. Solo agents (and infra orch/synth/ctx,
-      // which are never podded) get an empty group and move alone.
       editMode.dragGroup = [];
-      const pod = computePods().find(pod => pod.length >= 2 && pod.includes(id));
-      if (pod) editMode.dragGroup = pod.filter(m => m !== id);
       editMode.dragLast = { x: chars[id].x, y: chars[id].y };
       ev.preventDefault();
     }
   }
   function editPointerMove(ev) {
-    if (!editMode.on || !editMode.dragId) return;
+    if (!editMode.on) return;
+    // Pod-badge group drag: translate every pod member by the pointer delta,
+    // preserving relative offsets (and the shared table, which reads member
+    // positions). Once the pointer travels past the threshold it's committed to a
+    // drag (moved=true) so the up-handler won't misfire the mode toggle.
+    if (editMode.badgeDrag) {
+      const p = locateLogical(ev);
+      const start = editMode.badgeDragStart || p;
+      if (!editMode.badgeDrag.moved
+          && Math.hypot(p.x - start.x, p.y - start.y) >= BADGE_DRAG_THRESH) {
+        editMode.badgeDrag.moved = true;
+        editMode._badgeLast = { x: start.x, y: start.y };
+      }
+      if (editMode.badgeDrag.moved) {
+        const last = editMode._badgeLast || start;
+        const dx = p.x - last.x, dy = p.y - last.y;
+        for (const mid of editMode.badgeDrag.members) {
+          const m = chars[mid];
+          if (!m) continue;
+          m.x = clampX(m.x + dx); m.y = clampY(m.y + dy);
+          m.path = null; m.onArrive = null;
+          m.tile = [Math.round((m.x - 8) / TILE), Math.round((m.y - 8) / TILE)];
+          editMode.layout[mid] = { x: m.x, y: m.y };
+        }
+        editMode._badgeLast = { x: p.x, y: p.y };
+      }
+      ev.preventDefault();
+      if (reducedMotion) render();
+      return;
+    }
+    if (!editMode.dragId) return;
     const p = locateLogical(ev);
     const id = editMode.dragId, e = chars[id];
     const nx = clampX(p.x), ny = clampY(p.y);
@@ -3217,7 +3253,24 @@
     if (reducedMotion) render();
   }
   function editPointerUp(ev) {
-    if (!editMode.on || !editMode.dragId) return;
+    if (!editMode.on) return;
+    // Resolve a pod-badge grab: moved past the threshold → it was a group drag
+    // (positions already committed in move), just clear state. Barely moved →
+    // treat as a click and toggle the pod's mode (平行↔接力).
+    if (editMode.badgeDrag) {
+      const bd = editMode.badgeDrag;
+      editMode.badgeDrag = null;
+      editMode.badgeDragStart = null;
+      editMode._badgeLast = null;
+      if (!bd.moved) {
+        editMode.podModes[bd.key] = editMode.podModes[bd.key] === 'relay' ? 'parallel' : 'relay';
+      }
+      persistGraph(); if (reducedMotion) render();
+      if (onSpecChange) onSpecChange();
+      if (ev && ev.preventDefault) ev.preventDefault();
+      return;
+    }
+    if (!editMode.dragId) return;
     const id = editMode.dragId;
     const e = chars[id];
     // Only the 4 spec-node workers get disabled. Dropping one on/near the
