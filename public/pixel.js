@@ -142,14 +142,48 @@
   const STAGE1 = ['sum', 'jargon', 'comments'];          // can be podded
   const POD_DIST = TILE * 1.2;                            // cluster radius (logical px)
   const GRAPH_LS_KEY = 'alens.graph';
+  // Which workers expose an effort knob (low/med/high). ctx/synth have no effort.
+  const EFFORT_NODES = ['sum', 'jargon', 'comments'];
+  const EFFORT_LEVELS = ['low', 'med', 'high'];
   const editMode = {
     on: false,
     dragId: null,                 // id currently being dragged
     bench: Object.create(null),   // id → true when disabled (benched)
     podModes: Object.create(null),// "a,b,c" (sorted) → 'parallel' | 'relay'
     layout: Object.create(null),  // id → {x,y} custom positions (config source of truth)
+    effort: Object.create(null),  // id → 'low' | 'med' | 'high' (default 'med')
     badges: [],                   // per-frame clickable mode badges {x,y,w,h,key}
+    effortBadges: [],             // per-frame clickable effort badges {x,y,w,h,id}
   };
+  function effortOf(id) { return editMode.effort[id] || 'med'; }
+
+  // ─── Token cost model + meter ───────────────────────────────────────────────
+  // Live estimate (before/while tuning) vs actual (accumulated from usage SSE).
+  const TOKEN_COST = {
+    sum:      { low: 2000, med: 4000, high: 6000 },
+    jargon:   { low: 5000, med: 10000, high: 16000 },
+    comments: { low: 4000, med: 8000, high: 12000 },
+    ctx:      { low: 2000, med: 2000, high: 3000 },
+    synth:    { low: 4000, med: 4000, high: 5000 },
+  };
+  // Meter state: 'estimate' shows the live cost model total; 'actual' accumulates
+  // the per-agent usage SSE and finalizes from result.usage.total.
+  const meter = { mode: 'estimate', actual: 0, byAgent: Object.create(null) };
+  // Sum of every enabled node's cost at its current effort. synth counts when the
+  // spec would keep it (we treat synth as always enabled here — the FE never
+  // benches it), ctx counts when not benched.
+  function estimateTokens() {
+    let total = 0;
+    for (const id of EFFORT_NODES) {
+      if (editMode.bench[id]) continue;
+      total += TOKEN_COST[id][effortOf(id)];
+    }
+    if (!editMode.bench.ctx) total += TOKEN_COST.ctx.med;   // ctx: effort n/a
+    total += TOKEN_COST.synth.med;                          // synth: always on
+    return total;
+  }
+  function fmtK(n) { return '~' + Math.round(n / 1000) + 'k'; }
+  function fmtKPlain(n) { return Math.round(n / 1000) + 'k'; }
   // Position used for pod/config math: the user's custom layout if set, else the
   // live entity position. Decoupled from the running sim, which moves chars.
   function posOf(id) { return editMode.layout[id] || chars[id]; }
@@ -157,7 +191,8 @@
   function hasCustomLayout() {
     return Object.keys(editMode.layout).length > 0
       || Object.keys(editMode.bench).length > 0
-      || Object.keys(editMode.podModes).length > 0;
+      || Object.keys(editMode.podModes).length > 0
+      || EFFORT_NODES.some(id => effortOf(id) !== 'med');   // non-default effort counts
   }
   // The single source of truth for "custom run": identical to the gate app.js
   // uses to decide whether to send &graph (getGraphConfig() non-null). When this
@@ -299,6 +334,8 @@
 	    if (sim.recalling) { sim.pendingStart = true; return; }
 	    if (sim.active) return;
 	    cancelAmbientAndSideJobs();
+	    // Meter switches to "actual" for the run and starts accumulating usage SSE.
+	    meter.mode = 'actual'; meter.actual = 0; meter.byAgent = Object.create(null);
 	    sim.active = true; sim.presented = false; sim.boardActive = false;
 	    sim.pendingStart = false;
 	    sim.kbOpen = null;
@@ -709,7 +746,7 @@
   }
 
   // ─── Pixel helpers ──────────────────────────────────────────────────────────
-  let canvas, c, animId, reducedMotion = false, tick = 0, clickHandler = null, hoverHandler = null, selected = null, presentHandler = null;
+  let canvas, c, animId, reducedMotion = false, tick = 0, clickHandler = null, hoverHandler = null, selected = null, presentHandler = null, onSpecChange = null;
   let kbCount = 0, langMode = 'bilingual', fly = null;   // shelf count, language sign, flying-book anim
   function chan(hx,i){ return parseInt(hx.slice(1+i*2,3+i*2),16); }
   function rgba(hx,a){ return `rgba(${chan(hx,0)},${chan(hx,1)},${chan(hx,2)},${a})`; }
@@ -1174,6 +1211,7 @@
     if (fly) drawFlyingBook();
     if (customRunView()) drawRunDocs();    // result icons flying worker → 合成
     if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
+    drawTokenMeter();                      // live estimate / actual token readout
   }
 
   // ─── Custom-layout run overlays ─────────────────────────────────────────────
@@ -1277,9 +1315,33 @@
     });
   }
 
+  // Effort badge dots (● / ●● / ●●●) for a level, coloured by the worker.
+  const EFFORT_DOTS = { low: '●', med: '●●', high: '●●●' };
+  // Draw a clickable effort badge just under a worker's feet. Registers a hit
+  // rect in editMode.effortBadges so a click cycles low→med→high.
+  function drawEffortBadge(id) {
+    const e = chars[id];
+    const lvl = effortOf(id);
+    const label = EFFORT_DOTS[lvl];
+    const bw = 22, bh = 10;
+    const bx = e.x - bw / 2, by = e.y + 9;
+    editMode.effortBadges.push({ x: bx, y: by, w: bw, h: bh, id });
+    c.save();
+    c.fillStyle = rgba('#1C1917', 0.82);
+    roundRect(px(bx), px(by), px(bw), px(bh), SCALE * 1.4); c.fill();
+    c.fillStyle = e.role.shirt;
+    c.font = `${9}px system-ui, sans-serif`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(label, px(bx + bw / 2), px(by + bh / 2) + 1);
+    c.restore();
+  }
+
   // Greyed benched workers, the clickable mode badges, and a subtle hint.
   function drawEditOverlay() {
     editMode.badges = [];
+    editMode.effortBadges = [];
+    // Per-worker effort knob (only for effort nodes that are enabled).
+    EFFORT_NODES.forEach(id => { if (!editMode.bench[id]) drawEffortBadge(id); });
     // Grey out benched workers with a wash.
     EDITABLE.forEach(id => {
       if (!editMode.bench[id]) return;
@@ -1319,6 +1381,36 @@
     c.textAlign = 'center'; c.textBaseline = 'top';
     c.fillText('編輯模式：拖曳小幫手分組、點徽章切換平行/接力、拖到休息區停用',
       px(LOGICAL_W / 2), px(WALL * TILE + 2));
+    c.restore();
+  }
+
+  // ─── Token meter ────────────────────────────────────────────────────────────
+  // A small readout + bar in the office's top-right corner. Shows the live
+  // estimate ("預估 ~28k") while tuning, and the actual accumulated total
+  // ("實際 31k") during/after a run. The bar length is relative to a soft cap.
+  const METER_CAP = 45000;   // ~深度精讀 upper bound; bar saturates here
+  function drawTokenMeter() {
+    const est = estimateTokens();
+    const isActual = meter.mode === 'actual';
+    const val = isActual ? meter.actual : est;
+    const label = isActual ? '實際 ' + fmtKPlain(val) : '預估 ' + fmtK(val);
+    const w = 58, h = 20;
+    const x = LOGICAL_W - w - 4, y = WALL * TILE + 3;
+    c.save();
+    // Panel.
+    c.fillStyle = rgba('#FFFFFF', 0.9);
+    c.strokeStyle = rgba('#1C1917', 0.18); c.lineWidth = SCALE * 0.6;
+    roundRect(px(x), px(y), px(w), px(h), SCALE * 1.6); c.fill(); c.stroke();
+    // Label.
+    c.fillStyle = isActual ? ACCENT : '#57534E';
+    c.font = `${11}px system-ui, sans-serif`;
+    c.textAlign = 'left'; c.textBaseline = 'middle';
+    c.fillText(label, px(x + 4), px(y + 7) + 1);
+    // Bar.
+    const barX = x + 4, barY = y + 13, barW = w - 8, barH = 3;
+    rect(barX, barY, barW, barH, rgba('#1C1917', 0.10));
+    const p = Math.max(0, Math.min(1, val / METER_CAP));
+    rect(barX, barY, Math.max(1, barW * p), barH, isActual ? ACCENT : '#3B82F6');
     c.restore();
   }
 
@@ -1429,15 +1521,26 @@
     return ids.slice().sort((a, b) => (posOf(a).x - posOf(b).x) || (posOf(a).y - posOf(b).y));
   }
 
-  // Build the graphConfig (v1). Returns null when the layout equals the default
-  // (all four enabled; the three stage-1 workers in one parallel group).
+  // Build the graphConfig (v2: nodes with enabled+effort). Returns null when the
+  // spec equals the 標準 default — all enabled, all effort "med", the three
+  // stage-1 workers in a single parallel group — so default runs send no &graph
+  // and behave byte-for-byte as today.
   function getGraphConfig() {
     if (!hasCustomLayout()) return null;   // untouched office → no graph param
-    const enabled = {};
     let anyDisabled = false;
-    for (const id of EDITABLE) {
-      if (editMode.bench[id]) { enabled[id] = false; anyDisabled = true; }
+    for (const id of EDITABLE) if (editMode.bench[id]) anyDisabled = true;
+    const synthEnabled = !editMode.bench.synth;   // FE never benches synth, kept for shape
+    if (!synthEnabled) anyDisabled = true;
+
+    // v2 nodes: enabled (default true) + effort (default "med", only where it applies).
+    const nodes = {};
+    for (const id of EFFORT_NODES) {
+      nodes[id] = { enabled: !editMode.bench[id], effort: effortOf(id) };
     }
+    nodes.ctx = { enabled: !editMode.bench.ctx };
+    nodes.synth = { enabled: synthEnabled };
+
+    // Pods (legacy groups) — kept working; only emitted when pods exist.
     const pods = computePods();
     const groups = [];
     for (const pod of pods) {
@@ -1445,34 +1548,100 @@
       const members = mode === 'relay' ? podOrder(pod) : pod.slice();
       groups.push({ members, mode });
     }
-    // Default detection: nothing benched, and the three stage-1 workers form a
-    // single parallel group.
-    const isDefault = !anyDisabled
-      && groups.length === 1
+    // A single parallel group over all three stage-1 workers is the default shape.
+    const defaultGroup = groups.length === 1
       && groups[0].mode === 'parallel'
       && groups[0].members.length === STAGE1.length;
-    if (isDefault) return null;
-    const cfg = { v: 1, enabled, groups };
+    const nonDefaultEffort = EFFORT_NODES.some(id => effortOf(id) !== 'med');
+
+    // Full default spec → null (no &graph, unchanged behaviour).
+    if (!anyDisabled && defaultGroup && !nonDefaultEffort) return null;
+
+    const cfg = { v: 2, nodes };
+    // Attach groups only when a non-default pod arrangement exists (a real
+    // multi-member pod that isn't just the default single-parallel group).
+    const realPods = groups.filter(g => g.members.length >= 2);
+    if (realPods.length && !defaultGroup) cfg.groups = groups;
     return cfg;
+  }
+
+  // ─── Task presets ───────────────────────────────────────────────────────────
+  // A preset is a spec of {enabled, effort} per node. Applying one sets the
+  // office state (bench disabled nodes, set effort badges), clears pods, and
+  // leaves each worker at its default seat position so the run reads cleanly.
+  // '標準' is the default: all enabled, all med → getGraphConfig() === null.
+  const PRESETS = {
+    quick: {   // ⚡ 快速掃描: sum(low)+ctx; jargon+comments off; synth on
+      sum: { enabled: true, effort: 'low' }, jargon: { enabled: false },
+      comments: { enabled: false }, ctx: { enabled: true }, synth: { enabled: true },
+    },
+    standard: {  // 📄 標準: all enabled, all med (the default)
+      sum: { enabled: true, effort: 'med' }, jargon: { enabled: true, effort: 'med' },
+      comments: { enabled: true, effort: 'med' }, ctx: { enabled: true }, synth: { enabled: true },
+    },
+    jargon: {   // 🎯 術語特訓: jargon(high)+ctx; sum(low); comments off
+      sum: { enabled: true, effort: 'low' }, jargon: { enabled: true, effort: 'high' },
+      comments: { enabled: false }, ctx: { enabled: true }, synth: { enabled: true },
+    },
+    deep: {   // 🔬 深度精讀: all enabled, all high
+      sum: { enabled: true, effort: 'high' }, jargon: { enabled: true, effort: 'high' },
+      comments: { enabled: true, effort: 'high' }, ctx: { enabled: true }, synth: { enabled: true },
+    },
+  };
+
+  function applyPreset(name) {
+    const spec = PRESETS[name];
+    if (!spec) return;
+    // Reset arrangement: clear custom positions + pods so the preset shows a
+    // clean default room (workers back at their seats), then apply the spec.
+    editMode.layout = Object.create(null);
+    editMode.podModes = Object.create(null);
+    editMode.bench = Object.create(null);
+    editMode.effort = Object.create(null);
+    for (const id of EDITABLE.concat('synth')) {
+      const node = spec[id];
+      if (!node) continue;
+      if (node.enabled === false) editMode.bench[id] = true;
+      if (EFFORT_NODES.includes(id) && EFFORT_LEVELS.includes(node.effort) && node.effort !== 'med') {
+        editMode.effort[id] = node.effort;
+      }
+    }
+    // Snap editable workers back to their seats so nothing looks podded/moved.
+    EDITABLE.forEach(id => {
+      const s = chars[id].station;
+      chars[id].x = s.seat[0] * TILE + 8; chars[id].y = s.seat[1] * TILE + 8;
+      chars[id].tile = s.seat.slice();
+    });
+    persistGraph();
+    meter.mode = 'estimate';
+    if (reducedMotion) render();
   }
 
   function persistGraph() {
     try {
       const layout = {};
       for (const id of EDITABLE) if (editMode.layout[id]) layout[id] = editMode.layout[id];
-      const data = { v: 1, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes };
+      const effort = {};
+      for (const id of EFFORT_NODES) if (effortOf(id) !== 'med') effort[id] = effortOf(id);
+      const data = { v: 2, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes, effort };
       localStorage.setItem(GRAPH_LS_KEY, JSON.stringify(data));
     } catch (_) { /* storage may be unavailable */ }
   }
   function restoreGraph() {
     let data;
     try { data = JSON.parse(localStorage.getItem(GRAPH_LS_KEY) || 'null'); } catch (_) { return; }
-    if (!data || data.v !== 1) return;
+    if (!data || (data.v !== 1 && data.v !== 2)) return;
     editMode.bench = Object.create(null);
     (data.bench || []).forEach(id => { if (EDITABLE.includes(id)) editMode.bench[id] = true; });
     editMode.podModes = Object.create(null);
     if (data.podModes && typeof data.podModes === 'object') {
       for (const k in data.podModes) if (data.podModes[k] === 'relay') editMode.podModes[k] = 'relay';
+    }
+    editMode.effort = Object.create(null);
+    if (data.effort && typeof data.effort === 'object') {
+      for (const id of EFFORT_NODES) {
+        if (EFFORT_LEVELS.includes(data.effort[id])) editMode.effort[id] = data.effort[id];
+      }
     }
     editMode.layout = Object.create(null);
     if (data.layout) {
@@ -1524,11 +1693,24 @@
   function editPointerDown(ev) {
     if (!editMode.on) return;
     const p = locateLogical(ev);
-    // Mode badge click takes priority (cycles parallel↔relay).
+    // Effort badge click takes priority (cycles low→med→high).
+    for (const b of editMode.effortBadges) {
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        const cur = effortOf(b.id);
+        const next = EFFORT_LEVELS[(EFFORT_LEVELS.indexOf(cur) + 1) % EFFORT_LEVELS.length];
+        if (next === 'med') delete editMode.effort[b.id]; else editMode.effort[b.id] = next;
+        persistGraph(); if (reducedMotion) render();
+        if (onSpecChange) onSpecChange();
+        ev.preventDefault();
+        return;
+      }
+    }
+    // Mode badge click (cycles parallel↔relay).
     for (const b of editMode.badges) {
       if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
         editMode.podModes[b.key] = editMode.podModes[b.key] === 'relay' ? 'parallel' : 'relay';
         persistGraph(); if (reducedMotion) render();
+        if (onSpecChange) onSpecChange();
         ev.preventDefault();
         return;
       }
@@ -1559,6 +1741,7 @@
     else delete editMode.bench[id];
     editMode.dragId = null;
     persistGraph();
+    if (onSpecChange) onSpecChange();
     if (reducedMotion) render();
   }
 
@@ -1575,6 +1758,49 @@
     setEditMode(on) { if (on) enterEditMode(); else exitEditMode(); },
     isEditMode() { return editMode.on; },
     getGraphConfig() { return getGraphConfig(); },
+    // ─── Presets + effort + token meter ───────────────────────────────────────
+    applyPreset(name) { applyPreset(name); },
+    // Which built-in preset the current spec matches ('standard' when default),
+    // or null when it's a free-tuned arrangement. Lets the picker highlight one.
+    getActivePreset() {
+      const cfg = getGraphConfig();
+      if (cfg === null) return 'standard';   // 標準 default
+      // No pods and only node enabled/effort differences → try to match a preset.
+      if (cfg.groups) return null;
+      const bench = id => !!editMode.bench[id];
+      const eff = id => effortOf(id);
+      const matches = spec => EDITABLE.concat('synth').every(id => {
+        const n = spec[id]; if (!n) return true;
+        if ((n.enabled === false) !== bench(id)) return false;
+        if (EFFORT_NODES.includes(id) && n.enabled !== false) {
+          const want = EFFORT_LEVELS.includes(n.effort) ? n.effort : 'med';
+          if (want !== eff(id)) return false;
+        }
+        return true;
+      });
+      for (const name of ['quick', 'jargon', 'deep']) if (matches(PRESETS[name])) return name;
+      return null;
+    },
+    // Live estimate in tokens (for the picker labels, etc.).
+    getEstimate() { return estimateTokens(); },
+    getEffort(id) { return effortOf(id); },
+    // Register a callback fired whenever the spec changes via in-office edits
+    // (effort/mode badge clicks, benching). Lets app.js refresh its picker/meter.
+    setSpecChangeHandler(fn) { onSpecChange = typeof fn === 'function' ? fn : null; },
+    // Token meter (actual). addUsage accumulates per-agent usage SSE; setUsageTotal
+    // finalizes from result.usage.total. Both switch the meter into 'actual' mode.
+    addUsage(agent, tokens) {
+      const t = Number(tokens) || 0;
+      meter.mode = 'actual';
+      if (agent) meter.byAgent[agent] = (meter.byAgent[agent] || 0) + t;
+      meter.actual += t;
+      if (reducedMotion) render();
+    },
+    setUsageTotal(total) {
+      const t = Number(total);
+      if (Number.isFinite(t) && t >= 0) { meter.mode = 'actual'; meter.actual = t; }
+      if (reducedMotion) render();
+    },
     setAgentState(id, state) {
       if (!chars[id] || !VALID.includes(state)) return;
       // A benched worker is disabled for this run: keep it asleep, ignore any
@@ -1613,6 +1839,7 @@
     reset() {
       sim.active = false; selected = null; sim.presented = false; sim.boardActive = false;
       sim.customView = false; sim.customRun = false; runDocs.length = 0;
+      meter.mode = 'estimate';   // back to the live estimate for tuning
       sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
       sim.leaderQueue = []; sim.leaderBusy = false;
       ambLocks.kitchen = ambLocks.snack = ambLocks.cooler = false;

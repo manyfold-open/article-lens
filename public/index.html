@@ -148,6 +148,35 @@
       font-weight: 700;
     }
 
+    /* ── Task preset picker (segmented control) ──────────────────────────── */
+    .preset-picker {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      overflow: hidden;
+      background: var(--card);
+    }
+    .preset-btn {
+      font-family: var(--body);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 11px;
+      background: transparent;
+      border: none;
+      border-right: 1px solid var(--border);
+      cursor: pointer;
+      color: var(--muted);
+      white-space: nowrap;
+      transition: background 0.15s, color 0.15s;
+    }
+    .preset-btn:last-child { border-right: none; }
+    .preset-btn:hover { background: var(--bg); color: var(--ink); }
+    .preset-btn.active {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+    }
+
     /* ── Edit-office toggle ──────────────────────────────────────────────── */
     .edit-toggle {
       font-family: var(--body);
@@ -1565,6 +1594,7 @@
       .topbar-right { gap: 6px; }
       .toggle-btn { font-size: 10px; padding: 4px 8px; }
       .kb-pill { font-size: 11px; padding: 4px 10px; }
+      .preset-btn { font-size: 10px; padding: 4px 7px; }
 
       /* On mobile the canvas is width-driven (height:auto), so let the wrap
          size to it instead of clipping the taller top-down room. */
@@ -1632,6 +1662,16 @@
 <header class="topbar">
   <a class="logo" href="/">HN Lens <span class="accent">📰</span></a>
   <div class="topbar-right">
+    <div id="preset-picker" class="preset-picker" role="group" aria-label="任務模式 / Task preset">
+      <button class="preset-btn" data-preset="quick" type="button"
+        title="⚡ 快速掃描：只跑摘要(低)+判讀，省 token">⚡ 快速掃描</button>
+      <button class="preset-btn active" data-preset="standard" type="button"
+        title="📄 標準：全員中檔，完整報告（預設）">📄 標準</button>
+      <button class="preset-btn" data-preset="jargon" type="button"
+        title="🎯 術語特訓：術語(高)+判讀，摘要(低)，關掉留言">🎯 術語特訓</button>
+      <button class="preset-btn" data-preset="deep" type="button"
+        title="🔬 深度精讀：全員高檔，最完整">🔬 深度精讀</button>
+    </div>
     <button id="edit-toggle" class="edit-toggle" type="button" aria-pressed="false"
       title="編排辦公室：拖曳小幫手分組、設定協作模式、停用 / Arrange the office">🛠️ 編排辦公室</button>
   </div>
