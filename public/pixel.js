@@ -2243,7 +2243,7 @@
     computePods().forEach(pod => {
       if (pod.length < 2) return;
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      pod.forEach(id => { const e = chars[id];
+      pod.forEach(id => { const e = posOf(id);   // group box tracks the grouping coords (layout), not the live/wandering sprite — otherwise it stretches across the room
         minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x);
         minY = Math.min(minY, e.y); maxY = Math.max(maxY, e.y);
       });
@@ -2360,7 +2360,7 @@
     computePods().forEach(pod => {
       if (pod.length < 2) return;
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      pod.forEach(id => { const e = chars[id];
+      pod.forEach(id => { const e = posOf(id);   // group box tracks the grouping coords (layout), not the live/wandering sprite — otherwise it stretches across the room
         minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x);
         minY = Math.min(minY, e.y); maxY = Math.max(maxY, e.y);
       });
