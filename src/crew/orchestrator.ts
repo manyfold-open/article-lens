@@ -1,6 +1,6 @@
 import type {
   Env, HNItem, HNComment, ItemType, SSEEvent, AgentName, HNLensResult,
-  JargonTerm, BiStr, GraphConfig,
+  JargonTerm, BiStr, GraphConfig, Effort,
 } from '../schema'
 import { getSubtrees } from '../hn'
 import { stripHtml } from '../extract'
@@ -23,6 +23,44 @@ function toBi(v: unknown): BiStr {
 }
 
 export type SharedSections = Pick<HNLensResult, 'summary' | 'comment_digest' | 'verdict'>
+
+// ── Token meter ────────────────────────────────────────────────────
+// Estimate tokens ≈ (promptChars + responseChars) / 2.5 (matches the comment
+// pipeline's blended CJK/en heuristic). We measure at each agent call site
+// where we hold both the prompt(s) sent and the text returned; an agent may
+// call the runtime several times (jargon windows, comment map→reduce) so we
+// accumulate chars per agent and convert once when the agent resolves.
+const USAGE_CHARS_PER_TOKEN = 2.5
+const estTokens = (chars: number) => Math.ceil(chars / USAGE_CHARS_PER_TOKEN)
+
+interface UsageMeter {
+  // Accumulate raw prompt+response chars for an agent across its calls.
+  add(agent: AgentName, promptChars: number, responseChars: number): void
+  // Convert an agent's accumulated chars to tokens, emit a usage SSE, and lock
+  // in its byAgent total. Safe to call once per agent after it resolves.
+  finish(agent: AgentName): void
+  byAgent: Record<string, number>
+  total(): number
+}
+
+function makeMeter(emit: (e: SSEEvent) => void): UsageMeter {
+  const chars: Partial<Record<AgentName, number>> = {}
+  const byAgent: Record<string, number> = {}
+  return {
+    add(agent, promptChars, responseChars) {
+      chars[agent] = (chars[agent] ?? 0) + promptChars + responseChars
+    },
+    finish(agent) {
+      const tokens = estTokens(chars[agent] ?? 0)
+      byAgent[agent] = tokens
+      emit({ event: 'usage', agent, tokens })
+    },
+    byAgent,
+    total() {
+      return Object.values(byAgent).reduce((a, b) => a + b, 0)
+    },
+  }
+}
 
 interface OrchestrateOpts {
   kbTerms?: string[]
@@ -103,6 +141,11 @@ export async function orchestrateAnalysis(
   const fallbackAgents = new Set<AgentName>()
   const skippedAgents = new Set<AgentName>()
   const agentSources: NonNullable<HNLensResult['flags']['agent_sources']> = {}
+  const meter = makeMeter(emit)
+  // Effort per agent: from the graph when present, else 'med' (= today).
+  const eff: Record<EffortAgent, Effort> = graph
+    ? graph.effort
+    : { sum: 'med', jargon: 'med', comments: 'med' }
 
   let summary: HNLensResult['summary']
   let comment_digest: HNLensResult['comment_digest']
@@ -116,15 +159,15 @@ export async function orchestrateAnalysis(
     const runSum = (extra?: string): Promise<HNLensResult['summary']> =>
       haveShared ? replaySection('sum', opts.cachedShared!.summary, emit, agentSources)
         : graph.enabled.sum === false ? skipSummary(mock, emit, skippedAgents, agentSources)
-          : runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources, extra)
+          : runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources, extra, eff.sum, meter)
     const runCom = (extra?: string): Promise<HNLensResult['comment_digest']> =>
       haveShared ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
         : graph.enabled.comments === false ? skipComments(mock, emit, skippedAgents, agentSources)
-          : runComments(env, item, mock, emit, fallbackAgents, agentSources, extra)
+          : runComments(env, item, mock, emit, fallbackAgents, agentSources, extra, eff.comments, meter)
     const runJar = (extra?: string): Promise<JargonTerm[]> =>
       haveJargon ? replaySection('jargon', opts.cachedJargon!, emit, agentSources)
         : graph.enabled.jargon === false ? skipJargon(emit, skippedAgents, agentSources)
-          : runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, extra)
+          : runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, extra, eff.jargon, meter)
 
     const stage1 = await runStage1Graph(graph, { sum: runSum, comments: runCom, jargon: runJar })
     summary = stage1.sum
@@ -136,23 +179,23 @@ export async function orchestrateAnalysis(
       ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
       : graph.enabled.ctx === false
         ? await skipContext(mock, emit, skippedAgents, agentSources)
-        : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources)
+        : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources, meter)
   } else {
     // ── Stage 1: parallel ──────────────────────────────────────────
     const summaryP: Promise<HNLensResult['summary']> = haveShared
       ? replaySection('sum', opts.cachedShared!.summary, emit, agentSources)
-      : runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources)
+      : runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources, undefined, eff.sum, meter)
 
     const commentsP: Promise<HNLensResult['comment_digest']> = haveShared
       ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
       : shouldRun(captain, 'comments')
-        ? runComments(env, item, mock, emit, fallbackAgents, agentSources)
+        ? runComments(env, item, mock, emit, fallbackAgents, agentSources, undefined, eff.comments, meter)
         : skipComments(mock, emit, skippedAgents, agentSources)
 
     const jargonP: Promise<JargonTerm[]> = haveJargon
       ? replaySection('jargon', opts.cachedJargon!, emit, agentSources)
       : shouldRun(captain, 'jargon')
-        ? runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources)
+        ? runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, undefined, eff.jargon, meter)
         : skipJargon(emit, skippedAgents, agentSources)
 
     const [summaryR, comment_digestR] = await Promise.all([summaryP, commentsP])
@@ -162,7 +205,7 @@ export async function orchestrateAnalysis(
     // ── Stage 2: verdict, now that it can see real content ──────────
     verdict = haveShared
       ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
-      : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources)
+      : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources, meter)
 
     jargon = await jargonP
   }
@@ -190,7 +233,11 @@ export async function orchestrateAnalysis(
   }
 
   // ── Synthesizer: integration + QA prune ─────────────────────────
-  await curate(env, item, result, emit, agentSources)
+  await curate(env, item, result, emit, agentSources, meter)
+
+  // ── Token meter: finalise total + per-agent, emit a closing usage. ──
+  result.usage = { total: meter.total(), byAgent: meter.byAgent }
+  emit({ event: 'usage', tokens: 0, total: result.usage.total })
   return result
 }
 
@@ -261,8 +308,12 @@ function shouldRun(plan: CaptainPlan, agent: WorkerAgent): boolean {
 
 // ── Graph (v1) helpers ─────────────────────────────────────────────
 type Stage1Agent = 'sum' | 'jargon' | 'comments'
+// Agents whose effort knob changes concrete params. ctx/synth are effort-less.
+type EffortAgent = 'sum' | 'jargon' | 'comments'
 interface NormalizedGraph {
   enabled: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx', boolean>>
+  // Per-agent effort (defaults 'med' = today). Only sum/jargon/comments matter.
+  effort: Record<EffortAgent, Effort>
   groups: { members: Stage1Agent[]; mode: 'parallel' | 'relay' }[]
 }
 
@@ -271,11 +322,33 @@ function isStage1(s: string): s is Stage1Agent {
   return s === 'sum' || s === 'jargon' || s === 'comments'
 }
 
+function normEffort(e: unknown): Effort {
+  return e === 'low' || e === 'high' ? e : 'med'
+}
+
 // Validate + normalise a client graph into something safe to execute. Returns
-// null if it isn't a usable v1 object, so callers fall back to today's path.
+// null if it isn't a usable v1/v2 object, so callers fall back to today's path.
+// v2: derive enabled+effort from `nodes`. v1: fall back to the legacy `enabled`
+// map with effort 'med' throughout (so v1 graphs keep today's params).
 function normalizeGraph(g: GraphConfig | null | undefined): NormalizedGraph | null {
   if (!g || typeof g.v !== 'number') return null
-  const enabled = (g.enabled && typeof g.enabled === 'object') ? g.enabled : {}
+  const effort: Record<EffortAgent, Effort> = { sum: 'med', jargon: 'med', comments: 'med' }
+  let enabled: NormalizedGraph['enabled']
+  if (g.nodes && typeof g.nodes === 'object') {
+    // ── v2: nodes carry per-agent enabled + effort ──────────────────
+    enabled = {}
+    for (const a of ['sum', 'jargon', 'comments', 'ctx'] as const) {
+      const n = g.nodes[a]
+      if (n && typeof n === 'object' && n.enabled === false) enabled[a] = false
+    }
+    for (const a of ['sum', 'jargon', 'comments'] as const) {
+      const n = g.nodes[a]
+      if (n && typeof n === 'object') effort[a] = normEffort(n.effort)
+    }
+  } else {
+    // ── v1: legacy skip map, all agents at 'med' (= today's params) ──
+    enabled = (g.enabled && typeof g.enabled === 'object') ? g.enabled : {}
+  }
   const rawGroups = Array.isArray(g.groups) ? g.groups : []
   const groups: NormalizedGraph['groups'] = []
   for (const grp of rawGroups) {
@@ -285,7 +358,7 @@ function normalizeGraph(g: GraphConfig | null | undefined): NormalizedGraph | nu
     if (!members.length) continue
     groups.push({ members, mode: grp.mode === 'relay' ? 'relay' : 'parallel' })
   }
-  return { enabled, groups }
+  return { enabled, effort, groups }
 }
 
 // Mirror graph.enabled into the captain plan so the office shows the right set.
@@ -433,11 +506,13 @@ async function runSummary(
   env: Env, item: HNItem, articleText: string, itemType: ItemType,
   mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
-  extraContext?: string
+  extraContext?: string, effort: Effort = 'med', meter?: UsageMeter
 ): Promise<HNLensResult['summary']> {
   emit({ event: 'status', agent: 'sum', state: 'running', label: LABELS.sum.running })
   try {
-    const text = await callMfAgent(env, env.AGENT_SUMMARIZER, buildSummarizerPrompt(item, articleText, itemType, extraContext))
+    const prompt = buildSummarizerPrompt(item, articleText, itemType, extraContext, effort)
+    const text = await callMfAgent(env, env.AGENT_SUMMARIZER, prompt)
+    meter?.add('sum', prompt.length, text.length)
     const p = parseLoose<{ tldr?: unknown; key_points?: unknown[] }>(text)
     const summary: HNLensResult['summary'] = (p && p.tldr)
       ? { tldr: toBi(p.tldr), key_points: (Array.isArray(p.key_points) ? p.key_points : []).map(toBi).filter(k => k.zh) }
@@ -453,6 +528,8 @@ async function runSummary(
     emit({ event: 'section', agent: 'sum', data: mock.summary })
     if (agentSources) agentSources.sum = { mode: 'fallback', reason: fallbackReason('小摘', e, sandboxReason, '改用本地備援摘要') }
     return mock.summary
+  } finally {
+    meter?.finish('sum')
   }
 }
 
@@ -476,11 +553,13 @@ async function skipSummary(
 async function runContext(
   env: Env, item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'],
   mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
-  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
+  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>, meter?: UsageMeter
 ): Promise<HNLensResult['verdict']> {
   emit({ event: 'status', agent: 'ctx', state: 'running', label: LABELS.ctx.running })
   try {
-    const text = await callMfAgent(env, env.AGENT_CONTEXT, buildContextPrompt(item, summary, cd))
+    const prompt = buildContextPrompt(item, summary, cd)
+    const text = await callMfAgent(env, env.AGENT_CONTEXT, prompt)
+    meter?.add('ctx', prompt.length, text.length)
     const p = parseLoose<{ worth_reading?: string; why_frontpage?: unknown; tier?: string }>(text)
     const verdict: HNLensResult['verdict'] = (p && p.worth_reading)
       ? { worth_reading: p.worth_reading as HNLensResult['verdict']['worth_reading'],
@@ -498,6 +577,8 @@ async function runContext(
     emit({ event: 'section', agent: 'ctx', data: mock.verdict })
     if (agentSources) agentSources.ctx = { mode: 'fallback', reason: fallbackReason('小導', e, sandboxReason, '改用本地裁定') }
     return mock.verdict
+  } finally {
+    meter?.finish('ctx')
   }
 }
 
@@ -520,11 +601,29 @@ async function skipContext(
   return empty
 }
 
+// Comment pipeline knobs per effort. 'med' reproduces today's numbers exactly:
+// single-thread ranked budget 2600, up to 8 subtrees, ~550-token map budget,
+// reduce summaries capped at 8000 chars, standard camps ask.
+interface CommentParams {
+  rankedBudget: number
+  maxSubtrees: number
+  mapBudget: number
+  reduceCap: number
+  campsHint: string
+}
+function commentParams(effort: Effort): CommentParams {
+  if (effort === 'low')
+    return { rankedBudget: 1400, maxSubtrees: 4, mapBudget: 350, reduceCap: 4000, campsHint: '只挑最主要的 2-3 個派別（寧缺勿濫）。' }
+  if (effort === 'high')
+    return { rankedBudget: 3600, maxSubtrees: 12, mapBudget: 750, reduceCap: 12000, campsHint: '盡量涵蓋更多派別（含 vocal-minority／fringe），最多 6 個。' }
+  return { rankedBudget: 2600, maxSubtrees: 8, mapBudget: 550, reduceCap: 8000, campsHint: '' }
+}
+
 // ── 小潛 comments (token-budgeted, high-signal first) ──────────────
 async function runComments(
   env: Env, item: HNItem, mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
-  extraContext?: string
+  extraContext?: string, effort: Effort = 'med', meter?: UsageMeter
 ): Promise<HNLensResult['comment_digest']> {
   const commentCount = item.children?.length ?? 0
   if (commentCount === 0) {
@@ -534,8 +633,9 @@ async function runComments(
     return mock.comment_digest
   }
   emit({ event: 'status', agent: 'comments', state: 'running', label: bz(`潛進 ${commentCount} 樓…`) })
+  const params = commentParams(effort)
   try {
-    const text = await runCommentPipeline(item, env, emit, extraContext)
+    const text = await runCommentPipeline(item, env, emit, extraContext, params, meter)
     const p = parseLoose<HNLensResult['comment_digest']>(text)
     const cd = (p?.overview || p?.camps) ? normalizeDigest(p!) : mock.comment_digest
     emit({ event: 'status', agent: 'comments', state: 'done', label: LABELS.comments.done })
@@ -549,6 +649,8 @@ async function runComments(
     emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
     if (agentSources) agentSources.comments = { mode: 'fallback', reason: fallbackReason('小潛', e, sandboxReason, '改用本地留言摘要') }
     return mock.comment_digest
+  } finally {
+    meter?.finish('comments')
   }
 }
 
@@ -600,12 +702,15 @@ async function curate(
   item: HNItem,
   result: HNLensResult,
   emit: (e: SSEEvent) => void,
-  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
+  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
+  meter?: UsageMeter
 ): Promise<void> {
   if (!result.jargon.length && !result.summary.key_points.length && !result.comment_digest.camps.length) return
   emit({ event: 'status', agent: 'synth', state: 'running', label: bz('整合中…') })
   try {
-    const text = await callMfAgent(env, env.AGENT_SYNTHESIZER, buildCuratorPrompt(item, result), { timeoutMs: 25_000, attempts: 1 })
+    const prompt = buildCuratorPrompt(item, result)
+    const text = await callMfAgent(env, env.AGENT_SYNTHESIZER, prompt, { timeoutMs: 25_000, attempts: 1 })
+    meter?.add('synth', prompt.length, text.length)
     const d = parseLoose<CuratorDecision>(text)
     if (d) applyCuration(result, d)
     emit({ event: 'status', agent: 'synth', state: 'done', label: bz('整合完成!') })
@@ -619,6 +724,8 @@ async function curate(
         ? bz(`合成的 sandbox/runtime 不在線，保留各組原始結果，不再等 QA 修剪。原因：${sandboxReason}`)
         : bz(`合成超過 25 秒或 runtime 失敗；保留各組原始結果，不再等 QA 修剪。原因：${shortErr(e)}`),
     }
+  } finally {
+    meter?.finish('synth')
   }
 }
 
@@ -669,17 +776,20 @@ const LABELS: Record<AgentName, { running: BiStr; done: BiStr }> = {
 }
 
 // ── Comment pipeline (map → reduce), high-signal first + token budget ──
-async function runCommentPipeline(item: HNItem, env: Env, emit: (e: SSEEvent) => void, extraContext?: string): Promise<string> {
+async function runCommentPipeline(
+  item: HNItem, env: Env, emit: (e: SSEEvent) => void, extraContext?: string,
+  params: CommentParams = commentParams('med'), meter?: UsageMeter
+): Promise<string> {
   const commentCount = item.children?.length ?? 0
 
   // Small thread: a single call over the (ranked) comments.
   if (commentCount < 10) {
-    const allText = rankedCommentsText(item.children ?? [], 2600)
-    return singleCommentCall(env, allText, item, extraContext)
+    const allText = rankedCommentsText(item.children ?? [], params.rankedBudget)
+    return singleCommentCall(env, allText, item, extraContext, params, meter)
   }
 
   // Large thread: map-reduce over the highest-signal top-level subtrees.
-  const subtrees = topSubtrees(item, 8)
+  const subtrees = topSubtrees(item, params.maxSubtrees)
   const sampled = subtrees.length < commentCount
   emit({ event: 'step', agent: 'comments',
     label: bz(`挑出 ${subtrees.length} 串高關注留言${sampled ? '（採樣）' : ''}`) })
@@ -687,17 +797,26 @@ async function runCommentPipeline(item: HNItem, env: Env, emit: (e: SSEEvent) =>
   const mapResults: string[] = []
   for (let i = 0; i < subtrees.length; i += 5) {
     const batch = subtrees.slice(i, i + 5)
-    const results = await Promise.all(batch.map(sub => mapSubtree(env, sub, item.id)))
+    const results = await Promise.all(batch.map(sub => mapSubtree(env, sub, item.id, params.mapBudget, meter)))
     mapResults.push(...results.filter(Boolean))
     emit({ event: 'step', agent: 'comments', label: bz(`已摘要 ${Math.min(i + 5, subtrees.length)}/${subtrees.length} 串`) })
   }
 
   emit({ event: 'step', agent: 'comments', label: bz('聚類派別分析中…') })
-  return callMfAgent(env, env.AGENT_COMMENT_REDUCE, buildCommentReducePrompt(mapResults, item, extraContext))
+  const reducePrompt = buildCommentReducePrompt(mapResults, item, extraContext, params)
+  const reduceText = await callMfAgent(env, env.AGENT_COMMENT_REDUCE, reducePrompt)
+  meter?.add('comments', reducePrompt.length, reduceText.length)
+  return reduceText
 }
 
-async function singleCommentCall(env: Env, text: string, item: HNItem, extraContext?: string): Promise<string> {
-  return callMfAgent(env, env.AGENT_COMMENT_REDUCE, buildCommentReducePrompt([text], item, extraContext))
+async function singleCommentCall(
+  env: Env, text: string, item: HNItem, extraContext?: string,
+  params: CommentParams = commentParams('med'), meter?: UsageMeter
+): Promise<string> {
+  const prompt = buildCommentReducePrompt([text], item, extraContext, params)
+  const out = await callMfAgent(env, env.AGENT_COMMENT_REDUCE, prompt)
+  meter?.add('comments', prompt.length, out.length)
+  return out
 }
 
 // Rough token estimate: ~4 chars/token for mixed en, ~1.7 for CJK. Use a
@@ -721,9 +840,8 @@ function topSubtrees(item: HNItem, max: number): HNComment[][] {
   return scored.slice(0, max).map(s => s.sub)
 }
 
-async function mapSubtree(env: Env, subtree: HNComment[], itemId: number): Promise<string> {
-  // Budget ~550 tokens of thread text, highest-signal comments first.
-  const budget = 550
+async function mapSubtree(env: Env, subtree: HNComment[], itemId: number, budget = 550, meter?: UsageMeter): Promise<string> {
+  // Budget ~`budget` tokens of thread text, highest-signal comments first.
   let used = 0
   const lines: string[] = []
   for (const c of subtree) {
@@ -743,7 +861,9 @@ ${text}
 只回傳這個 JSON：
 {"stance":{"zh":"..."},"key_claims":[{"zh":"..."}],"is_correction_of_article":false,"sentiment":"agree","top_comment_id":${subtree[0]?.id ?? 0}}`
   try {
-    return await callMfAgent(env, env.AGENT_COMMENT_MAP, prompt)
+    const out = await callMfAgent(env, env.AGENT_COMMENT_MAP, prompt)
+    meter?.add('comments', prompt.length, out.length)
+    return out
   } catch {
     return ''
   }
@@ -771,8 +891,14 @@ function rankedCommentsText(comments: HNComment[], budgetTokens: number): string
 }
 
 // ── Prompt builders (zh-only output) ──────────────────────────────
-function buildSummarizerPrompt(item: HNItem, articleText: string, itemType: ItemType, extraContext?: string): string {
+function buildSummarizerPrompt(item: HNItem, articleText: string, itemType: ItemType, extraContext?: string, effort: Effort = 'med'): string {
   const content = (articleText || item.text || '(no article text available)').slice(0, 6000)
+  // effort → how much the summary says. 'med' reproduces today's ask exactly.
+  const ask = effort === 'low'
+    ? '產出一句精簡的 TL;DR + 最多 3 個最關鍵的重點（寧缺勿濫）。'
+    : effort === 'high'
+      ? '產出一句 TL;DR + 5-7 個重點，涵蓋更多面向與細節。'
+      : '產出一句 TL;DR + 3-4 個重點。'
   return `你是 小摘，精簡的中文摘要員。
 ${relayBlock(extraContext)}
 標題：${item.title}
@@ -780,7 +906,7 @@ ${relayBlock(extraContext)}
 內容：
 ${content}
 
-產出一句 TL;DR + 3-4 個重點。若內容不足，從標題推測並註明不確定。全部只用中文。
+${ask}若內容不足，從標題推測並註明不確定。全部只用中文。
 
 只回傳這個 JSON（不要 markdown；字串值裡不要用 " 字元，用 ' 或「」）：
 {"tldr":{"zh":"..."},"key_points":[{"zh":"..."}]}`
@@ -795,9 +921,11 @@ function relayBlock(extraContext?: string): string {
 function buildJargonPrompt(
   item: HNItem, articleChunk: string, commentSample: string,
   part: { i: number; n: number }, known: string[], candidates: string[] = [],
-  extraContext?: string
+  extraContext?: string, effort: Effort = 'med'
 ): string {
   const where = part.n > 1 ? `（文章第 ${part.i + 1}/${part.n} 段）` : ''
+  // effort → per-window term target. 'med' keeps today's "10-16" ask verbatim.
+  const target = effort === 'low' ? '4-6' : effort === 'high' ? '12-16' : '10-16'
   const knownLine = known.length
     ? `\n讀者「已經會」這些詞，請務必【跳過】，把預算花在真正新的/較不顯而易見的詞上：\n${known.join('、')}\n`
     : ''
@@ -813,7 +941,7 @@ ${articleChunk || '(no article text available)'}
 ${commentSample ? `\nHN 留言取樣（這裡出現的詞 seen_in 標 "comments"）：\n${commentSample}` : ''}
 ${candLine}${knownLine}
 第一步：先判定「這篇文章的核心技術領域」（例如 AI/機器學習、Agent/LLM、資料庫、分散式系統、前端、密碼學…）。
-第二步：把【屬於這個技術領域、且一個「會寫程式但非此子領域」的人不會馬上懂】的術語都挑出來 — 這段盡量挑 10-16 個，寧可多收也不要漏。
+第二步：把【屬於這個技術領域、且一個「會寫程式但非此子領域」的人不會馬上懂】的術語都挑出來 — 這段盡量挑 ${target} 個，寧可多收也不要漏。
 ※ 務必涵蓋【文章標題點名的核心概念／方法】，以及反覆出現的自創術語，即使是多字詞（例如 'loop engineering'、'context engineering'、'reward model'、'agent loop'）。
 目標：縮寫、函式庫/產品/演算法/模型名稱、領域行話與方法（例如 RLHF、PPO、reward model、eval、rubric、grader、rollout、distillation 這類）、不直觀的技術指標、非正式技術新造詞。掃過中段與結尾。
 
@@ -838,13 +966,15 @@ zh_term：標準中文名稱或描述性中文標籤；seen_in："article"/"comm
 async function runJargon(
   env: Env, item: HNItem, articleText: string, kbTerms: string[], emit: (e: SSEEvent) => void,
   fallbackAgents?: Set<AgentName>, agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
-  extraContext?: string
+  extraContext?: string, effort: Effort = 'med', meter?: UsageMeter
 ): Promise<JargonTerm[]> {
   emit({ event: 'status', agent: 'jargon', state: 'running', label: LABELS.jargon.running })
   const full = (articleText || item.text || '').trim()
   // Cover more of the article (not just the opening) without over-loading each
-  // call: 2 windows max, and they run independently (see allSettled below).
-  const windows = chunkText(full, 7000, 2)
+  // call. Window count is the effort knob: low→1 / med→2 (today) / high→3, run
+  // independently (see allSettled below).
+  const maxWindows = effort === 'low' ? 1 : effort === 'high' ? 3 : 2
+  const windows = chunkText(full, 7000, maxWindows)
   const timeoutMs = jargonTimeoutMs(full)
   const commentSample = sampleCommentsText(item, 1600)
   const known = (kbTerms || []).filter(Boolean).slice(0, 80)
@@ -853,12 +983,16 @@ async function runJargon(
   const candidates = extractCandidates(item.title + '\n' + full + '\n' + commentSample, known).slice(0, 25)
   try {
     const prompts = windows.length === 0
-      ? [buildJargonPrompt(item, '', commentSample, { i: 0, n: 1 }, known, candidates, extraContext)]
-      : windows.map((w, i) => buildJargonPrompt(item, w, i === 0 ? commentSample : '', { i, n: windows.length }, known, candidates, i === 0 ? extraContext : undefined))
+      ? [buildJargonPrompt(item, '', commentSample, { i: 0, n: 1 }, known, candidates, extraContext, effort)]
+      : windows.map((w, i) => buildJargonPrompt(item, w, i === 0 ? commentSample : '', { i, n: windows.length }, known, candidates, i === 0 ? extraContext : undefined, effort))
     if (prompts.length > 1) emit({ event: 'step', agent: 'jargon', label: bz(`通讀全文 ${prompts.length} 段…`) })
     // Run windows independently — a slow/failed window must NOT zero the rest.
     const settled = await Promise.allSettled(prompts.map(p =>
       callMfAgent(env, env.AGENT_JARGON, p, { timeoutMs, attempts: 1 })))
+    // Meter each window that returned: sum its prompt + response chars.
+    settled.forEach((s, i) => {
+      if (s.status === 'fulfilled') meter?.add('jargon', prompts[i].length, s.value.length)
+    })
     const outputs = settled.filter((s): s is PromiseFulfilledResult<string> => s.status === 'fulfilled').map(s => s.value)
     if (!outputs.length) {
       const rej = settled.find(s => s.status === 'rejected') as PromiseRejectedResult | undefined
@@ -884,6 +1018,8 @@ async function runJargon(
         : bz(`小詞最多等待 ${Math.round(timeoutMs / 1000)} 秒；這次沒有及時回覆，為避免整篇卡住，先不顯示術語。原因：${shortErr(e)}`),
     }
     return []
+  } finally {
+    meter?.finish('jargon')
   }
 }
 
@@ -1068,8 +1204,13 @@ ${discussion}
 {"worth_reading":"high","why_frontpage":{"zh":"..."},"tier":"deep"}`
 }
 
-function buildCommentReducePrompt(subtreeSummaries: string[], item: HNItem, extraContext?: string): string {
-  const summaries = subtreeSummaries.filter(Boolean).join('\n\n---\n\n').slice(0, 8000)
+function buildCommentReducePrompt(
+  subtreeSummaries: string[], item: HNItem, extraContext?: string,
+  params: CommentParams = commentParams('med')
+): string {
+  const summaries = subtreeSummaries.filter(Boolean).join('\n\n---\n\n').slice(0, params.reduceCap)
+  // effort's camps directive (empty at 'med' → prompt stays byte-for-byte today's).
+  const campsLine = params.campsHint ? `${params.campsHint}\n` : ''
   return `你是 小潛，分析「${item.title}」的 Hacker News 討論。
 ${relayBlock(extraContext)}
 總留言數：${item.children?.length ?? 0}
@@ -1078,7 +1219,7 @@ ${relayBlock(extraContext)}
 ${summaries}
 
 找出討論的結構：主要派別（majority/vocal-minority/fringe）、共識、主要爭論、對文章的專家糾錯（若有）、最精彩/最辣的一則。
-盡量帶上 comment_id 讓讀者能找到原留言。只用中文。
+${campsLine}盡量帶上 comment_id 讓讀者能找到原留言。只用中文。
 
 只回傳這個 JSON（不要 markdown；字串值裡不要用 " 字元，用 ' 或「」）：
 {"overview":{"zh":"..."},"camps":[{"label":{"zh":"..."},"stance":{"zh":"..."},"weight":"majority","quote":"verbatim excerpt","comment_id":0}],"consensus":{"zh":"..."},"disputes":[{"zh":"..."}],"expert_corrections":[{"correction":{"zh":"..."},"comment_id":0}],"spicy":[{"quote":"...","zh":"...","comment_id":0}]}`

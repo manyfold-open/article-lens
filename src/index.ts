@@ -216,6 +216,14 @@ async function replayResult(result: HNLensResult, emit: (e: SSEEvent) => void): 
     emit({ event: 'section', agent, data })
     await sleep(50)
   }
+  // Token meter: replay the cached run's usage so the FE meter shows the real
+  // cost. Older cached results predate metering and simply have no `usage`.
+  if (result.usage) {
+    for (const [agent, tokens] of Object.entries(result.usage.byAgent)) {
+      emit({ event: 'usage', agent, tokens })
+    }
+    emit({ event: 'usage', tokens: 0, total: result.usage.total })
+  }
   emit({ event: 'result', data: result })
 }
 

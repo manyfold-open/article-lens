@@ -76,17 +76,33 @@ export interface HNLensResult {
   editor_note?: BiStr
   // Where the input came from: an HN thread, a bare article URL, or pasted text.
   source?: 'hn' | 'article' | 'text'
+  // Token meter: estimated tokens spent this run (input+output), total + per agent.
+  // Additive — absent on cached results written before metering existed.
+  usage?: { total: number; byAgent: Record<string, number> }
 }
 
-// ── Graph config (v1) — client-supplied orchestration override ────
+// ── Graph config — client-supplied orchestration override ─────────
 // Sent on GET /api/analyze as &graph=<encodeURIComponent(JSON.stringify(cfg))>.
-// `enabled`: per-key SKIP override (false = force skip; true/absent = run as
-// today, cache reuse still applies). `groups`: partition the ENABLED stage-1
-// workers {sum,jargon,comments} only (ctx is never grouped). mode 'relay' runs
-// the group's members sequentially, threading a short digest of the previous
+//
+// v2 (current): `nodes` carries per-agent {enabled?, effort?}. effort defaults
+// 'med' (= today's behaviour, byte-for-byte). enabled defaults true. `ctx`/
+// `synth` take `enabled` only (effort is ignored for them).
+//
+// v1 (still accepted for back-compat): `enabled` is a per-key SKIP override
+// (false = force skip; true/absent = run as today, cache reuse still applies).
+//
+// `groups` (both versions): partition the ENABLED stage-1 workers
+// {sum,jargon,comments} only (ctx is never grouped). mode 'relay' runs the
+// group's members sequentially, threading a short digest of the previous
 // member's output into the next member's prompt.
+export type Effort = 'low' | 'med' | 'high'
+export interface GraphNode { enabled?: boolean; effort?: Effort }
 export interface GraphConfig {
   v: number
+  // v2 per-agent config. sum/jargon/comments honour enabled+effort; ctx/synth
+  // honour enabled only.
+  nodes?: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx' | 'synth', GraphNode>>
+  // v1 legacy skip map (kept working; superseded by `nodes` when both present).
   enabled?: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx', boolean>>
   groups?: { members: string[]; mode: 'parallel' | 'relay' }[]
 }
@@ -102,7 +118,11 @@ export interface SSEResult { event: 'result'; data: HNLensResult }
 export interface SSEError  { event: 'error';  agent?: AgentName; message: string; kind?: 'sandbox_unavailable' | 'agent_error' }
 // A section streams as soon as its agent finishes, so panels populate early.
 export interface SSESection { event: 'section'; agent: AgentName; data: unknown }
-export type SSEEvent = SSEPlan | SSEStatus | SSEStep | SSEResult | SSEError | SSESection
+// Token meter: emitted after an agent resolves with that agent's tokens; the
+// final one (with `total`) may be sent once at the end. `tokens` is the delta,
+// `total`/`byAgent`-derived total is the accumulated run cost.
+export interface SSEUsage { event: 'usage'; agent?: string; tokens: number; total?: number }
+export type SSEEvent = SSEPlan | SSEStatus | SSEStep | SSEResult | SSEError | SSESection | SSEUsage
 
 // ── HN Algolia types ──────────────────────────────────────────────
 export interface HNComment {
