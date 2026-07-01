@@ -437,12 +437,26 @@ function renderWorkflowStrip() {
 
 // The report is filled as soon as the result arrives, but stays hidden until
 // 隊長 walks to the whiteboard to present it (pixel present handler → revealReport).
+//
+// Ordering guarantee: the office is the single source of truth for WHEN the
+// report is revealed. The result SSE arrives when the *backend* finishes — which
+// is typically well before the office finishes its choreography (readers deliver
+// → 合成 visibly integrates → hands the report to 隊長 → 隊長 walks to the board).
+// Revealing on result arrival (or on a short timer) is exactly the desync we are
+// fixing: it flashes the report while 合成 still shows "整合中". So the ONLY normal
+// reveal trigger is the pixel present handler (revealReport), fired when 隊長
+// actually reaches the whiteboard. The timer below is a pure soft-lock backstop —
+// long enough that it can never race a healthy run to completion, so it only ever
+// fires if the office genuinely never reached the present step.
+const REPORT_REVEAL_BACKSTOP_MS = 45000;   // safety net only; the office presents first
 function armReport() {
   reportReady = true;
   clearTimeout(reportTimer);
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Reduced-motion runs no animated office, so there is nothing to be out of sync
+  // with — the result arriving IS the logical "present" step. Reveal immediately.
   if (reduced) { revealReport(); return; }
-  reportTimer = setTimeout(revealReport, 16000);   // fallback so we never get stuck
+  reportTimer = setTimeout(revealReport, REPORT_REVEAL_BACKSTOP_MS);   // backstop; we never get stuck
 }
 function revealReport() {
   clearTimeout(reportTimer);
