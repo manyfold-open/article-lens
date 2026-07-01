@@ -100,7 +100,10 @@
   // counter [18,8]/cooler [18,9], sofa [14-16,9], table [16,10], plushie/dog/cat
   // [14,10]/[17,10]/[18,10] and the plant [11,10].
   const MASSAGE_CHAIRS = [[12, 10], [13, 10]];   // 按摩椅 tiles (dining corner)
-  const REST_SLOTS = [[12, 10], [13, 10], [12, 11], [13, 11]];
+  // Enough distinct nap spots that every sleeper (benched + escalate-standby, up
+  // to all 5 workers) gets its OWN tile — no two assigned the same slot, so
+  // sleepers never stack. The extra row-11 slots spread along the corner floor.
+  const REST_SLOTS = [[12, 10], [13, 10], [12, 11], [13, 11], [14, 11], [15, 11]];
   const centreOf = (col, row) => ({ x: col * TILE + 8, y: row * TILE + 8 });
 
   // Blocking floor furniture (besides seats/desks).
@@ -296,6 +299,85 @@
     e.walkXY = { tx, ty, cb: cb || null, pace: pace || 'idle' };
   }
 
+  // ─── Lightweight character collision (no full traffic sim) ──────────────────
+  // Two knobs: SEP_DIST is how close two standing/idle sprites may get before we
+  // gently push them apart (soft separation); STEER_LOOKAHEAD/STEER_RADIUS govern
+  // when a WALKER detours around a *stationary* body sitting in its path. All
+  // nudges are small + capped so nothing can be launched off-grid or into walls,
+  // and — crucially — every mover (walkXY / A* path / layout walkTarget)
+  // recomputes its heading from its LIVE position each frame, so a nudge never
+  // breaks convergence: the agent simply resumes its straight line afterwards.
+  const SEP_DIST   = 9;     // ~half a tile+; closer than this → push apart
+  const SEP_MAX    = 0.7;   // max px a sprite is pushed per frame (smooth)
+  const STEER_LOOK = 12;    // px ahead a walker looks for a blocker
+  const STEER_RADIUS = 8;   // how close (perp) a body must be to count as in-path
+  const STEER_PUSH = 0.9;   // perpendicular velocity added while detouring
+  // A character participates in collision only when it's a "real body" on the
+  // floor: not asleep (benched/standby nap in the corner as furniture) and not
+  // the one being dragged in edit mode.
+  function collides(e) { return e && !e.asleep && editMode.dragId !== e.id; }
+  // Is `e` effectively holding still this frame (a body to avoid / separate from)?
+  function isStationary(e) { return !e.walkXY && !(e.path && e.path.length) && !e.walkTarget; }
+
+  // Steering: while `e` walks along heading (hx,hy) (unit vector), if a stationary
+  // body sits just ahead and off to one side, return a small perpendicular {dx,dy}
+  // to sidestep it. Returns null when the path is clear. Transient (per-frame) —
+  // it never changes the target, so the agent re-converges once past the blocker.
+  function steerAround(e, hx, hy) {
+    let best = null, bestFwd = Infinity;
+    for (const id in chars) {
+      const o = chars[id];
+      if (o === e || !collides(o) || !isStationary(o)) continue;
+      const rx = o.x - e.x, ry = o.y - e.y;
+      const fwd = rx * hx + ry * hy;                 // distance ahead along heading
+      if (fwd <= 0 || fwd > STEER_LOOK) continue;    // behind us or too far
+      const perp = rx * -hy + ry * hx;               // signed sideways offset
+      if (Math.abs(perp) > STEER_RADIUS) continue;   // not really in the lane
+      if (fwd < bestFwd) { bestFwd = fwd; best = perp; }
+    }
+    if (best === null) return null;
+    // Steer to the side the body ISN'T on (push perp away from it); if dead-centre
+    // pick a deterministic side (toward open floor) so two agents don't oscillate
+    // into a lock. perp>0 = body to our left → sidestep right, and vice-versa.
+    const side = best > 0 ? -1 : (best < 0 ? 1 : (e.x < LOGICAL_W / 2 ? 1 : -1));
+    return { dx: -hy * side * STEER_PUSH, dy: hx * side * STEER_PUSH };
+  }
+
+  // Soft separation: after everyone has moved, gently push apart any pair of live
+  // bodies overlapping within SEP_DIST so nobody ever fully sits on top of another
+  // (standing, idle, queued, or mid-handoff). Each pair contributes at most SEP_MAX
+  // px of push, split between the two — and a MOVING agent is pushed less than a
+  // stationary one so movers keep their line (the stationary body yields). Nudges
+  // are clamped to the room so no one is shoved into a wall or off-grid; because
+  // every mover re-aims from its live position, this can't cause a soft-lock.
+  function separateChars() {
+    if (editMode.on) return;
+    const ids = Object.keys(chars);
+    for (let i = 0; i < ids.length; i++) {
+      const a = chars[ids[i]];
+      if (!collides(a)) continue;
+      for (let j = i + 1; j < ids.length; j++) {
+        const b = chars[ids[j]];
+        if (!collides(b)) continue;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let d = Math.hypot(dx, dy);
+        if (d >= SEP_DIST) continue;
+        // Overlapping (or exactly coincident): pick a deterministic axis if d≈0.
+        if (d < 0.01) { dx = (i < j ? -1 : 1); dy = 0; d = 1; }
+        const overlap = SEP_DIST - d;
+        const push = Math.min(SEP_MAX, overlap * 0.5);   // gentle, capped
+        const nx = dx / d, ny = dy / d;
+        // Weight the push toward whichever agent is holding still.
+        const aMove = !isStationary(a), bMove = !isStationary(b);
+        let aw = 0.5, bw = 0.5;
+        if (aMove && !bMove) { aw = 0.15; bw = 0.85; }
+        else if (!aMove && bMove) { aw = 0.85; bw = 0.15; }
+        a.x = clampX(a.x - nx * push * aw * 2); a.y = clampY(a.y - ny * push * aw * 2);
+        b.x = clampX(b.x + nx * push * bw * 2); b.y = clampY(b.y + ny * push * bw * 2);
+      }
+    }
+  }
+
   function stepEntity(e) {
     if (e.timer > 0) { e.timer--; if (e.timer === 0 && e.onTimer) { const t = e.onTimer; e.onTimer = null; t(); } }
     // Free-floating straight-line walk (used for in-place custom-run human
@@ -309,6 +391,8 @@
         e.walkXY = null; const cb = w.cb; if (cb) cb();
       } else {
         e.x += dx / d * sp; e.y += dy / d * sp;
+        const av = steerAround(e, dx / d, dy / d);           // detour around a body ahead
+        if (av) { e.x = clampX(e.x + av.dx); e.y = clampY(e.y + av.dy); }
         e.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
       }
       return;
@@ -523,51 +607,83 @@
 	  // Spec-driven run: workers stay at their COMPUTED positions (targetPos) and
 	  // work in place — no recall to fixed seats. Disabled workers sleep in the
 	  // rest area. Finished workers fly a result doc rightward down the pipeline.
+	  // Smoothly move an agent from wherever it currently stands to a run position,
+	  // then run `onArrive`. This is the anti-teleport primitive for run start: an
+	  // agent finishes/aborts its current micro-step (ambient errands are already
+	  // cancelled by cancelAmbientAndSideJobs) and WALKS to its slot, so there's no
+	  // one-frame state cut. If it's already essentially there, walkXY completes on
+	  // the first frame (no visible snap). Reduced-motion never reaches here.
+	  function walkIntoRun(e, tx, ty, onArrive, pace) {
+	    e.path = null; e.onArrive = null; e.walkTarget = null;
+	    e.timer = 0; e.onTimer = null; e.ambKind = null;
+	    e.state = 'delivering';   // transient "moving" state so run logic won't grab it mid-walk
+	    walkXY(e, tx, ty, () => {
+	      e.x = tx; e.y = ty; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+	      e.facing = 'down';
+	      onArrive();
+	    }, pace || 'rush');
+	  }
+
 	  function startCustomRun() {
-	    relayoutActive = false;   // freeze any in-flight reshuffle; the run pins positions
+	    relayoutActive = false;   // freeze any in-flight reshuffle; the run owns motion now
 	    computed = computeLayout(specSnapshot());   // ensure targets reflect the current spec
 	    sim.customView = true;   // keep traveling desks/pods/docs rendered through the finale
 	    const L = chars.orch;
-	    // 隊長 stays near its spot, faces the room, and shows a directing bubble.
-	    L.path = null; L.onArrive = null; L.timer = 0; L.onTimer = null;
-	    { const t = targetPos('orch'); L.x = t.x; L.y = t.y; L.tile = [Math.round((L.x-8)/TILE), Math.round((L.y-8)/TILE)]; }
-	    L.walkTarget = null; L.state = 'idle'; L.facing = 'down'; L.bubble = '各組就位，開工！';
-	    L.timer = 90; L.onTimer = () => { if (sim.active) L.bubble = ''; };
+	    // 隊長 WALKS from its current spot to the overseer slot, then faces the room
+	    // and shows a directing bubble (no teleport).
+	    { const t = targetPos('orch');
+	      L.bubble = '各組就位，開工！';
+	      walkIntoRun(L, t.x, t.y, () => {
+	        L.state = 'idle'; L.facing = 'down';
+	        L.timer = 90; L.onTimer = () => { if (sim.active) L.bubble = ''; };
+	      }); }
 	    // Rest-corner slots for anyone sleeping this run (benched OR escalate-standby),
-	    // assigned in a stable order so nobody stacks on the same chair.
+	    // assigned in a stable order so nobody stacks on the same chair (each gets a
+	    // DISTINCT slot — see REST_SLOTS).
 	    let restIdx = 0;
 	    ALL_WORKERS.forEach(id => {
 	      const e = chars[id];
-	      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null; e.walkTarget = null; e.walkXY = null;
-	      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null;
-	      // Place the worker at its computed slot (drag override wins) and freeze it.
-	      const p = targetPos(id);
-	      e.x = p.x; e.y = p.y; e.tile = [Math.round((e.x - 8) / TILE), Math.round((e.y - 8) / TILE)];
+	      e._queuedDeliver = false; e._returningToDesk = false;
 	      if (editMode.bench[id]) {
-	        // Benched → disabled: greyed, asleep, never assigned, no handoff.
+	        // Benched → disabled: walk to the rest corner, then nap (greyed, asleep,
+	        // never assigned, no handoff). Walking (not snapping) keeps it smooth.
 	        const slot = REST_SLOTS[restIdx++ % REST_SLOTS.length]; const rc = centreOf(slot[0], slot[1]);
-	        e.x = rc.x; e.y = rc.y; e.tile = slot.slice();
-	        e.asleep = true; e.state = 'idle'; e.bubble = ''; e.facing = 'down';
+	        e.bubble = '';
+	        walkIntoRun(e, rc.x, rc.y, () => {
+	          e.tile = slot.slice(); e.asleep = true; e.state = 'idle'; e.bubble = ''; e.facing = 'down';
+	        }, 'idle');
 	        delete taskState[id];
 	      } else if (isStandby(id)) {
-	        // 💸 escalate candidate on standby: sleeps in the dining corner ("待命"),
-	        // deferred until the backend's escalate decision. Woken by escalateDecision('go').
+	        // 💸 escalate candidate on standby: walk to the dining corner and sleep
+	        // ("待命"), deferred until the backend's escalate decision.
 	        const slot = REST_SLOTS[restIdx++ % REST_SLOTS.length]; const rc = centreOf(slot[0], slot[1]);
-	        e.x = rc.x; e.y = rc.y; e.tile = slot.slice();
-	        e.asleep = true; e.state = 'idle'; e.bubble = '💤 待命'; e.facing = 'down';
+	        e.bubble = '';
+	        walkIntoRun(e, rc.x, rc.y, () => {
+	          e.tile = slot.slice(); e.asleep = true; e.state = 'idle'; e.bubble = '💤 待命'; e.facing = 'down';
+	        }, 'idle');
 	        delete taskState[id];
 	      } else {
-	        e.asleep = false; e.facing = 'down';
-	        e.state = 'working'; e.workStart = tick;   // work in place; SSE drives the monitor
+	        // Active worker: WALK from its current position to its computed slot, then
+	        // start working IN PLACE on arrival (workStart set then, so MIN_WORK is
+	        // honoured even if the SSE `done` already landed while walking in).
+	        const p = targetPos(id);
+	        e.asleep = false; e.bubble = '';
+	        walkIntoRun(e, p.x, p.y, () => {
+	          e.state = 'working'; e.workStart = tick;   // work in place; SSE drives the monitor
+	        });
 	      }
 	    });
-	    // 合成 also works in place at its computed 校對 desk (no desk recall).
+	    // 合成 also WALKS to its computed 校對 desk, then idles there (no teleport).
 	    const S = chars.synth;
-	    S.path = null; S.onArrive = null; S.timer = 0; S.onTimer = null; S.walkTarget = null; S.walkXY = null;
 	    S._queuedDeliver = false; S._returningToDesk = false;
-	    { const t = targetPos('synth'); S.x = t.x; S.y = t.y; S.tile = [Math.round((S.x-8)/TILE), Math.round((S.y-8)/TILE)]; }
-	    if (editMode.bench.synth) { S.asleep = true; }
-	    S.state = 'idle'; S.facing = 'down'; S.bubble = '';
+	    { const t = targetPos('synth');
+	      S.bubble = '';
+	      if (editMode.bench.synth) {
+	        walkIntoRun(S, t.x, t.y, () => { S.asleep = true; S.state = 'idle'; S.facing = 'down'; });
+	      } else {
+	        walkIntoRun(S, t.x, t.y, () => { S.state = 'idle'; S.facing = 'down'; });
+	      }
+	    }
 	  }
 
 	  // New analysis incoming: instead of recalling everyone to fixed seats, the
@@ -872,6 +988,7 @@
     stepLayout();              // advance any in-flight spec-driven reshuffle walk
     Object.values(chars).forEach(stepEntity);
     Object.values(pets).forEach(stepEntity);
+    separateChars();           // gentle push-apart so bodies never fully overlap
     if (customRunActive()) { updateCustomRun(); petTick(); return; }
     if (relayoutActive) { petTick(); return; }   // don't fight the reshuffle with ambient/seat logic
     // hybrid work gate: a worker moves on only after its real `done` AND min time.
