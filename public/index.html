@@ -176,6 +176,18 @@
       color: #fff;
       font-weight: 800;
     }
+    /* 受眾語氣 (reader level) — a smaller, secondary segmented control that sits
+       under the preset row. Orthogonal to the depth preset. */
+    .audience-picker { align-items: center; }
+    .audience-picker .preset-btn { font-size: 11px; padding: 3px 9px; }
+    .audience-label {
+      font-family: var(--body);
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--muted);
+      padding: 0 8px 0 10px;
+      white-space: nowrap;
+    }
 
     /* Column wrapper: keeps the segmented control on its row and hangs a
        one-line description caption directly beneath it without altering the
@@ -1740,6 +1752,18 @@
         <button class="preset-btn" data-preset="thrifty" type="button"
           data-desc="先摘要＋判讀，值得讀才叫醒術語＋留言 · 最省 token"
           title="💸 省錢漸進：先跑摘要+判讀，值得讀才叫醒術語+留言（待命中），最省 token">💸 省錢漸進</button>
+        <button class="preset-btn" data-preset="debate" type="button"
+          data-desc="小導分正方／反方辯論後合議 · 判讀更平衡（約 3× 判讀 token）"
+          title="🥊 辯論裁定：小導跑正方(主張值得讀)+反方(主張可略過)，再由首席裁判合議出平衡裁定">🥊 辯論裁定</button>
+      </div>
+      <div id="audience-picker" class="preset-picker audience-picker" role="group" aria-label="受眾語氣 / Reader level">
+        <span class="audience-label">受眾</span>
+        <button class="preset-btn" data-audience="beginner" type="button"
+          title="🐣 新手：更白話、少術語、多解釋、多比喻">🐣 新手</button>
+        <button class="preset-btn active" data-audience="" type="button"
+          title="🙂 預設：會寫程式但非此領域的專家（預設語氣）">🙂 預設</button>
+        <button class="preset-btn" data-audience="expert" type="button"
+          title="🧠 老手：假設懂基礎、更精簡、只收進階術語">🧠 老手</button>
       </div>
       <div id="preset-caption" class="preset-caption" aria-live="polite"></div>
     </div>

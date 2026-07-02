@@ -128,6 +128,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.preset-btn[data-preset]').forEach(btn => {
     btn.addEventListener('click', () => onPresetClick(btn.dataset.preset));
   });
+  // 受眾語氣 (reader level) — orthogonal to the depth preset; just shifts tone.
+  document.querySelectorAll('.preset-btn[data-audience]').forEach(btn => {
+    btn.addEventListener('click', () => onAudienceClick(btn.dataset.audience || null));
+  });
   // When the user free-tunes in edit mode (effort/mode badges, benching), keep
   // the preset highlight + meter in sync.
   if (window.pixelAgents?.setSpecChangeHandler) {
@@ -139,6 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.pixelAgents.setKbCount(kbLoad().length);
     window.pixelAgents.setLang(document.documentElement.dataset.lang || 'bilingual');
     syncPresetPicker();   // reflect any restored/persisted spec on the picker
+    syncAudiencePicker(); // reflect the restored/persisted reader level
   }
 });
 
@@ -178,6 +183,26 @@ function syncPresetPicker() {
     }
     caption.textContent = text;
   }
+}
+
+// ── 受眾語氣 (reader level) ─────────────────────────────────────────────────────
+// Orthogonal to the depth preset: just shifts the tone/depth of the analysis.
+// Persisted in the office (localStorage), so no phase change is forced — it takes
+// effect on the next run.
+function onAudienceClick(level) {
+  const pa = window.pixelAgents;
+  if (!pa || !pa.setAudience) return;
+  pa.setAudience(level);       // null | 'beginner' | 'expert'
+  syncAudiencePicker();
+  syncPresetPicker();          // refresh the caption (it carries the 受眾 tag)
+}
+
+function syncAudiencePicker() {
+  const pa = window.pixelAgents;
+  const cur = (pa && pa.getAudience) ? (pa.getAudience() || '') : '';
+  document.querySelectorAll('.preset-btn[data-audience]').forEach(btn => {
+    btn.classList.toggle('active', (btn.dataset.audience || '') === cur);
+  });
 }
 
 // ── Edit-office mode toggle ─────────────────────────────────────────────────
