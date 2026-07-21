@@ -29,6 +29,35 @@ function toBi(v: unknown): BiStr {
 
 export type SharedSections = Pick<HNLensResult, 'summary' | 'comment_digest' | 'verdict'>
 
+// ── 受眾語氣 (reader level) ─────────────────────────────────────────
+// A single graph flag shifts the TONE/DEPTH of 小摘/小詞/小導/統整 without
+// changing which agents run. Absent → today's default (an intermediate dev),
+// byte-for-byte.
+type Audience = 'beginner' | 'expert'
+function normAudience(a: unknown): Audience | undefined {
+  return a === 'beginner' || a === 'expert' ? a : undefined
+}
+// The "讀者是…" descriptor shared across prompts.
+function readerDesc(a?: Audience): string {
+  if (a === 'beginner') return '讀者是「剛接觸程式／這個領域的新手」'
+  if (a === 'expert') return '讀者是「該領域的資深專家」'
+  return '讀者是「會寫程式但不是這個領域的專家」'
+}
+// Per-agent tone directive (leading \n so it slots into a prompt). Empty for the
+// default audience so those prompts stay byte-for-byte identical to today.
+function audienceDirective(a: Audience | undefined, who: 'sum' | 'jargon' | 'ctx'): string {
+  if (!a) return ''
+  if (who === 'sum') return a === 'beginner'
+    ? '\n受眾語氣：讀者是新手，請用更白話、少術語，必要時補一句背景。'
+    : '\n受眾語氣：讀者是專家，可假設他懂基礎，直接講重點與深入細節，不必解釋常識。'
+  if (who === 'jargon') return a === 'beginner'
+    ? '\n受眾語氣：讀者是新手，收錄門檻放寬（連中階常見詞也值得解釋），解說更淺白、多用比喻。'
+    : '\n受眾語氣：讀者是專家，只收真正進階／冷門／細微的術語，基礎與中階詞一律跳過；解說可精簡、可用專業語彙。'
+  return a === 'beginner'   // ctx
+    ? '\n受眾語氣：讀者是新手，判斷閱讀門檻時標準更嚴（新手更容易卡）。'
+    : '\n受眾語氣：讀者是專家，基礎內容對他們門檻低，tier 只在真正有深度時才給 deep。'
+}
+
 // ── Token meter ────────────────────────────────────────────────────
 // Estimate tokens ≈ (promptChars + responseChars) / 2.5 (matches the comment
 // pipeline's blended CJK/en heuristic). We measure at each agent call site
@@ -134,6 +163,10 @@ export async function orchestrateAnalysis(
 ): Promise<HNLensResult> {
   const mock = buildMockResult(item, articleText, itemType)
   const graph = normalizeGraph(opts.graph)
+  // 辯論裁定 flag rides on the raw graph (like escalate). Applies wherever 小導 runs.
+  const debate = !!opts.graph?.debate
+  // 受眾語氣: reader level shifts tone/depth of sum/jargon/ctx/curator prompts.
+  const audience = normAudience(opts.graph?.audience)
   const captain = buildCaptainPlan(item, articleText, itemType, opts)
   // Reflect graph.enabled in the emitted plan/briefing so the office shows the
   // right set, but keep no-graph behaviour byte-for-byte identical.
@@ -190,7 +223,7 @@ export async function orchestrateAnalysis(
       haveShared ? replaySection('sum', opts.cachedShared!.summary, emit, agentSources)
         : graph.enabled.sum === false ? skipSummary(mock, emit, skippedAgents, agentSources)
           : withReplicas('sum', graph.replicas.sum,
-              q => runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources, extra, eff.sum, meter, q),
+              q => runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources, extra, eff.sum, meter, q, audience),
               bestSummary, () => bi('TL;DR 完成!', 'TL;DR done!'))
     const runCom = (extra?: string): Promise<HNLensResult['comment_digest']> =>
       haveShared ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
@@ -202,14 +235,14 @@ export async function orchestrateAnalysis(
       haveJargon ? replaySection('jargon', opts.cachedJargon!, emit, agentSources)
         : graph.enabled.jargon === false ? skipJargon(emit, skippedAgents, agentSources)
           : withReplicas('jargon', graph.replicas.jargon,
-              q => runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, extra, eff.jargon, meter, q),
+              q => runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, extra, eff.jargon, meter, q, audience),
               mergeJargonReplicas, m => bi(`找到 ${m.length} 個詞!`, `Found ${m.length} terms!`))
     // ctx producer, parameterised by the comment_digest to feed it (cheap phase
     // passes an empty digest — summary-only is fine for a quick worth-reading call).
-    const runCtx = (cd: HNLensResult['comment_digest']): Promise<HNLensResult['verdict']> =>
+    const runCtx = (cd: HNLensResult['comment_digest'], jrg: JargonTerm[] = []): Promise<HNLensResult['verdict']> =>
       haveShared ? replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
         : graph.enabled.ctx === false ? skipContext(mock, emit, skippedAgents, agentSources)
-          : runContext(env, item, summary, cd, mock, emit, fallbackAgents, agentSources, meter)
+          : runContext(env, item, summary, cd, jrg, mock, emit, fallbackAgents, agentSources, meter, debate, audience)
 
     if (opts.graph?.escalate) {
       // ── Conditional escalate (省錢漸進): cheap first, escalate if worthy ──
@@ -248,8 +281,8 @@ export async function orchestrateAnalysis(
       comment_digest = stage1.comments
       jargon = stage1.jargon
 
-      // ── Stage 2: ctx, unchanged ordering — only enabled/disabled. ──
-      verdict = await runCtx(comment_digest)
+      // ── Stage 2: ctx — now also fed 小詞's jargon density (dep edge). ──
+      verdict = await runCtx(comment_digest, jargon)
     }
   } else {
     // ── Stage 1: parallel ──────────────────────────────────────────
@@ -272,13 +305,15 @@ export async function orchestrateAnalysis(
     const [summaryR, comment_digestR] = await Promise.all([summaryP, commentsP])
     summary = summaryR
     comment_digest = comment_digestR
+    // 小詞 runs in parallel with 小摘/小潛; await it BEFORE 小導 so the verdict can
+    // weigh jargon density (the 小詞→小導 dependency edge). It's usually already
+    // resolved by now, so this rarely adds latency.
+    jargon = await jargonP
 
-    // ── Stage 2: verdict, now that it can see real content ──────────
+    // ── Stage 2: verdict, now that it can see real content + jargon ──
     verdict = haveShared
       ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
-      : await runContext(env, item, summary, comment_digest, mock, emit, fallbackAgents, agentSources, meter)
-
-    jargon = await jargonP
+      : await runContext(env, item, summary, comment_digest, jargon, mock, emit, fallbackAgents, agentSources, meter, debate, audience)
   }
 
   // ── Assemble ────────────────────────────────────────────────────
@@ -304,7 +339,7 @@ export async function orchestrateAnalysis(
   }
 
   // ── Synthesizer: integration + QA prune ─────────────────────────
-  await curate(env, item, result, emit, agentSources, meter)
+  await curate(env, item, result, emit, agentSources, meter, audience)
 
   // ── Token meter: finalise total + per-agent, emit a closing usage. ──
   result.usage = { total: meter.total(), byAgent: meter.byAgent }
@@ -610,11 +645,11 @@ async function runSummary(
   env: Env, item: HNItem, articleText: string, itemType: ItemType,
   mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
-  extraContext?: string, effort: Effort = 'med', meter?: UsageMeter, quiet = false
+  extraContext?: string, effort: Effort = 'med', meter?: UsageMeter, quiet = false, audience?: Audience
 ): Promise<HNLensResult['summary']> {
   if (!quiet) emit({ event: 'status', agent: 'sum', state: 'running', label: LABELS.sum.running })
   try {
-    const prompt = buildSummarizerPrompt(item, articleText, itemType, extraContext, effort)
+    const prompt = buildSummarizerPrompt(item, articleText, itemType, extraContext, effort, audience)
     const text = await callMfAgent(env, env.AGENT_SUMMARIZER, prompt)
     meter?.add('sum', prompt.length, text.length)
     const p = parseLoose<{ tldr?: unknown; key_points?: unknown[] }>(text)
@@ -660,26 +695,75 @@ async function skipSummary(
   return empty
 }
 
-// ── 小導 verdict (depends on summary + comments) ───────────────────
+// ── 小導 verdict (depends on summary + comments + 小詞 jargon) ──────
+// The one meaningful dependency edge: 小導 also reads 小詞's jargon density
+// (how many blocking / hard terms) so its worth_reading/tier/why reflect the
+// article's reading accessibility, not just its content. `jargon` may be empty
+// (e.g. the cheap escalate phase before 小詞 runs) — then it's ignored.
+// Parse a 小導 verdict JSON into a typed verdict, or null if unusable.
+function parseVerdict(text: string): HNLensResult['verdict'] | null {
+  const p = parseLoose<{ worth_reading?: string; why_frontpage?: unknown; tier?: string }>(text)
+  if (!p || !p.worth_reading) return null
+  return {
+    worth_reading: p.worth_reading as HNLensResult['verdict']['worth_reading'],
+    why_frontpage: toBi(p.why_frontpage),
+    tier: (p.tier as HNLensResult['verdict']['tier']) || '1min',
+  }
+}
+
+// 辯論裁定: run 小導 twice with opposing framings (正方/反方) in parallel, then a
+// third adjudication pass merges them into one balanced verdict. Throws only if
+// BOTH sides fail (→ outer fallback); a single failed side still adjudicates.
+async function debateVerdict(
+  env: Env, item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'],
+  jargon: JargonTerm[], mock: HNLensResult, emit: (e: SSEEvent) => void, meter?: UsageMeter, audience?: Audience
+): Promise<HNLensResult['verdict']> {
+  emit({ event: 'step', agent: 'ctx', label: bi('正方 vs 反方 辯論中…', 'Pro vs con debating…') })
+  const proPrompt = buildDebatePrompt(item, summary, cd, jargon, 'pro', audience)
+  const conPrompt = buildDebatePrompt(item, summary, cd, jargon, 'con', audience)
+  const [proR, conR] = await Promise.allSettled([
+    callMfAgent(env, env.AGENT_CONTEXT, proPrompt),
+    callMfAgent(env, env.AGENT_CONTEXT, conPrompt),
+  ])
+  const proText = proR.status === 'fulfilled' ? proR.value : ''
+  const conText = conR.status === 'fulfilled' ? conR.value : ''
+  meter?.add('ctx', proPrompt.length + conPrompt.length, proText.length + conText.length)
+  if (!proText && !conText) throw new Error('debate: both sides failed')
+  const pro = parseVerdict(proText)
+  const con = parseVerdict(conText)
+  emit({ event: 'step', agent: 'ctx', label: bi('首席裁判合議中…', 'Head judge deliberating…') })
+  const mergePrompt = buildDebateMergePrompt(item, pro, con)
+  const mergeText = await callMfAgent(env, env.AGENT_CONTEXT, mergePrompt)
+  meter?.add('ctx', mergePrompt.length, mergeText.length)
+  // Prefer the adjudicated verdict; else fall back to whichever side parsed.
+  return parseVerdict(mergeText) ?? pro ?? con ?? mock.verdict
+}
+
 async function runContext(
   env: Env, item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'],
-  mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
-  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>, meter?: UsageMeter
+  jargon: JargonTerm[], mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
+  agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>, meter?: UsageMeter, debate = false, audience?: Audience
 ): Promise<HNLensResult['verdict']> {
-  emit({ event: 'status', agent: 'ctx', state: 'running', label: LABELS.ctx.running })
+  emit({ event: 'status', agent: 'ctx', state: 'running', label: debate ? bi('辯論裁定中…', 'Debating verdict…') : LABELS.ctx.running })
   try {
-    const prompt = buildContextPrompt(item, summary, cd)
-    const text = await callMfAgent(env, env.AGENT_CONTEXT, prompt)
-    meter?.add('ctx', prompt.length, text.length)
-    const p = parseLoose<{ worth_reading?: string; why_frontpage?: unknown; tier?: string }>(text)
-    const verdict: HNLensResult['verdict'] = (p && p.worth_reading)
-      ? { worth_reading: p.worth_reading as HNLensResult['verdict']['worth_reading'],
-          why_frontpage: toBi(p.why_frontpage),
-          tier: (p.tier as HNLensResult['verdict']['tier']) || '1min' }
-      : mock.verdict
-    emit({ event: 'status', agent: 'ctx', state: 'done', label: bi('裁定完成!', 'Verdict is in!') })
+    let verdict: HNLensResult['verdict']
+    if (debate) {
+      verdict = await debateVerdict(env, item, summary, cd, jargon, mock, emit, meter, audience)
+    } else {
+      const prompt = buildContextPrompt(item, summary, cd, jargon, audience)
+      const text = await callMfAgent(env, env.AGENT_CONTEXT, prompt)
+      meter?.add('ctx', prompt.length, text.length)
+      verdict = parseVerdict(text) ?? mock.verdict
+    }
+    emit({ event: 'status', agent: 'ctx', state: 'done', label: debate ? bi('辯論裁定完成!', 'Debate verdict is in!') : bi('裁定完成!', 'Verdict is in!') })
     emit({ event: 'section', agent: 'ctx', data: verdict })
-    if (agentSources) agentSources.ctx = { mode: 'real', reason: bi('小導根據摘要和留言輪廓重新判斷。', 'Verdict re-judged this based on the summary and comment overview.') }
+    if (agentSources) agentSources.ctx = { mode: 'real', reason: bi(
+      debate ? '小導以正反雙方辯論後合議出平衡裁定。'
+        : jargon.length ? '小導根據摘要、留言輪廓與小詞的術語密度重新判斷。'
+          : '小導根據摘要和留言輪廓重新判斷。',
+      debate ? 'Context reached a balanced verdict after arguing both sides of the debate.'
+        : jargon.length ? "Context re-judged this based on the summary, comment overview, and Jargon's term density."
+          : 'Context re-judged this based on the summary and comment overview.') }
     return verdict
   } catch (e) {
     fallbackAgents?.add('ctx')
@@ -850,7 +934,8 @@ async function curate(
   result: HNLensResult,
   emit: (e: SSEEvent) => void,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
-  meter?: UsageMeter
+  meter?: UsageMeter,
+  audience?: Audience
 ): Promise<void> {
   if (!result.jargon.length && !result.summary.key_points.length && !result.comment_digest.camps.length) return
   // Build the prompt first so we can meter the moment the agent is actually
@@ -860,7 +945,7 @@ async function curate(
   // the response below, when we get it) ensures synth's tokens are counted
   // whenever the call happens, consistent with the other agents, instead of the
   // `finally` emitting a misleading synth:0 for a call that really ran.
-  const prompt = buildCuratorPrompt(item, result)
+  const prompt = buildCuratorPrompt(item, result, audience)
   emit({ event: 'status', agent: 'synth', state: 'running', label: bi('整合中…', 'Synthesizing…') })
   meter?.add('synth', prompt.length, 0)
   try {
@@ -904,12 +989,12 @@ function applyCuration(result: HNLensResult, d: CuratorDecision): void {
   if (d.summary_ok === false) result.flags.low_confidence = true
 }
 
-function buildCuratorPrompt(item: HNItem, r: HNLensResult): string {
+function buildCuratorPrompt(item: HNItem, r: HNLensResult, audience?: Audience): string {
   const jl = r.jargon.map((t, i) => `${i}: ${t.term} — ${t.zh_term} — ${t.explain.zh}`).join('\n')
   const kp = r.summary.key_points.map((k, i) => `${i}: ${k.zh}`).join('\n')
   const camps = r.comment_digest.camps.map((c, i) => `${i}: [${c.weight}] ${c.label.zh} — ${(c.quote || '').slice(0, 80)}`).join('\n')
 
-  return `你是 統整，負責整合與品管。讀者是「會寫程式但不是這個領域的專家」。檢視四個 agent 的產出，決定要保留哪些，並修掉跨段落的不一致。
+  return `你是 統整，負責整合與品管。${readerDesc(audience)}。檢視四個 agent 的產出，決定要保留哪些，並修掉跨段落的不一致。
 
 術語（JARGON）— 先認出本文的核心技術領域，只保留 4-8 個【屬於該技術領域、且對理解本文真正會卡住】的詞；務必刪掉：重複、太顯而易見、循環定義，以及任何離題或非技術的詞（一般英文字、無關專有名詞）：
 ${jl || '(none)'}
@@ -1058,7 +1143,7 @@ function rankedCommentsText(comments: HNComment[], budgetTokens: number): string
 }
 
 // ── Prompt builders (zh-only output) ──────────────────────────────
-function buildSummarizerPrompt(item: HNItem, articleText: string, itemType: ItemType, extraContext?: string, effort: Effort = 'med'): string {
+function buildSummarizerPrompt(item: HNItem, articleText: string, itemType: ItemType, extraContext?: string, effort: Effort = 'med', audience?: Audience): string {
   const content = (articleText || item.text || '(no article text available)').slice(0, 6000)
   // effort → how much the summary says. 'med' reproduces today's ask exactly.
   const ask = effort === 'low'
@@ -1073,7 +1158,7 @@ ${relayBlock(extraContext)}
 內容：
 ${content}
 
-${ask}若內容不足，從標題推測並註明不確定。全部只用中文。
+${ask}若內容不足，從標題推測並註明不確定。全部只用中文。${audienceDirective(audience, 'sum')}
 
 只回傳這個 JSON（不要 markdown；字串值裡不要用 " 字元，用 ' 或「」）：
 {"tldr":{"zh":"..."},"key_points":[{"zh":"..."}]}`
@@ -1088,7 +1173,7 @@ function relayBlock(extraContext?: string): string {
 function buildJargonPrompt(
   item: HNItem, articleChunk: string, commentSample: string,
   part: { i: number; n: number }, known: string[], candidates: string[] = [],
-  extraContext?: string, effort: Effort = 'med'
+  extraContext?: string, effort: Effort = 'med', audience?: Audience
 ): string {
   const where = part.n > 1 ? `（文章第 ${part.i + 1}/${part.n} 段）` : ''
   // effort → per-window term target. 'med' keeps today's "10-16" ask verbatim.
@@ -1123,7 +1208,7 @@ ${candLine}${knownLine}
 - difficulty：1-5，「會寫程式但非此領域」的人理解難度
 - blocking：true=不懂這個詞就會卡住對本文的理解
 
-解說風格（只用中文）：1-2 句、不要循環定義、不要用行話解釋行話、適時用具體比喻。
+解說風格（只用中文）：1-2 句、不要循環定義、不要用行話解釋行話、適時用具體比喻。${audienceDirective(audience, 'jargon')}
 zh_term：標準中文名稱或描述性中文標籤；seen_in："article"/"comments"/"both"；appeared_as：出現的原句片段。
 
 只回傳這個 JSON 陣列（不要 markdown；字串值裡不要用 " 字元，用 ' 或「」）：
@@ -1133,7 +1218,7 @@ zh_term：標準中文名稱或描述性中文標籤；seen_in："article"/"comm
 async function runJargon(
   env: Env, item: HNItem, articleText: string, kbTerms: string[], emit: (e: SSEEvent) => void,
   fallbackAgents?: Set<AgentName>, agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
-  extraContext?: string, effort: Effort = 'med', meter?: UsageMeter, quiet = false
+  extraContext?: string, effort: Effort = 'med', meter?: UsageMeter, quiet = false, audience?: Audience
 ): Promise<JargonTerm[]> {
   if (!quiet) emit({ event: 'status', agent: 'jargon', state: 'running', label: LABELS.jargon.running })
   const full = (articleText || item.text || '').trim()
@@ -1150,8 +1235,8 @@ async function runJargon(
   const candidates = extractCandidates(item.title + '\n' + full + '\n' + commentSample, known).slice(0, 25)
   try {
     const prompts = windows.length === 0
-      ? [buildJargonPrompt(item, '', commentSample, { i: 0, n: 1 }, known, candidates, extraContext, effort)]
-      : windows.map((w, i) => buildJargonPrompt(item, w, i === 0 ? commentSample : '', { i, n: windows.length }, known, candidates, i === 0 ? extraContext : undefined, effort))
+      ? [buildJargonPrompt(item, '', commentSample, { i: 0, n: 1 }, known, candidates, extraContext, effort, audience)]
+      : windows.map((w, i) => buildJargonPrompt(item, w, i === 0 ? commentSample : '', { i, n: windows.length }, known, candidates, i === 0 ? extraContext : undefined, effort, audience))
     if (prompts.length > 1 && !quiet) emit({ event: 'step', agent: 'jargon', label: bi(`通讀全文 ${prompts.length} 段…`, `Reading the full article in ${prompts.length} passes…`) })
     // Run windows independently — a slow/failed window must NOT zero the rest.
     const settled = await Promise.allSettled(prompts.map(p =>
@@ -1408,30 +1493,96 @@ function extractCandidates(text: string, known: string[]): string[] {
     .slice(0, 30)
 }
 
-function buildContextPrompt(item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest']): string {
+// A compact reading-accessibility line derived from 小詞's jargon list: how many
+// blocking / hard terms there are. Empty string when 小詞 didn't run (so the
+// prompt stays as before), so 小導 only weighs density when it actually exists.
+function jargonAccessibilityLine(jargon: JargonTerm[]): string {
+  const n = jargon?.length ?? 0
+  if (!n) return ''
+  const blocking = jargon.filter(t => t.blocking).length
+  const hard = jargon.filter(t => (t.difficulty ?? 0) >= 4).length
+  const names = jargon.slice(0, 6).map(t => t.zh_term || t.term).filter(Boolean).join('、')
+  return `術語密度（小詞盤點）：${n} 個關鍵術語，其中 ${blocking} 個不懂會卡住理解、${hard} 個偏難${names ? `（如：${names}）` : ''}。術語越多、越硬，閱讀門檻越高。\n`
+}
+
+// Shared content block for every 小導 prompt (single verdict + debate sides +
+// adjudication), so all of them judge the exact same material.
+function verdictContext(
+  item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'], jargon: JargonTerm[]
+): { isHN: boolean; subject: string; block: string; jargonLine: string } {
   const kp = (summary.key_points ?? []).map(k => `- ${k.zh}`).join('\n')
   // Source-aware: only an actual HN thread gets the "front page / points" framing.
   const isHN = (item.points ?? 0) > 0 || (item.children?.length ?? 0) > 0
   const subject = isHN ? '一篇 Hacker News 貼文' : '一篇文章／一段內容'
   const metaLine = isHN ? `分數：${item.points} · 留言數：${item.children?.length ?? 0}\n` : ''
   const discussion = isHN ? `\n留言整體輪廓：${cd.overview?.zh || '(無討論)'}\n` : ''
-  const whyQ = isHN
-    ? 'why_frontpage：為什麼值得讀 / 為何會上 HN 首頁？1-2 句，反映上面的實際內容'
-    : 'why_frontpage：這篇為什麼值得讀、重點價值是什麼？1-2 句，反映實際內容（不要提「首頁」或分數）'
-  return `你是 小導，評估${subject}。請根據「實際內容」判斷${isHN ? '，不要只看分數' : ''}。
-
-標題：${item.title}
+  const jargonLine = jargonAccessibilityLine(jargon)
+  const block = `標題：${item.title}
 ${metaLine}文章摘要 TL;DR：${summary.tldr?.zh || '(無)'}
 重點：
 ${kp || '(無)'}
-${discussion}
+${discussion}${jargonLine}`
+  return { isHN, subject, block, jargonLine }
+}
+
+const VERDICT_JSON = '只回傳這個 JSON（不要 markdown；字串值裡不要用 " 字元，用 \' 或「」）：\n{"worth_reading":"high","why_frontpage":{"zh":"..."},"tier":"deep"}'
+
+function buildContextPrompt(
+  item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'], jargon: JargonTerm[] = [], audience?: Audience
+): string {
+  const { isHN, subject, block, jargonLine } = verdictContext(item, summary, cd, jargon)
+  const whyQ = isHN
+    ? 'why_frontpage：為什麼值得讀 / 為何會上 HN 首頁？1-2 句，反映上面的實際內容'
+    : 'why_frontpage：這篇為什麼值得讀、重點價值是什麼？1-2 句，反映實際內容（不要提「首頁」或分數）'
+  // Only ask 小導 to weigh accessibility when 小詞 actually supplied density data.
+  const accessibilityNote = jargonLine
+    ? '\n評估時一併考量「閱讀門檻」（上面的術語密度）：術語多且硬 → tier 偏 "deep"；門檻低、好懂 → 偏 "10s"/"1min"。若門檻偏高，why_frontpage 可點出「需要一些領域背景」。'
+    : ''
+  return `你是 小導，評估${subject}。請根據「實際內容」判斷${isHN ? '，不要只看分數' : ''}。
+
+${block}
 回答三件事（只用中文）：
 1. worth_reading："high"（必讀）、"medium"（有趣）或 "low"（可略過）
 2. ${whyQ}
-3. tier："10s"、"1min" 或 "deep"
+3. tier："10s"、"1min" 或 "deep"${accessibilityNote}${audienceDirective(audience, 'ctx')}
 
-只回傳這個 JSON（不要 markdown；字串值裡不要用 " 字元，用 ' 或「」）：
-{"worth_reading":"high","why_frontpage":{"zh":"..."},"tier":"deep"}`
+${VERDICT_JSON}`
+}
+
+// One debate side: the SAME material, argued from a fixed stance. 正方(pro) makes
+// the strongest case it's worth reading; 反方(con) the strongest case to skip it.
+// Each still returns the standard verdict JSON, but leaning to its side.
+function buildDebatePrompt(
+  item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'],
+  jargon: JargonTerm[], side: 'pro' | 'con', audience?: Audience
+): string {
+  const { subject, block } = verdictContext(item, summary, cd, jargon)
+  const stance = side === 'pro'
+    ? '你是辯論中的【正方】，任務是提出最有力的理由，主張這篇「值得讀」（傾向 high/medium）。找出真正的亮點與價值。'
+    : '你是辯論中的【反方】，任務是提出最有力的理由，主張這篇「可以略過」（傾向 low/medium）。點出它薄弱、老調、門檻過高或性價比低之處。'
+  return `你正在對${subject}進行一場辯論式評估。${stance}只根據下面的實際內容，不要虛構。
+
+${block}
+用你這一方的立場，回答（只用中文）：
+1. worth_reading："high" / "medium" / "low"
+2. why_frontpage：你這一方最有力的一句理由
+3. tier："10s" / "1min" / "deep"${audienceDirective(audience, 'ctx')}
+
+${VERDICT_JSON}`
+}
+
+// Adjudication: a neutral chief judge weighs both sides into ONE balanced verdict.
+function buildDebateMergePrompt(item: HNItem, pro: HNLensResult['verdict'] | null, con: HNLensResult['verdict'] | null): string {
+  const side = (v: HNLensResult['verdict'] | null) =>
+    v ? `worth_reading=${v.worth_reading}、tier=${v.tier}，理由：${v.why_frontpage?.zh || '(無)'}` : '(這一方未能提出)'
+  return `你是首席裁判 小導。剛才正反兩方針對「${item.title}」是否值得讀進行了辯論：
+
+【正方 · 主張值得讀】${side(pro)}
+【反方 · 主張可略過】${side(con)}
+
+請綜合雙方最合理的論點，做出最終「平衡裁定」。worth_reading 取雙方之間最誠實的判斷；why_frontpage 要反映雙方都成立的地方（可用「雖然…但…」的口吻），一句話；tier 反映真正需要的投入。只用中文。
+
+${VERDICT_JSON}`
 }
 
 function buildCommentReducePrompt(

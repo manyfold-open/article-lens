@@ -113,6 +113,17 @@ export interface GraphConfig {
   // escalate ("go") and run jargon + comments + synth; otherwise stop and skip
   // jargon + comments. Falsy/absent → today's full flow, byte-for-byte.
   escalate?: boolean
+  // "Debate" verdict (辯論裁定): when true, 小導 runs TWICE with opposing framings
+  // (正方 argues worth-reading / 反方 argues skippable) and a third adjudication
+  // pass merges them into one balanced verdict. This is the one spot where
+  // multi-agent genuinely changes the OUTPUT (opposing prompts, not identical
+  // runs). Falsy/absent → single ctx call (= today). Costs ~3× ctx tokens.
+  debate?: boolean
+  // Reader level (受眾語氣): shifts the tone/depth of 小摘/小詞/小導/統整.
+  // 'beginner' → plainer, more analogies, explain more terms, higher accessibility
+  // bar; 'expert' → terser, skip basics, only advanced jargon. Absent → today's
+  // default ("會寫程式但非此領域專家", byte-for-byte). Same tokens, different prompt.
+  audience?: 'beginner' | 'expert'
 }
 
 // ── SSE event types (§7) ──────────────────────────────────────────

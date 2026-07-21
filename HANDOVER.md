@@ -196,3 +196,20 @@ A Composio MCP server is connected (HTTP) so the agent can drive external apps
   `COMPOSIO_MANAGE_CONNECTIONS` (returns an OAuth URL) before their tools work.
 - Not used by the deployed Worker — this is for agent-side automation (e.g. "analyse
   this, then save the summary to Notion / email it").
+
+## 12. Versions & deploy targets
+
+Two independent Cloudflare Workers, one per version:
+
+- **V1 — frozen.** git tag `v1` → worker **`hn-lens`** (https://hn-lens.zack-chen.workers.dev),
+  KV `6c7d1cf1c14042639cc5b9d13b09e013`. Do NOT deploy to it again; `git checkout v1`
+  to inspect the exact V1 code.
+- **V2 — active.** ongoing work on `main` → worker **`hn-lens-v2`**
+  (https://hn-lens-v2.zack-chen.workers.dev), its OWN KV `276ed8baff904e009bd25cd4bfdca285`,
+  config **`wrangler.v2.toml`**. Deploy with **`npm run ship:v2`** (`deploy.v2.sh`:
+  typecheck → node --check → `wrangler deploy --config wrangler.v2.toml` → smoke the v2
+  URL → checkpoint). Its `MF_API_TOKEN` secret is already set (same agent identity as V1).
+
+**Rule:** `npm run ship` still targets V1's `hn-lens` — for all V2 work use **`npm run ship:v2`**
+so V1 stays frozen. Both versions share the same Manyfold crew (the `AGENT_*` ids) but have
+separate KV caches, so V2 experiments never pollute V1.

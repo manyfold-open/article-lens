@@ -222,6 +222,8 @@
     replicas: Object.create(null),// id → 2 | 3 (default 1; only stored when >1)
     escalate: false,              // 💸 thrifty: run sum+ctx first, escalate to jargon+comments only if worth it
     escalateCandidates: ['jargon', 'comments'],   // the "on standby" workers in escalate mode
+    debate: false,                // 🥊 辯論裁定: 小導 runs 正方/反方 then adjudicates (~3× ctx cost)
+    audience: null,               // 受眾語氣: null=預設(中階) | 'beginner'=新手 | 'expert'=老手 (orthogonal to presets)
     badges: [],                   // per-frame clickable mode badges {x,y,w,h,key}
     effortBadges: [],             // per-frame clickable effort badges {x,y,w,h,id}
     replicaBadges: [],            // per-frame clickable replica badges {x,y,w,h,id}
@@ -237,12 +239,18 @@
 
   // ─── Token cost model + meter ───────────────────────────────────────────────
   // Live estimate (before/while tuning) vs actual (accumulated from usage SSE).
+  // Calibrated 2026-07-02 against real v2 runs (usage = (prompt+response chars)/2.5,
+  // the same basis the meter reports as "actual"). Observed medians on full HN
+  // items: sum ~2.4k (text-rich; link-only posts far less), jargon ~3.5k (rich
+  // articles up to ~10k), comments ~8k (spot-on), ctx ~0.5k, synth ~1.1k. Prior
+  // numbers over-estimated everything but comments by 5–10×, so the meter dropped
+  // sharply from estimate→actual. low/high scaled ~proportionally to med.
   const TOKEN_COST = {
-    sum:      { low: 2000, med: 4000, high: 6000 },
-    jargon:   { low: 5000, med: 10000, high: 16000 },
+    sum:      { low: 1200, med: 2400, high: 3600 },
+    jargon:   { low: 2500, med: 5000, high: 8000 },
     comments: { low: 4000, med: 8000, high: 12000 },
-    ctx:      { low: 2000, med: 2000, high: 3000 },
-    synth:    { low: 4000, med: 4000, high: 5000 },
+    ctx:      { low: 600,  med: 600,  high: 1000 },
+    synth:    { low: 1200, med: 1200, high: 1600 },
   };
   // Meter state: 'estimate' shows the live cost model total; 'actual' accumulates
   // the per-agent usage SSE and finalizes from result.usage.total.
@@ -260,7 +268,8 @@
       // vote ×N: running an agent N times costs ~N× its per-run tokens.
       total += TOKEN_COST[id][effortOf(id)] * replicasOf(id);
     }
-    if (!editMode.bench.ctx) total += TOKEN_COST.ctx.med;   // ctx: effort n/a
+    // ctx: effort n/a. 🥊 辯論裁定 runs it ~3× (正方 + 反方 + 首席裁判合議).
+    if (!editMode.bench.ctx) total += TOKEN_COST.ctx.med * (editMode.debate ? 3 : 1);
     total += TOKEN_COST.synth.med;                          // synth: always on
     return total;
   }
@@ -281,7 +290,9 @@
       || Object.keys(editMode.podModes).length > 0
       || EFFORT_NODES.some(id => effortOf(id) !== 'med')    // non-default effort counts
       || REPLICA_NODES.some(id => replicasOf(id) > 1)       // vote ×N counts
-      || editMode.escalate;                                 // 💸 thrifty escalate mode counts
+      || editMode.escalate                                  // 💸 thrifty escalate mode counts
+      || editMode.debate                                    // 🥊 debate verdict counts
+      || !!editMode.audience;                               // 受眾語氣 (新手/老手) counts
   }
   // The single source of truth for "custom run": identical to the gate app.js
   // uses to decide whether to send &graph (getGraphConfig() non-null). When this
@@ -2117,6 +2128,8 @@
     // under the characters (subtler than edit mode) so teaming stays readable in
     // the idle office as well as during a run.
     if (!editMode.on && layoutView()) drawRunPods();
+    // The one meaningful dependency edge (小詞→小導), under the sprites.
+    if (!editMode.on && layoutView()) drawDepEdge();
     const sprites = [];
     // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
     computed.tables.forEach(tbl => {
@@ -2157,7 +2170,68 @@
     if (fly) drawFlyingBook();
     if (customRunView()) drawRunDocs();    // documents are now carried by people; runDocs stays empty (kept as a no-op)
     if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
+    if (editMode.debate && !editMode.bench.ctx) drawDebateCue();   // 🥊 floating tag on 小導
     drawTokenMeter();                      // live estimate / actual token readout
+  }
+
+  // ─── 🥊 辯論裁定 cue ─────────────────────────────────────────────────────────
+  // A small floating tag above 小導 when debate mode is on, so the office shows
+  // the verdict is adjudicated (正方 vs 反方), not a single call. Purely a label —
+  // no extra sprites/animation (keeps the room calm, per the flow-line removal).
+  function drawDebateCue() {
+    try {
+      const p = targetPos('ctx');
+      if (!p) return;
+      c.save();
+      c.font = `${9}px system-ui, sans-serif`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      const label = LZ({ zh: '🥊 正方 vs 反方', en: '🥊 Pro vs Con' });
+      const w = c.measureText(label).width + SCALE * 4;
+      const bx = px(p.x), by = px(p.y) - SCALE * 14;
+      c.fillStyle = 'rgba(17,24,39,0.82)';
+      roundRect(bx - w / 2, by - SCALE * 6, w, SCALE * 12, SCALE * 3);
+      c.fill();
+      c.fillStyle = '#FDE68A';
+      c.fillText(label, bx, by + 1);
+      c.restore();
+    } catch (_) { /* never break the render loop */ }
+  }
+
+  // ─── 小詞 → 小導 dependency edge ─────────────────────────────────────────────
+  // The single meaningful semantic dependency in the workflow: 小導 (verdict)
+  // reads 小詞's jargon density to gauge reading accessibility. Unlike the old
+  // doc-flow connectors (removed for noise), this is ONE static, dotted
+  // "reference" line — no animation, no per-leg fan-out — drawn only when both
+  // agents are active, so it reads as a data dependency, not document traffic.
+  function drawDepEdge() {
+    try {
+      if (editMode.bench.jargon || editMode.bench.ctx) return;
+      const a = targetPos('jargon'), b = targetPos('ctx');
+      if (!a || !b) return;
+      let ax = px(a.x), ay = px(a.y), bx = px(b.x), by = px(b.y);
+      // Trim both ends so the line runs desk-to-desk and the arrowhead clears
+      // 小導's sprite (drawn on top of this line).
+      const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len, pad = SCALE * 10;
+      ax += ux * pad; ay += uy * pad; bx -= ux * pad; by -= uy * pad;
+      c.save();
+      c.lineCap = 'round';
+      c.strokeStyle = rgba('#14B8A6', 0.22);   // teal — distinct from the old flow palette
+      c.lineWidth = Math.max(1, SCALE * 0.7);
+      c.setLineDash([SCALE * 1.5, SCALE * 2.5]);
+      c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke();
+      c.setLineDash([]);
+      // Small arrowhead at the 小導 end to show direction (小詞 → 小導).
+      const ang = Math.atan2(by - ay, bx - ax), head = SCALE * 3;
+      c.fillStyle = rgba('#14B8A6', 0.3);
+      c.beginPath();
+      c.moveTo(bx, by);
+      c.lineTo(bx - head * Math.cos(ang - 0.4), by - head * Math.sin(ang - 0.4));
+      c.lineTo(bx - head * Math.cos(ang + 0.4), by - head * Math.sin(ang + 0.4));
+      c.closePath(); c.fill();
+      c.restore();
+    } catch (_) { /* never break the render loop */ }
   }
 
   // ─── Custom-layout run overlays ─────────────────────────────────────────────
@@ -2602,14 +2676,18 @@
     const nonDefaultEffort = EFFORT_NODES.some(id => effortOf(id) !== 'med');
     const nonDefaultReplicas = REPLICA_NODES.some(id => replicasOf(id) > 1);
 
-    // Full default spec → null (no &graph, unchanged behaviour). Escalate mode is
-    // never "default" even when nodes/effort are all-med, so it always emits.
-    if (!editMode.escalate && !anyDisabled && defaultGroup && !nonDefaultEffort && !nonDefaultReplicas) return null;
+    // Full default spec → null (no &graph, unchanged behaviour). Escalate/debate/
+    // audience are never "default" even when nodes/effort are all-med, so they emit.
+    if (!editMode.escalate && !editMode.debate && !editMode.audience && !anyDisabled && defaultGroup && !nonDefaultEffort && !nonDefaultReplicas) return null;
 
     const cfg = { v: 2, nodes };
     // 💸 thrifty: run sum+ctx first, then EITHER run jargon+comments (worth it) or
     // skip them. jargon+comments are runtime "candidates"; the backend decides.
     if (editMode.escalate) cfg.escalate = true;
+    // 🥊 辯論裁定: 小導 argues 正方/反方 then adjudicates into one balanced verdict.
+    if (editMode.debate) cfg.debate = true;
+    // 受眾語氣: reader level shifts tone/depth (orthogonal to depth presets).
+    if (editMode.audience === 'beginner' || editMode.audience === 'expert') cfg.audience = editMode.audience;
     // Attach groups only when a non-default pod arrangement exists (a real
     // multi-member pod that isn't just the default single-parallel group).
     const realPods = groups.filter(g => g.members.length >= 2);
@@ -2654,6 +2732,11 @@
       sum: { enabled: true, effort: 'med' }, jargon: { enabled: true, effort: 'med' },
       comments: { enabled: true, effort: 'med' }, ctx: { enabled: true }, synth: { enabled: true },
     },
+    debate: {   // 🥊 辯論裁定: full readers, but 小導 argues 正方/反方 then adjudicates.
+      debate: true,
+      sum: { enabled: true, effort: 'med' }, jargon: { enabled: true, effort: 'med' },
+      comments: { enabled: true, effort: 'med' }, ctx: { enabled: true }, synth: { enabled: true },
+    },
   };
 
   function applyPreset(name) {
@@ -2668,6 +2751,7 @@
     editMode.effort = Object.create(null);
     editMode.replicas = Object.create(null);
     editMode.escalate = !!spec.escalate;   // 💸 thrifty escalate mode (top-level flag)
+    editMode.debate = !!spec.debate;       // 🥊 debate verdict mode (top-level flag)
     for (const id of EDITABLE.concat('synth')) {
       const node = spec[id];
       if (!node) continue;
@@ -2692,12 +2776,17 @@
   // null for a free-tuned arrangement. Shared by the picker highlight and the
   // workflow-summary prefix so both stay in agreement.
   function matchActivePreset() {
-    const cfg = getGraphConfig();
+    // 受眾語氣 is orthogonal to the depth preset — blank it while deciding which
+    // preset the DEPTH spec matches, then restore, so e.g. 標準+新手 still reads 標準.
+    const savedAud = editMode.audience;
+    editMode.audience = null;
+    let cfg;
+    try { cfg = getGraphConfig(); } finally { editMode.audience = savedAud; }
     if (cfg === null) return 'standard';   // 標準 default
     if (cfg.groups) return null;           // custom pods → no clean preset match
     const bench = id => !!editMode.bench[id];
     const eff = id => effortOf(id);
-    const matches = spec => (!!spec.escalate === !!editMode.escalate) && EDITABLE.concat('synth').every(id => {
+    const matches = spec => (!!spec.escalate === !!editMode.escalate) && (!!spec.debate === !!editMode.debate) && EDITABLE.concat('synth').every(id => {
       const n = spec[id]; if (!n) return true;
       if ((n.enabled === false) !== bench(id)) return false;
       if (EFFORT_NODES.includes(id) && n.enabled !== false) {
@@ -2710,7 +2799,7 @@
       }
       return true;
     });
-    for (const name of ['quick', 'jargon', 'deep', 'reliable', 'thrifty']) if (matches(PRESETS[name])) return name;
+    for (const name of ['quick', 'jargon', 'deep', 'reliable', 'thrifty', 'debate']) if (matches(PRESETS[name])) return name;
     return null;
   }
 
@@ -2728,6 +2817,7 @@
     reliable: { zh:'🛡️ 可靠',    en:'🛡️ Reliable' },
     deep:     { zh:'🔬 深度精讀', en:'🔬 Deep read' },
     thrifty:  { zh:'💸 省錢漸進', en:'💸 Thrifty ramp' },
+    debate:   { zh:'🥊 辯論裁定', en:'🥊 Debate verdict' },
   };
   // "小詞(高×2)" — worker name + effort (低/中/高) + optional ×N vote tag.
   function workerToken(id) {
@@ -2746,6 +2836,9 @@
       const disabled = STAGE1.filter(id => editMode.bench[id]);
       const estK = fmtK(estimateTokens());   // e.g. "~28k"
       const estWord = LZ({ zh:'預估', en:'Est.' });
+      // 受眾語氣 tag (orthogonal to preset), appended to every caption form.
+      const audTag = editMode.audience === 'beginner' ? LZ({ zh:' · 受眾:新手', en:' · Audience: Beginner' })
+        : editMode.audience === 'expert' ? LZ({ zh:' · 受眾:老手', en:' · Audience: Expert' }) : '';
 
       // 💸 escalate mode reads as a two-phase chain: cheap first, then +candidates.
       if (editMode.escalate) {
@@ -2757,8 +2850,8 @@
         const firstStr = first.length ? first.join('·') : LZ(ROLE.sum.name);
         const candStr = cand.length ? cand.join('·') : LZ({ zh:'其餘讀者', en:'the rest' });
         return LZ({
-          zh: `${prefix} 先 ${firstStr}→${LZ(ROLE.ctx.name)}，值得才 +${candStr} · ${estWord} ${estK}`,
-          en: `${prefix} ${firstStr} first → ${LZ(ROLE.ctx.name)}, +${candStr} only if worth it · ${estWord} ${estK}`,
+          zh: `${prefix} 先 ${firstStr}→${LZ(ROLE.ctx.name)}，值得才 +${candStr} · ${estWord} ${estK}${audTag}`,
+          en: `${prefix} ${firstStr} first → ${LZ(ROLE.ctx.name)}, +${candStr} only if worth it · ${estWord} ${estK}${audTag}`,
         });
       }
 
@@ -2781,10 +2874,12 @@
       const stageParts = podStrs.concat(loose);
       let chain = stageParts.length ? stageParts.join(' ∥ ') : LZ({ zh:'（無讀者）', en:'(no readers)' });
 
-      if (!editMode.bench.ctx) chain += ' → ' + LZ(ROLE.ctx.name);
+      if (!editMode.bench.ctx) chain += editMode.debate
+        ? ' → ' + LZ(ROLE.ctx.name) + LZ({ zh:'⚖️(正方∥反方→合議)', en:'⚖️(pro∥con→verdict)' })
+        : ' → ' + LZ(ROLE.ctx.name);
       if (!editMode.bench.synth) chain += ' → ' + LZ(ROLE.synth.name);
 
-      let line = `${prefix} — ${chain} · ${estWord} ${estK}`;
+      let line = `${prefix} — ${chain} · ${estWord} ${estK}${audTag}`;
       if (disabled.length) line += ' · ' + LZ({ zh:'停用', en:'Disabled' }) + ': ' + disabled.map(id => LZ(SUMMARY_NAME[id]) || id).join(LZ({ zh:'、', en:', ' }));
       return line;
     } catch (e) {
@@ -3017,6 +3112,9 @@
         mode: g.mode === 'relay' ? 'relay' : 'parallel',
       })).filter(g => g.members.length >= 2);
       const data = { v: 2, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes, groups, effort, replicas };
+      // 受眾語氣 is a stable preference (unlike session-only escalate/debate), so
+      // persist it — the office reopens with the reader level you last chose.
+      if (editMode.audience === 'beginner' || editMode.audience === 'expert') data.audience = editMode.audience;
       localStorage.setItem(GRAPH_LS_KEY, JSON.stringify(data));
     } catch (_) { /* storage may be unavailable */ }
   }
@@ -3024,6 +3122,7 @@
     let data;
     try { data = JSON.parse(localStorage.getItem(GRAPH_LS_KEY) || 'null'); } catch (_) { return; }
     if (!data || (data.v !== 1 && data.v !== 2)) return;
+    editMode.audience = (data.audience === 'beginner' || data.audience === 'expert') ? data.audience : null;
     editMode.bench = Object.create(null);
     (data.bench || []).forEach(id => { if (EDITABLE.includes(id)) editMode.bench[id] = true; });
     editMode.podModes = Object.create(null);
@@ -3283,6 +3382,14 @@
     getGraphConfig() { return getGraphConfig(); },
     // ─── Presets + effort + token meter ───────────────────────────────────────
     applyPreset(name) { applyPreset(name); },
+    // ─── 受眾語氣 (reader level) ────────────────────────────────────────────────
+    // Orthogonal to presets: 'beginner' | 'expert' | null(=預設). Persisted.
+    getAudience() { return editMode.audience || null; },
+    setAudience(level) {
+      editMode.audience = (level === 'beginner' || level === 'expert') ? level : null;
+      persistGraph();
+      if (onSpecChange) onSpecChange();
+    },
     // ─── Layout engine ────────────────────────────────────────────────────────
     // Compute the spec-derived target positions + shared tables (pure; for tests
     // / debugging / callers that want to read the arrangement).
