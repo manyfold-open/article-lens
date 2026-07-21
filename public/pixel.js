@@ -2061,6 +2061,11 @@
     rect(x,y-1,1,3,b); rect(x-1,y,3,1,b); dot(x-1,y-1,rgba(color,0.4)); dot(x+1,y-1,rgba(color,0.4)); dot(x-1,y+1,rgba(color,0.4)); dot(x+1,y+1,rgba(color,0.4)); }
 
   // ─── Overlays: name plates + speech bubbles ─────────────────────────────────
+  // Nameplates drawn this frame, so a plate whose box would collide with an
+  // already-drawn one (English names run much wider than the original 2-char
+  // Chinese ones, so neighbouring desks can now sit closer than the text is
+  // wide) can drop to a second line instead of getting painted over.
+  const drawnPlateRects = [];
   function drawNamePlate(s) {
     const e = chars[s.id], mode = vmode(e);
     // A benched (disabled) worker has no desk; it sleeps in the rest area with a
@@ -2079,9 +2084,21 @@
     // Chinese names, so desks near the grid edge can push the plate past the
     // canvas boundary — clamp its centre so the whole plate stays on-screen.
     const plateCx = Math.max(w/2+2+SCALE, Math.min(px(cx), canvas.width-w/2-2-SCALE));
-    c.fillStyle=rgba('#FFFFFF',0.72); c.fillRect(plateCx-w/2-2, px(ly)-1, w+4, px(5));
+    let plateTop = px(ly) - 1;
+    const plateH = px(5);
+    const left = plateCx - w/2 - 2, right = plateCx + w/2 + 2;
+    // If this box's x-range overlaps a plate already drawn at ~the same row,
+    // drop it to the next line down so the two stay legible instead of one
+    // painting over the other.
+    for (const r of drawnPlateRects) {
+      if (Math.abs(r.top - plateTop) < plateH && left < r.right && right > r.left) {
+        plateTop = r.top + plateH + 1;
+      }
+    }
+    drawnPlateRects.push({ left, right, top: plateTop });
+    c.fillStyle=rgba('#FFFFFF',0.72); c.fillRect(left, plateTop, w+4, plateH);
     c.fillStyle=(mode==='idle')?'#9C9384':(e.id==='jargon'?e.role.shirt:LABEL);
-    c.fillText(nameStr, plateCx+SCALE, px(ly)+px(2.5)); c.restore();
+    c.fillText(nameStr, plateCx+SCALE, plateTop+plateH/2+1.5); c.restore();
   }
   function drawBubble(e) {
     // talk bubbles (assign/report) take priority; while working, show the live
@@ -2162,7 +2179,7 @@
     // the idle office as well as during a run.
     if (!editMode.on && layoutView()) drawRunPods();
     // The one meaningful dependency edge (小詞→小導), under the sprites.
-    if (!editMode.on && layoutView()) drawDepEdge();
+    if (SHOW_DEP_EDGE && !editMode.on && layoutView()) drawDepEdge();
     const sprites = [];
     // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
     computed.tables.forEach(tbl => {
@@ -2196,6 +2213,7 @@
 
     sprites.sort((a,b)=>a.baseY-b.baseY).forEach(sp => sp.draw());
 
+    drawnPlateRects.length = 0;   // reset per-frame collision tracking for nameplates
     STATIONS.forEach(drawNamePlate);
     Object.values(chars).forEach(drawBubble);
     Object.values(pets).forEach(drawBubble);
@@ -2512,6 +2530,7 @@
   const METER_CAP = 45000;   // ~深度精讀 upper bound; bar saturates here
   const SHOW_TOKEN_METER = false;    // hidden from users for now — flip to re-enable
   const SHOW_AUDIENCE_TAG = false;   // matches the hidden Audience picker in index.html
+  const SHOW_DEP_EDGE = false;       // 小詞→小導 dependency line — hidden from users for now
   function drawTokenMeter() {
     if (!SHOW_TOKEN_METER) return;
     const est = estimateTokens();
