@@ -2075,9 +2075,13 @@
     c.save(); c.font=`${13}px monospace`; c.textAlign='center'; c.textBaseline='middle';
     const nameStr = LZ(e.role.name);
     const w=c.measureText(nameStr).width;
-    c.fillStyle=rgba('#FFFFFF',0.72); c.fillRect(px(cx)-w/2-2, px(ly)-1, w+4, px(5));
+    // English names (e.g. "Synthesizer") run much wider than the original 2-char
+    // Chinese names, so desks near the grid edge can push the plate past the
+    // canvas boundary — clamp its centre so the whole plate stays on-screen.
+    const plateCx = Math.max(w/2+2+SCALE, Math.min(px(cx), canvas.width-w/2-2-SCALE));
+    c.fillStyle=rgba('#FFFFFF',0.72); c.fillRect(plateCx-w/2-2, px(ly)-1, w+4, px(5));
     c.fillStyle=(mode==='idle')?'#9C9384':(e.id==='jargon'?e.role.shirt:LABEL);
-    c.fillText(nameStr, px(cx)+SCALE, px(ly)+px(2.5)); c.restore();
+    c.fillText(nameStr, plateCx+SCALE, px(ly)+px(2.5)); c.restore();
   }
   function drawBubble(e) {
     // talk bubbles (assign/report) take priority; while working, show the live
@@ -2090,8 +2094,12 @@
     c.save();
     c.font = `${fs}px system-ui, sans-serif`;
     // Talk bubbles stay short (1 line); live status wraps to up to 2 lines so
-    // longer step text ("通讀全文 2 段…", "聚類派別分析中…") is readable.
-    const lines = isLive ? wrapBubble(raw, 11, 2) : [shortLine(raw, 8)];
+    // longer step text ("通讀全文 2 段…", "聚類派別分析中…") is readable. Character
+    // budgets are per-language: English needs ~3x the characters Chinese does to
+    // say the same thing, so a Chinese-calibrated budget clips English mid-word.
+    const shortMax = langMode === 'en' ? 26 : 8;
+    const wrapPerLine = langMode === 'en' ? 22 : 11;
+    const lines = isLive ? wrapBubble(raw, wrapPerLine, 2) : [shortLine(raw, shortMax)];
     const padX = 5, padY = 3, lh = fs + 2;
     let tw = 0; for (const ln of lines) tw = Math.max(tw, c.measureText(ln).width);
     const bW = tw + padX * 2, bH = lines.length * lh + padY * 2 - 2;
@@ -2107,8 +2115,33 @@
     lines.forEach((ln, i) => c.fillText(ln, bx + padX, yTop + padY + i * lh));
     c.restore();
   }
-  function shortLine(s, max) { const a = [...s]; return a.length > max ? a.slice(0, max - 1).join('') + '…' : s; }
+  function shortLine(s, max) {
+    const a = [...s];
+    if (a.length <= max) return s;
+    const cut = a.slice(0, max - 1).join('');
+    // Prefer breaking at a word boundary (latin text) so words aren't cut mid-way;
+    // Chinese has no spaces so this always falls through to the hard character cut.
+    const lastSpace = cut.lastIndexOf(' ');
+    return (lastSpace > max * 0.5 ? cut.slice(0, lastSpace) : cut) + '…';
+  }
   function wrapBubble(s, perLine, maxLines) {
+    // Latin text (has spaces): greedy word-wrap so words don't split across lines.
+    if (s.includes(' ')) {
+      const words = s.split(' '), lines = [];
+      let cur = '';
+      for (const word of words) {
+        const candidate = cur ? cur + ' ' + word : word;
+        if ([...candidate].length > perLine && cur) { lines.push(cur); cur = word; }
+        else cur = candidate;
+        if (lines.length === maxLines) break;
+      }
+      if (lines.length < maxLines && cur) lines.push(cur);
+      if (lines.length === maxLines && [...lines.join(' ')].length < [...s].length) {
+        lines[maxLines - 1] = shortLine(lines[maxLines - 1], perLine);
+      }
+      return lines;
+    }
+    // CJK text (no spaces): hard character-slice per line, same as before.
     const a = [...s], lines = [];
     for (let i = 0; i < a.length && lines.length < maxLines; i += perLine) lines.push(a.slice(i, i + perLine).join(''));
     if (a.length > perLine * maxLines) lines[maxLines - 1] = [...lines[maxLines - 1]].slice(0, perLine - 1).join('') + '…';
