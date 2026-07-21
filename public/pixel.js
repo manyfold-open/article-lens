@@ -2510,7 +2510,10 @@
   // estimate ("預估 ~28k") while tuning, and the actual accumulated total
   // ("實際 31k") during/after a run. The bar length is relative to a soft cap.
   const METER_CAP = 45000;   // ~深度精讀 upper bound; bar saturates here
+  const SHOW_TOKEN_METER = false;    // hidden from users for now — flip to re-enable
+  const SHOW_AUDIENCE_TAG = false;   // matches the hidden Audience picker in index.html
   function drawTokenMeter() {
+    if (!SHOW_TOKEN_METER) return;
     const est = estimateTokens();
     const isActual = meter.mode === 'actual';
     const val = isActual ? meter.actual : est;
@@ -2869,8 +2872,10 @@
       const disabled = STAGE1.filter(id => editMode.bench[id]);
       const estK = fmtK(estimateTokens());   // e.g. "~28k"
       const estWord = LZ({ zh:'預估', en:'Est.' });
+      const estTag = SHOW_TOKEN_METER ? ` · ${estWord} ${estK}` : '';
       // 受眾語氣 tag (orthogonal to preset), appended to every caption form.
-      const audTag = editMode.audience === 'beginner' ? LZ({ zh:' · 受眾:新手', en:' · Audience: Beginner' })
+      // Audience picker is hidden from users for now, so never surface this tag.
+      const audTag = !SHOW_AUDIENCE_TAG ? '' : editMode.audience === 'beginner' ? LZ({ zh:' · 受眾:新手', en:' · Audience: Beginner' })
         : editMode.audience === 'expert' ? LZ({ zh:' · 受眾:老手', en:' · Audience: Expert' }) : '';
 
       // 💸 escalate mode reads as a two-phase chain: cheap first, then +candidates.
@@ -2883,8 +2888,8 @@
         const firstStr = first.length ? first.join('·') : LZ(ROLE.sum.name);
         const candStr = cand.length ? cand.join('·') : LZ({ zh:'其餘讀者', en:'the rest' });
         return LZ({
-          zh: `${prefix} 先 ${firstStr}→${LZ(ROLE.ctx.name)}，值得才 +${candStr} · ${estWord} ${estK}${audTag}`,
-          en: `${prefix} ${firstStr} first → ${LZ(ROLE.ctx.name)}, +${candStr} only if worth it · ${estWord} ${estK}${audTag}`,
+          zh: `${prefix} 先 ${firstStr}→${LZ(ROLE.ctx.name)}，值得才 +${candStr}${estTag}${audTag}`,
+          en: `${prefix} ${firstStr} first → ${LZ(ROLE.ctx.name)}, +${candStr} only if worth it${estTag}${audTag}`,
         });
       }
 
@@ -2912,7 +2917,7 @@
         : ' → ' + LZ(ROLE.ctx.name);
       if (!editMode.bench.synth) chain += ' → ' + LZ(ROLE.synth.name);
 
-      let line = `${prefix} — ${chain} · ${estWord} ${estK}${audTag}`;
+      let line = `${prefix} — ${chain}${estTag}${audTag}`;
       if (disabled.length) line += ' · ' + LZ({ zh:'停用', en:'Disabled' }) + ': ' + disabled.map(id => LZ(SUMMARY_NAME[id]) || id).join(LZ({ zh:'、', en:', ' }));
       return line;
     } catch (e) {
