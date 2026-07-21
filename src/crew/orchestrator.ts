@@ -15,6 +15,11 @@ const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 // by the client via /api/translate. Everything is still stored as BiStr so the
 // schema and UI are unchanged — the `en` field just starts empty.
 const bz = (zh = ''): BiStr => ({ en: '', zh })
+// Orchestrator-authored strings (SSE labels, briefing route/reason, agent_sources
+// reason) are NOT covered by the client's lazy /api/translate pass (it only
+// walks title/summary/jargon/comment_digest/why_frontpage/editor_note) — so
+// these need a real `en` baked in at the source, via `bi(zh, en)` below.
+const bi = (zh: string, en: string): BiStr => ({ zh, en })
 function toBi(v: unknown): BiStr {
   if (v == null) return bz('')
   if (typeof v === 'string') return bz(v)
@@ -129,16 +134,16 @@ export async function mockOrchestrate(
     await sleep(120)
   }
   await sleep(320)
-  emit({ event: 'status', agent: 'sum', state: 'done', label: bz('TL;DR 完成!') })
+  emit({ event: 'status', agent: 'sum', state: 'done', label: bi('TL;DR 完成!', 'TL;DR done!') })
   emit({ event: 'section', agent: 'sum', data: result.summary })
   await sleep(260)
-  emit({ event: 'status', agent: 'jargon', state: 'done', label: bz(`找到 ${result.jargon.length} 個詞! 💡`) })
+  emit({ event: 'status', agent: 'jargon', state: 'done', label: bi(`找到 ${result.jargon.length} 個詞! 💡`, `Found ${result.jargon.length} terms! 💡`) })
   emit({ event: 'section', agent: 'jargon', data: result.jargon })
   await sleep(260)
-  emit({ event: 'status', agent: 'comments', state: 'done', label: bz(`分成 ${result.comment_digest.camps.length} 派!`) })
+  emit({ event: 'status', agent: 'comments', state: 'done', label: bi(`分成 ${result.comment_digest.camps.length} 派!`, `Split into ${result.comment_digest.camps.length} camps!`) })
   emit({ event: 'section', agent: 'comments', data: result.comment_digest })
   await sleep(260)
-  emit({ event: 'status', agent: 'ctx', state: 'done', label: bz('裁定完成!') })
+  emit({ event: 'status', agent: 'ctx', state: 'done', label: bi('裁定完成!', 'Verdict is in!') })
   emit({ event: 'section', agent: 'ctx', data: result.verdict })
   await sleep(220)
   return result
@@ -219,7 +224,7 @@ export async function orchestrateAnalysis(
         : graph.enabled.sum === false ? skipSummary(mock, emit, skippedAgents, agentSources)
           : withReplicas('sum', graph.replicas.sum,
               q => runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources, extra, eff.sum, meter, q, audience),
-              bestSummary, () => bz('TL;DR 完成!'))
+              bestSummary, () => bi('TL;DR 完成!', 'TL;DR done!'))
     const runCom = (extra?: string): Promise<HNLensResult['comment_digest']> =>
       haveShared ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
         : graph.enabled.comments === false ? skipComments(mock, emit, skippedAgents, agentSources)
@@ -231,7 +236,7 @@ export async function orchestrateAnalysis(
         : graph.enabled.jargon === false ? skipJargon(emit, skippedAgents, agentSources)
           : withReplicas('jargon', graph.replicas.jargon,
               q => runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, extra, eff.jargon, meter, q, audience),
-              mergeJargonReplicas, m => bz(`找到 ${m.length} 個詞!`))
+              mergeJargonReplicas, m => bi(`找到 ${m.length} 個詞!`, `Found ${m.length} terms!`))
     // ctx producer, parameterised by the comment_digest to feed it (cheap phase
     // passes an empty digest — summary-only is fine for a quick worth-reading call).
     const runCtx = (cd: HNLensResult['comment_digest'], jrg: JargonTerm[] = []): Promise<HNLensResult['verdict']> =>
@@ -349,7 +354,7 @@ async function replaySection<T>(
   emit: (e: SSEEvent) => void,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<T> {
-  if (agentSources) agentSources[agent] = { mode: 'cache', reason: bz('這段直接使用上一輪快取，沒有重新呼叫 agent。') }
+  if (agentSources) agentSources[agent] = { mode: 'cache', reason: bi('這段直接使用上一輪快取，沒有重新呼叫 agent。', 'Reused this section from the previous cache — the agent was not called again.') }
   emit({ event: 'status', agent, state: 'done', label: LABELS[agent].done })
   emit({ event: 'section', agent, data })
   return data
@@ -371,36 +376,53 @@ function buildCaptainPlan(
     {
       agent: 'sum',
       action: cachedShared ? 'reuse' : 'run',
-      reason: cachedShared ? bz('摘要已在快取裡，直接拿來用。') : bz('先讀文章，抓出一句話和重點。'),
+      reason: cachedShared
+        ? bi('摘要已在快取裡，直接拿來用。', 'The summary is already cached — reusing it as-is.')
+        : bi('先讀文章，抓出一句話和重點。', 'Read the article first to pull out a one-liner and the key points.'),
     },
     {
       agent: 'jargon',
       action: cachedJargon ? 'reuse' : (looksTechnical && textLen >= 220 ? 'run' : 'skip'),
       reason: cachedJargon
-        ? bz('術語清單已依你的生詞本快取。')
+        ? bi('術語清單已依你的生詞本快取。', 'The jargon list is already cached against your known-terms list.')
         : looksTechnical && textLen >= 220
-          ? bz('內容看起來有技術密度，請小詞挑真正會卡住的詞。')
-          : bz('內容太短或不像技術文，先不硬找術語。'),
+          ? bi('內容看起來有技術密度，請小詞挑真正會卡住的詞。', 'The content looks technically dense — let Jargon pick out the terms that would actually trip readers up.')
+          : bi('內容太短或不像技術文，先不硬找術語。', 'The content is too short or not technical — skipping the jargon hunt for now.'),
     },
     {
       agent: 'comments',
       action: cachedShared ? 'reuse' : (comments >= 3 ? 'run' : 'skip'),
       reason: cachedShared
-        ? bz('留言摘要已在快取裡，直接拿來用。')
+        ? bi('留言摘要已在快取裡，直接拿來用。', 'The comment digest is already cached — reusing it as-is.')
         : comments >= 3
-          ? bz(commentsWereSampled(item) ? '留言很多，挑高訊號串分析。' : '留言量足夠，請小潛整理派別。')
-          : bz('留言太少，沒有必要做派別分析。'),
+          ? bi(
+              commentsWereSampled(item) ? '留言很多，挑高訊號串分析。' : '留言量足夠，請小潛整理派別。',
+              commentsWereSampled(item) ? 'There are a lot of comments — sampling the highest-signal threads to analyze.' : 'There are enough comments — let Comments sort out the camps.'
+            )
+          : bi('留言太少，沒有必要做派別分析。', 'Too few comments to bother with camp analysis.'),
     },
     {
       agent: 'ctx',
       action: cachedShared ? 'reuse' : 'run',
-      reason: cachedShared ? bz('裁定已在快取裡。') : bz('等摘要和留言輪廓出來後，再判斷值不值得讀。'),
+      reason: cachedShared
+        ? bi('裁定已在快取裡。', 'The verdict is already cached.')
+        : bi('等摘要和留言輪廓出來後，再判斷值不值得讀。', 'Wait for the summary and comment overview, then judge whether it is worth reading.'),
     },
   ]
   const route = assignments
-    .map(a => `${agentZh(a.agent)}:${a.action === 'run' ? '開工' : a.action === 'reuse' ? '拿快取' : '略過'}`)
+    .map(a => `${agentZh(a.agent)}:${actionZh(a.action)}`)
     .join(' · ')
-  return { route: bz(route), assignments }
+  const routeEn = assignments
+    .map(a => `${agentEn(a.agent)}: ${actionEn(a.action)}`)
+    .join(' · ')
+  return { route: bi(route, routeEn), assignments }
+}
+
+function actionZh(action: RouteAction): string {
+  return action === 'run' ? '開工' : action === 'reuse' ? '拿快取' : '略過'
+}
+function actionEn(action: RouteAction): string {
+  return action === 'run' ? 'running' : action === 'reuse' ? 'from cache' : 'skipped'
 }
 
 function shouldRun(plan: CaptainPlan, agent: WorkerAgent): boolean {
@@ -477,12 +499,12 @@ function applyGraphToPlan(plan: CaptainPlan, graph: NormalizedGraph): void {
   for (const a of plan.assignments) {
     if (graph.enabled[a.agent] === false) {
       a.action = 'skip'
-      a.reason = bz('你在編輯面板把這位關掉了，這輪直接略過。')
+      a.reason = bi('你在編輯面板把這位關掉了，這輪直接略過。', 'You turned this one off in the editor panel — skipping it this round.')
     }
   }
-  plan.route = bz(plan.assignments
-    .map(a => `${agentZh(a.agent)}:${a.action === 'run' ? '開工' : a.action === 'reuse' ? '拿快取' : '略過'}`)
-    .join(' · '))
+  const route = plan.assignments.map(a => `${agentZh(a.agent)}:${actionZh(a.action)}`).join(' · ')
+  const routeEn = plan.assignments.map(a => `${agentEn(a.agent)}: ${actionEn(a.action)}`).join(' · ')
+  plan.route = bi(route, routeEn)
 }
 
 // Build a substantive digest of a stage-1 agent's output to thread into the
@@ -595,6 +617,12 @@ function agentZh(agent: WorkerAgent): string {
   return ({ sum: '小摘', jargon: '小詞', comments: '小潛', ctx: '小導' } as Record<WorkerAgent, string>)[agent]
 }
 
+// English display names for the same agents, used when building bilingual
+// route/reason strings that go straight to the client (not agent prompts).
+function agentEn(agent: WorkerAgent): string {
+  return ({ sum: 'Summarizer', jargon: 'Jargon', comments: 'Comments', ctx: 'Verdict' } as Record<WorkerAgent, string>)[agent]
+}
+
 function isLikelyTechnical(title: string, articleText: string): boolean {
   const text = `${title}\n${articleText}`.toLowerCase()
   if (!text.trim()) return false
@@ -629,19 +657,19 @@ async function runSummary(
       ? { tldr: toBi(p.tldr), key_points: (Array.isArray(p.key_points) ? p.key_points : []).map(toBi).filter(k => k.zh) }
       : mock.summary
     if (!quiet) {
-      emit({ event: 'status', agent: 'sum', state: 'done', label: bz('TL;DR 完成!') })
+      emit({ event: 'status', agent: 'sum', state: 'done', label: bi('TL;DR 完成!', 'TL;DR done!') })
       emit({ event: 'section', agent: 'sum', data: summary })
     }
-    if (agentSources) agentSources.sum = { mode: 'real', reason: bz('小摘實際讀取文章內容後產出。') }
+    if (agentSources) agentSources.sum = { mode: 'real', reason: bi('小摘實際讀取文章內容後產出。', 'Summarizer actually read the article content to produce this.') }
     return summary
   } catch (e) {
     fallbackAgents?.add('sum')
     const sandboxReason = emitSandboxUnavailable('sum', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'sum', state: 'done', label: bz('摘要用備援內容') })
+      emit({ event: 'status', agent: 'sum', state: 'done', label: bi('摘要用備援內容', 'Summary used fallback content') })
       emit({ event: 'section', agent: 'sum', data: mock.summary })
     }
-    if (agentSources) agentSources.sum = { mode: 'fallback', reason: fallbackReason('小摘', e, sandboxReason, '改用本地備援摘要') }
+    if (agentSources) agentSources.sum = { mode: 'fallback', reason: fallbackReason('sum', e, sandboxReason, bi('改用本地備援摘要', 'falling back to the local backup summary')) }
     return mock.summary
   } finally {
     if (!quiet) meter?.finish('sum')
@@ -657,10 +685,13 @@ async function skipSummary(
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<HNLensResult['summary']> {
   skippedAgents.add('sum')
-  const empty: HNLensResult['summary'] = { tldr: bz('你在編輯面板把小摘關掉了，這輪沒有產生摘要。'), key_points: [] }
-  emit({ event: 'status', agent: 'sum', state: 'done', label: bz('已關閉，略過摘要') })
+  const empty: HNLensResult['summary'] = {
+    tldr: bi('你在編輯面板把小摘關掉了，這輪沒有產生摘要。', 'You turned Summarizer off in the editor panel — no summary was produced this round.'),
+    key_points: [],
+  }
+  emit({ event: 'status', agent: 'sum', state: 'done', label: bi('已關閉，略過摘要', 'Turned off — skipping summary') })
   emit({ event: 'section', agent: 'sum', data: empty })
-  if (agentSources) agentSources.sum = { mode: 'skipped', reason: bz('你在編輯面板關掉小摘，沒有呼叫摘要 agent。') }
+  if (agentSources) agentSources.sum = { mode: 'skipped', reason: bi('你在編輯面板關掉小摘，沒有呼叫摘要 agent。', 'You turned Summarizer off in the editor panel, so the summary agent was not called.') }
   return empty
 }
 
@@ -687,7 +718,7 @@ async function debateVerdict(
   env: Env, item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'],
   jargon: JargonTerm[], mock: HNLensResult, emit: (e: SSEEvent) => void, meter?: UsageMeter, audience?: Audience
 ): Promise<HNLensResult['verdict']> {
-  emit({ event: 'step', agent: 'ctx', label: bz('正方 vs 反方 辯論中…') })
+  emit({ event: 'step', agent: 'ctx', label: bi('正方 vs 反方 辯論中…', 'Pro vs con debating…') })
   const proPrompt = buildDebatePrompt(item, summary, cd, jargon, 'pro', audience)
   const conPrompt = buildDebatePrompt(item, summary, cd, jargon, 'con', audience)
   const [proR, conR] = await Promise.allSettled([
@@ -700,7 +731,7 @@ async function debateVerdict(
   if (!proText && !conText) throw new Error('debate: both sides failed')
   const pro = parseVerdict(proText)
   const con = parseVerdict(conText)
-  emit({ event: 'step', agent: 'ctx', label: bz('首席裁判合議中…') })
+  emit({ event: 'step', agent: 'ctx', label: bi('首席裁判合議中…', 'Head judge deliberating…') })
   const mergePrompt = buildDebateMergePrompt(item, pro, con)
   const mergeText = await callMfAgent(env, env.AGENT_CONTEXT, mergePrompt)
   meter?.add('ctx', mergePrompt.length, mergeText.length)
@@ -713,7 +744,7 @@ async function runContext(
   jargon: JargonTerm[], mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>, meter?: UsageMeter, debate = false, audience?: Audience
 ): Promise<HNLensResult['verdict']> {
-  emit({ event: 'status', agent: 'ctx', state: 'running', label: debate ? bz('辯論裁定中…') : LABELS.ctx.running })
+  emit({ event: 'status', agent: 'ctx', state: 'running', label: debate ? bi('辯論裁定中…', 'Debating verdict…') : LABELS.ctx.running })
   try {
     let verdict: HNLensResult['verdict']
     if (debate) {
@@ -724,19 +755,22 @@ async function runContext(
       meter?.add('ctx', prompt.length, text.length)
       verdict = parseVerdict(text) ?? mock.verdict
     }
-    emit({ event: 'status', agent: 'ctx', state: 'done', label: debate ? bz('辯論裁定完成!') : bz('裁定完成!') })
+    emit({ event: 'status', agent: 'ctx', state: 'done', label: debate ? bi('辯論裁定完成!', 'Debate verdict is in!') : bi('裁定完成!', 'Verdict is in!') })
     emit({ event: 'section', agent: 'ctx', data: verdict })
-    if (agentSources) agentSources.ctx = { mode: 'real', reason: bz(
+    if (agentSources) agentSources.ctx = { mode: 'real', reason: bi(
       debate ? '小導以正反雙方辯論後合議出平衡裁定。'
         : jargon.length ? '小導根據摘要、留言輪廓與小詞的術語密度重新判斷。'
-          : '小導根據摘要和留言輪廓重新判斷。') }
+          : '小導根據摘要和留言輪廓重新判斷。',
+      debate ? 'Context reached a balanced verdict after arguing both sides of the debate.'
+        : jargon.length ? "Context re-judged this based on the summary, comment overview, and Jargon's term density."
+          : 'Context re-judged this based on the summary and comment overview.') }
     return verdict
   } catch (e) {
     fallbackAgents?.add('ctx')
     const sandboxReason = emitSandboxUnavailable('ctx', e, emit)
-    emit({ event: 'status', agent: 'ctx', state: 'done', label: bz('裁定用備援內容') })
+    emit({ event: 'status', agent: 'ctx', state: 'done', label: bi('裁定用備援內容', 'Verdict used fallback content') })
     emit({ event: 'section', agent: 'ctx', data: mock.verdict })
-    if (agentSources) agentSources.ctx = { mode: 'fallback', reason: fallbackReason('小導', e, sandboxReason, '改用本地裁定') }
+    if (agentSources) agentSources.ctx = { mode: 'fallback', reason: fallbackReason('ctx', e, sandboxReason, bi('改用本地裁定', 'falling back to the local verdict')) }
     return mock.verdict
   } finally {
     meter?.finish('ctx')
@@ -778,12 +812,12 @@ async function skipContext(
   skippedAgents.add('ctx')
   const empty: HNLensResult['verdict'] = {
     worth_reading: mock.verdict.worth_reading,
-    why_frontpage: bz('你在編輯面板把小導關掉了，這輪沒有重新裁定。'),
+    why_frontpage: bi('你在編輯面板把小導關掉了，這輪沒有重新裁定。', 'You turned Verdict off in the editor panel — no new verdict was made this round.'),
     tier: mock.verdict.tier,
   }
-  emit({ event: 'status', agent: 'ctx', state: 'done', label: bz('已關閉，略過裁定') })
+  emit({ event: 'status', agent: 'ctx', state: 'done', label: bi('已關閉，略過裁定', 'Turned off — skipping verdict') })
   emit({ event: 'section', agent: 'ctx', data: empty })
-  if (agentSources) agentSources.ctx = { mode: 'skipped', reason: bz('你在編輯面板關掉小導，沒有呼叫裁定 agent。') }
+  if (agentSources) agentSources.ctx = { mode: 'skipped', reason: bi('你在編輯面板關掉小導，沒有呼叫裁定 agent。', 'You turned Verdict off in the editor panel, so the verdict agent was not called.') }
   return empty
 }
 
@@ -814,13 +848,13 @@ async function runComments(
   const commentCount = item.children?.length ?? 0
   if (commentCount === 0) {
     if (!quiet) {
-      emit({ event: 'status', agent: 'comments', state: 'running', label: bz('這篇沒有 HN 討論') })
-      emit({ event: 'status', agent: 'comments', state: 'done', label: bz('無留言') })
+      emit({ event: 'status', agent: 'comments', state: 'running', label: bi('這篇沒有 HN 討論', 'No HN discussion on this one') })
+      emit({ event: 'status', agent: 'comments', state: 'done', label: bi('無留言', 'No comments') })
       emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
     }
     return mock.comment_digest
   }
-  if (!quiet) emit({ event: 'status', agent: 'comments', state: 'running', label: bz(`潛進 ${commentCount} 樓…`) })
+  if (!quiet) emit({ event: 'status', agent: 'comments', state: 'running', label: bi(`潛進 ${commentCount} 樓…`, `Diving into ${commentCount} comments…`) })
   const params = commentParams(effort)
   try {
     const text = await runCommentPipeline(item, env, emit, extraContext, params, meter, quiet)
@@ -830,16 +864,21 @@ async function runComments(
       emit({ event: 'status', agent: 'comments', state: 'done', label: LABELS.comments.done })
       emit({ event: 'section', agent: 'comments', data: cd })
     }
-    if (agentSources) agentSources.comments = { mode: 'real', reason: bz(commentsWereSampled(item) ? '小潛實際分析高訊號留言串。' : '小潛實際分析留言。') }
+    if (agentSources) agentSources.comments = {
+      mode: 'real',
+      reason: commentsWereSampled(item)
+        ? bi('小潛實際分析高訊號留言串。', 'Comments actually analyzed the highest-signal threads.')
+        : bi('小潛實際分析留言。', 'Comments actually analyzed the comments.'),
+    }
     return cd
   } catch (e) {
     fallbackAgents?.add('comments')
     const sandboxReason = emitSandboxUnavailable('comments', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'comments', state: 'done', label: bz('留言用備援內容') })
+      emit({ event: 'status', agent: 'comments', state: 'done', label: bi('留言用備援內容', 'Comments used fallback content') })
       emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
     }
-    if (agentSources) agentSources.comments = { mode: 'fallback', reason: fallbackReason('小潛', e, sandboxReason, '改用本地留言摘要') }
+    if (agentSources) agentSources.comments = { mode: 'fallback', reason: fallbackReason('comments', e, sandboxReason, bi('改用本地留言摘要', 'falling back to the local comment digest')) }
     return mock.comment_digest
   } finally {
     if (!quiet) meter?.finish('comments')
@@ -854,16 +893,16 @@ async function skipComments(
 ): Promise<HNLensResult['comment_digest']> {
   skippedAgents.add('comments')
   const empty = normalizeDigest({
-    overview: bz('留言太少，隊長略過小潛的派別分析。'),
+    overview: bi('留言太少，隊長略過小潛的派別分析。', 'Too few comments — the captain skipped Comments’ camp analysis.'),
     camps: [],
-    consensus: bz('尚無足夠討論形成共識。'),
+    consensus: bi('尚無足夠討論形成共識。', 'Not enough discussion yet to form a consensus.'),
     disputes: [],
     expert_corrections: [],
     spicy: [],
   })
-  emit({ event: 'status', agent: 'comments', state: 'done', label: bz('留言太少，略過') })
+  emit({ event: 'status', agent: 'comments', state: 'done', label: bi('留言太少，略過', 'Too few comments — skipped') })
   emit({ event: 'section', agent: 'comments', data: empty.overview.zh ? empty : mock.comment_digest })
-  if (agentSources) agentSources.comments = { mode: 'skipped', reason: bz('留言太少，隊長判斷不用呼叫小潛。') }
+  if (agentSources) agentSources.comments = { mode: 'skipped', reason: bi('留言太少，隊長判斷不用呼叫小潛。', 'Too few comments — the captain decided Comments did not need to be called.') }
   return empty.overview.zh ? empty : mock.comment_digest
 }
 
@@ -907,23 +946,29 @@ async function curate(
   // whenever the call happens, consistent with the other agents, instead of the
   // `finally` emitting a misleading synth:0 for a call that really ran.
   const prompt = buildCuratorPrompt(item, result, audience)
-  emit({ event: 'status', agent: 'synth', state: 'running', label: bz('整合中…') })
+  emit({ event: 'status', agent: 'synth', state: 'running', label: bi('整合中…', 'Synthesizing…') })
   meter?.add('synth', prompt.length, 0)
   try {
     const text = await callMfAgent(env, env.AGENT_SYNTHESIZER, prompt, { timeoutMs: 55_000, attempts: 1 })
     meter?.add('synth', 0, text.length)
     const d = parseLoose<CuratorDecision>(text)
     if (d) applyCuration(result, d)
-    emit({ event: 'status', agent: 'synth', state: 'done', label: bz('整合完成!') })
-    if (agentSources) agentSources.synth = { mode: 'real', reason: bz('合成實際檢查並修剪各段輸出。') }
+    emit({ event: 'status', agent: 'synth', state: 'done', label: bi('整合完成!', 'Synthesis done!') })
+    if (agentSources) agentSources.synth = { mode: 'real', reason: bi('合成實際檢查並修剪各段輸出。', 'Synth actually reviewed and pruned each section’s output.') }
   } catch (e) {
     const sandboxReason = emitSandboxUnavailable('synth', e, emit)
-    emit({ event: 'status', agent: 'synth', state: 'done', label: bz('整合略過') })
+    emit({ event: 'status', agent: 'synth', state: 'done', label: bi('整合略過', 'Synthesis skipped') })
     if (agentSources) agentSources.synth = {
       mode: 'fallback',
       reason: sandboxReason
-        ? bz(`合成的 sandbox/runtime 不在線，保留各組原始結果，不再等 QA 修剪。原因：${sandboxReason}`)
-        : bz(`合成超過 25 秒或 runtime 失敗；保留各組原始結果，不再等 QA 修剪。原因：${shortErr(e)}`),
+        ? bi(
+            `合成的 sandbox/runtime 不在線，保留各組原始結果，不再等 QA 修剪。原因：${sandboxReason}`,
+            `Synth's sandbox/runtime is offline — keeping each section's raw results instead of waiting for QA pruning. Reason: ${sandboxReason}`
+          )
+        : bi(
+            `合成超過 25 秒或 runtime 失敗；保留各組原始結果，不再等 QA 修剪。原因：${shortErr(e)}`,
+            `Synth took over 25s or the runtime failed — keeping each section's raw results instead of waiting for QA pruning. Reason: ${shortErr(e)}`
+          ),
     }
   } finally {
     meter?.finish('synth')
@@ -969,11 +1014,11 @@ ${camps || '(none)'}
 
 // ── Agent caller labels ────────────────────────────────────────────
 const LABELS: Record<AgentName, { running: BiStr; done: BiStr }> = {
-  sum:      { running: bz('讀文章中…'),   done: bz('TL;DR 完成!') },
-  jargon:   { running: bz('找術語中…'),   done: bz('術語解釋完成!') },
-  comments: { running: bz('潛進留言區…'), done: bz('留言分析完成!') },
-  ctx:      { running: bz('評估文章價值…'), done: bz('裁定完成!') },
-  synth:    { running: bz('整合中…'),     done: bz('整合完成!') },
+  sum:      { running: bi('讀文章中…', 'Reading the article…'),   done: bi('TL;DR 完成!', 'TL;DR done!') },
+  jargon:   { running: bi('找術語中…', 'Hunting for jargon…'),   done: bi('術語解釋完成!', 'Jargon explained!') },
+  comments: { running: bi('潛進留言區…', 'Diving into the comments…'), done: bi('留言分析完成!', 'Comments analyzed!') },
+  ctx:      { running: bi('評估文章價值…', 'Judging if it is worth reading…'), done: bi('裁定完成!', 'Verdict is in!') },
+  synth:    { running: bi('整合中…', 'Synthesizing…'),     done: bi('整合完成!', 'Synthesis done!') },
 }
 
 // ── Comment pipeline (map → reduce), high-signal first + token budget ──
@@ -993,17 +1038,23 @@ async function runCommentPipeline(
   const subtrees = topSubtrees(item, params.maxSubtrees)
   const sampled = subtrees.length < commentCount
   if (!quiet) emit({ event: 'step', agent: 'comments',
-    label: bz(`挑出 ${subtrees.length} 串高關注留言${sampled ? '（採樣）' : ''}`) })
+    label: bi(
+      `挑出 ${subtrees.length} 串高關注留言${sampled ? '（採樣）' : ''}`,
+      `Picked out ${subtrees.length} high-attention threads${sampled ? ' (sampled)' : ''}`
+    ) })
 
   const mapResults: string[] = []
   for (let i = 0; i < subtrees.length; i += 5) {
     const batch = subtrees.slice(i, i + 5)
     const results = await Promise.all(batch.map(sub => mapSubtree(env, sub, item.id, params.mapBudget, meter)))
     mapResults.push(...results.filter(Boolean))
-    if (!quiet) emit({ event: 'step', agent: 'comments', label: bz(`已摘要 ${Math.min(i + 5, subtrees.length)}/${subtrees.length} 串`) })
+    if (!quiet) emit({ event: 'step', agent: 'comments', label: bi(
+      `已摘要 ${Math.min(i + 5, subtrees.length)}/${subtrees.length} 串`,
+      `Summarized ${Math.min(i + 5, subtrees.length)}/${subtrees.length} threads`
+    ) })
   }
 
-  if (!quiet) emit({ event: 'step', agent: 'comments', label: bz('聚類派別分析中…') })
+  if (!quiet) emit({ event: 'step', agent: 'comments', label: bi('聚類派別分析中…', 'Clustering into camps…') })
   const reducePrompt = buildCommentReducePrompt(mapResults, item, extraContext, params)
   const reduceText = await callMfAgent(env, env.AGENT_COMMENT_REDUCE, reducePrompt)
   meter?.add('comments', reducePrompt.length, reduceText.length)
@@ -1186,7 +1237,7 @@ async function runJargon(
     const prompts = windows.length === 0
       ? [buildJargonPrompt(item, '', commentSample, { i: 0, n: 1 }, known, candidates, extraContext, effort, audience)]
       : windows.map((w, i) => buildJargonPrompt(item, w, i === 0 ? commentSample : '', { i, n: windows.length }, known, candidates, i === 0 ? extraContext : undefined, effort, audience))
-    if (prompts.length > 1 && !quiet) emit({ event: 'step', agent: 'jargon', label: bz(`通讀全文 ${prompts.length} 段…`) })
+    if (prompts.length > 1 && !quiet) emit({ event: 'step', agent: 'jargon', label: bi(`通讀全文 ${prompts.length} 段…`, `Reading the full article in ${prompts.length} passes…`) })
     // Run windows independently — a slow/failed window must NOT zero the rest.
     const settled = await Promise.allSettled(prompts.map(p =>
       callMfAgent(env, env.AGENT_JARGON, p, { timeoutMs, attempts: 1 })))
@@ -1204,23 +1255,35 @@ async function runJargon(
     const knownSet = new Set(known.map(k => k.trim().toLowerCase()))
     merged = merged.filter(t => !knownSet.has((t.term || '').trim().toLowerCase()))
     if (!quiet) {
-      emit({ event: 'status', agent: 'jargon', state: 'done', label: bz(`找到 ${merged.length} 個詞!`) })
+      emit({ event: 'status', agent: 'jargon', state: 'done', label: bi(`找到 ${merged.length} 個詞!`, `Found ${merged.length} terms!`) })
       emit({ event: 'section', agent: 'jargon', data: merged })
     }
-    if (agentSources) agentSources.jargon = { mode: 'real', reason: bz(`小詞實際分析文章術語；本次最多等待 ${Math.round(timeoutMs / 1000)} 秒。`) }
+    if (agentSources) agentSources.jargon = {
+      mode: 'real',
+      reason: bi(
+        `小詞實際分析文章術語；本次最多等待 ${Math.round(timeoutMs / 1000)} 秒。`,
+        `Jargon actually analyzed the article's terms; this run waited up to ${Math.round(timeoutMs / 1000)}s.`
+      ),
+    }
     return merged
   } catch (e) {
     fallbackAgents?.add('jargon')
     const sandboxReason = emitSandboxUnavailable('jargon', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'jargon', state: 'done', label: bz('術語用備援內容') })
+      emit({ event: 'status', agent: 'jargon', state: 'done', label: bi('術語用備援內容', 'Jargon used fallback content') })
       emit({ event: 'section', agent: 'jargon', data: [] })
     }
     if (agentSources) agentSources.jargon = {
       mode: 'fallback',
       reason: sandboxReason
-        ? bz(`小詞的 sandbox/runtime 不在線，為避免整篇卡住，先不顯示術語。原因：${sandboxReason}`)
-        : bz(`小詞最多等待 ${Math.round(timeoutMs / 1000)} 秒；這次沒有及時回覆，為避免整篇卡住，先不顯示術語。原因：${shortErr(e)}`),
+        ? bi(
+            `小詞的 sandbox/runtime 不在線，為避免整篇卡住，先不顯示術語。原因：${sandboxReason}`,
+            `Jargon's sandbox/runtime is offline — skipping the jargon list for now to avoid stalling the whole run. Reason: ${sandboxReason}`
+          )
+        : bi(
+            `小詞最多等待 ${Math.round(timeoutMs / 1000)} 秒；這次沒有及時回覆，為避免整篇卡住，先不顯示術語。原因：${shortErr(e)}`,
+            `Jargon waits up to ${Math.round(timeoutMs / 1000)}s; it did not respond in time this run, so the jargon list is skipped to avoid stalling the whole run. Reason: ${shortErr(e)}`
+          ),
     }
     return []
   } finally {
@@ -1234,9 +1297,9 @@ async function skipJargon(
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<JargonTerm[]> {
   skippedAgents.add('jargon')
-  emit({ event: 'status', agent: 'jargon', state: 'done', label: bz('非技術文，略過術語') })
+  emit({ event: 'status', agent: 'jargon', state: 'done', label: bi('非技術文，略過術語', 'Not technical — skipping jargon') })
   emit({ event: 'section', agent: 'jargon', data: [] })
-  if (agentSources) agentSources.jargon = { mode: 'skipped', reason: bz('隊長判斷內容太短或不像技術文，沒有呼叫小詞。') }
+  if (agentSources) agentSources.jargon = { mode: 'skipped', reason: bi('隊長判斷內容太短或不像技術文，沒有呼叫小詞。', 'The captain judged the content too short or not technical, so Jargon was not called.') }
   return []
 }
 
@@ -1267,9 +1330,18 @@ function emitSandboxUnavailable(agent: AgentName, e: unknown, emit: (event: SSEE
   return reason
 }
 
-function fallbackReason(agentZh: string, e: unknown, sandboxReason: string | null, fallbackText: string): BiStr {
-  if (sandboxReason) return bz(`${agentZh} 的 sandbox/runtime 不在線，${fallbackText}。原因：${sandboxReason}`)
-  return bz(`${agentZh}未能順利回覆，${fallbackText}。原因：${shortErr(e)}`)
+function fallbackReason(agent: WorkerAgent, e: unknown, sandboxReason: string | null, fallbackText: BiStr): BiStr {
+  const zhName = agentZh(agent)
+  const enName = agentEn(agent)
+  if (sandboxReason)
+    return bi(
+      `${zhName} 的 sandbox/runtime 不在線，${fallbackText.zh}。原因：${sandboxReason}`,
+      `${enName}'s sandbox/runtime is offline, so ${fallbackText.en}. Reason: ${sandboxReason}`
+    )
+  return bi(
+    `${zhName}未能順利回覆，${fallbackText.zh}。原因：${shortErr(e)}`,
+    `${enName} did not respond successfully, so ${fallbackText.en}. Reason: ${shortErr(e)}`
+  )
 }
 
 function chunkText(text: string, size: number, maxWindows: number): string[] {
