@@ -19,6 +19,18 @@
 (function () {
   'use strict';
 
+  // ─── i18n ───────────────────────────────────────────────────────────────────
+  // langMode is only ever 'en' or 'zh' in practice (see LANG_CYCLE in app.js —
+  // "no bilingual"); default to 'en' for any stale/unexpected value.
+  // NOTE: named LZ (not L) because `L` is used pervasively below as a local
+  // alias for the orchestrator character (`const L = chars.orch`) — a same-name
+  // helper would be shadowed silently in those scopes.
+  function LZ(v) {
+    if (v == null) return '';
+    if (typeof v === 'string') return v;
+    return v[langMode] ?? v.zh ?? v.en ?? '';
+  }
+
   // ─── Grid / layout ──────────────────────────────────────────────────────────
   const SCALE = 3;
   const TILE  = 16;
@@ -55,12 +67,12 @@
 
   // ─── Roles + stations (seat tile; desk = seat+below; approach = beside) ──────
   const ROLE = {
-    orch:     { name:'隊長', shirt:'#FF6600', hair:'#3F3F46', acc:'lead',    role:'分派任務、最後帶你看報告' },
-    sum:      { name:'小摘', shirt:'#3B82F6', hair:'#5B3A29', acc:'doc',     role:'抓文章重點與 TL;DR' },
-    jargon:   { name:'小詞', shirt:'#F59E0B', hair:'#6B4423', acc:'bulb',    role:'挑出術語，白話解釋', glasses:true },
-    comments: { name:'小潛', shirt:'#14B8A6', hair:'#1F2937', acc:'phones',  role:'潛入留言，整理派系' },
-    ctx:      { name:'小導', shirt:'#8B5CF6', hair:'#7C2D12', acc:'stamp',   role:'幫你判斷這篇該略讀、速讀還是深讀' },
-    synth:    { name:'合成', shirt:'#EC4899', hair:'#4B5563', acc:'printer', role:'校稿整合，刪掉雜訊' },
+    orch:     { name:{ zh:'隊長', en:'Orchestrator' }, shirt:'#FF6600', hair:'#3F3F46', acc:'lead',    role:{ zh:'分派任務、最後帶你看報告', en:'Assigns tasks, walks you through the report at the end' } },
+    sum:      { name:{ zh:'小摘', en:'Summarizer' },   shirt:'#3B82F6', hair:'#5B3A29', acc:'doc',     role:{ zh:'抓文章重點與 TL;DR', en:'Extracts key points & TL;DR' } },
+    jargon:   { name:{ zh:'小詞', en:'Jargon' },       shirt:'#F59E0B', hair:'#6B4423', acc:'bulb',    role:{ zh:'挑出術語，白話解釋', en:'Picks out jargon, explains it plainly' }, glasses:true },
+    comments: { name:{ zh:'小潛', en:'Comments' },     shirt:'#14B8A6', hair:'#1F2937', acc:'phones',  role:{ zh:'潛入留言，整理派系', en:'Dives into comments, sorts the factions' } },
+    ctx:      { name:{ zh:'小導', en:'Context' },      shirt:'#8B5CF6', hair:'#7C2D12', acc:'stamp',   role:{ zh:'幫你判斷這篇該略讀、速讀還是深讀', en:'Helps you decide: skim, skip, or dive deep' } },
+    synth:    { name:{ zh:'合成', en:'Synthesizer' },  shirt:'#EC4899', hair:'#4B5563', acc:'printer', role:{ zh:'校稿整合，刪掉雜訊', en:'Proofreads & integrates, cuts the noise' } },
   };
   const STATIONS = [
     { id:'orch',     seat:[3,3],  approach:[4,3]  },
@@ -455,13 +467,14 @@
     const job = petQueue.shift();
     const target = chars[job.agentId];
     if (!target) return;
-    dog.state = 'carry'; dog.card = job.label; dog.bubble = '汪！';
+    dog.state = 'carry'; dog.card = job.label; dog.bubble = LZ({ zh:'汪！', en:'Woof!' });
     walkTo(dog, target.station.approach, () => {
       faceToward(dog, target.station.seat);
-      dog.state = 'deliver'; dog.bubble = job.label; target.bubble = '收到';
+      const ackMsg = LZ({ zh:'收到', en:'Got it' });
+      dog.state = 'deliver'; dog.bubble = job.label; target.bubble = ackMsg;
       dog.timer = 55;
       dog.onTimer = () => {
-        dog.card = ''; dog.bubble = ''; if (target.bubble === '收到') target.bubble = ''; dog.state = 'idle';
+        dog.card = ''; dog.bubble = ''; if (target.bubble === ackMsg) target.bubble = ''; dog.state = 'idle';
         dog.timer = 40 + Math.floor(Math.random() * 80);
         tryPetJobs();
       };
@@ -484,14 +497,15 @@
     const active = ALL_WORKERS.filter(id => chars[id].state === 'working' || chars[id].state === 'waiting');
     if (!active.length) { startPetAmbient(p); return; }
     const target = chars[active[Math.floor(Math.random() * active.length)]];
-    p.state = 'visit'; p.bubble = p.kind === 'cat' ? '喵？' : 'pika!';
+    p.state = 'visit'; p.bubble = p.kind === 'cat' ? LZ({ zh:'喵？', en:'Meow?' }) : 'pika!';
     walkTo(p, target.station.approach, () => {
       faceToward(p, target.station.seat);
-      if (!target.bubble) target.bubble = p.kind === 'cat' ? '等等～' : '有靈感';
+      const visitMsg = p.kind === 'cat' ? LZ({ zh:'等等～', en:'Hold on~' }) : LZ({ zh:'有靈感', en:'Got inspired' });
+      if (!target.bubble) target.bubble = visitMsg;
       p.timer = 75;
       p.onTimer = () => {
         p.bubble = '';
-        if (target.bubble === '等等～' || target.bubble === '有靈感') target.bubble = '';
+        if (target.bubble === visitMsg) target.bubble = '';
         p.state = 'idle'; p.timer = 80 + Math.floor(Math.random() * 120);
       };
     });
@@ -500,7 +514,7 @@
   function startPetAmbient(p) {
     const dest = PET_LOUNGE[Math.floor(Math.random() * PET_LOUNGE.length)];
     p.state = 'wander';
-    if (Math.random() < 0.28) p.bubble = p.kind === 'dog' ? '汪' : p.kind === 'cat' ? '喵' : 'pika';
+    if (Math.random() < 0.28) p.bubble = p.kind === 'dog' ? LZ({ zh:'汪', en:'Woof' }) : p.kind === 'cat' ? LZ({ zh:'喵', en:'Meow' }) : 'pika';
     walkTo(p, dest, () => {
       p.bubble = '';
       p.timer = 90 + Math.floor(Math.random() * 220);
@@ -517,11 +531,11 @@
   const TO_SYNTH = ['sum', 'jargon', 'comments'];   // these hand off to 合成
   const SYNTH_REVIEW = 130;                          // min frames 合成 spends curating
   const ASSIGNMENTS = {
-    sum:      { order:'小摘抓重點', ack:'收到！', card:'摘要中' },
-    jargon:   { order:'小詞找難詞', ack:'收到！', card:'找術語' },
-    comments: { order:'小潛看留言', ack:'我去潛水', card:'留言中' },
-    ctx:      { order:'小導判讀',   ack:'交給我', card:'判讀中' },
-    synth:    { order:'合成校稿',   ack:'收到稿', card:'整合中' },
+    sum:      { order:{ zh:'小摘抓重點', en:'Summarizer, hit the highlights' }, ack:{ zh:'收到！', en:'Got it!' },      card:{ zh:'摘要中', en:'Summarizing' } },
+    jargon:   { order:{ zh:'小詞找難詞', en:'Jargon, find the tricky terms' },  ack:{ zh:'收到！', en:'Got it!' },      card:{ zh:'找術語', en:'Finding terms' } },
+    comments: { order:{ zh:'小潛看留言', en:'Comments, dive into the thread' }, ack:{ zh:'我去潛水', en:'Diving in' },   card:{ zh:'留言中', en:'Reading comments' } },
+    ctx:      { order:{ zh:'小導判讀',   en:'Context, make the call' },        ack:{ zh:'交給我', en:'Leave it to me' }, card:{ zh:'判讀中', en:'Assessing' } },
+    synth:    { order:{ zh:'合成校稿',   en:'Synthesizer, proofread' },        ack:{ zh:'收到稿', en:'Got the draft' },  card:{ zh:'整合中', en:'Integrating' } },
   };
 
 	  function startRun() {
@@ -534,7 +548,7 @@
 	      sim.escalateStandby = new Set(
 	        sim.escalate ? editMode.escalateCandidates.filter(id => ALL_WORKERS.includes(id) && !editMode.bench[id]) : []
 	      );
-	      sim.escalateStandby.forEach(id => { if (chars[id]) { chars[id].asleep = true; chars[id].bubble = '💤 待命'; } });
+	      sim.escalateStandby.forEach(id => { if (chars[id]) { chars[id].asleep = true; chars[id].bubble = LZ({ zh:'💤 待命', en:'💤 Standby' }); } });
 	      if (sim.escalate) render();
 	      return;
 	    }
@@ -612,7 +626,7 @@
 	      if (sim.escalateStandby) sim.escalateStandby.delete(id);   // now a real carrier
 		      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
 		      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null; e.carryDoc = false;
-	      e.asleep = false; e.bubble = '值得讀，開工！';
+	      e.asleep = false; e.bubble = LZ({ zh:'值得讀，開工！', en:"Worth a read, let's go!" });
 	      e.state = 'delivering';   // transient "moving" state so nothing else grabs it
 	      const t = targetPos(id);  // its computed reader slot (all-enabled escalate spec)
 	      walkXY(e, t.x, t.y, () => {
@@ -670,7 +684,7 @@
 	    // them behind reality (SSE running arriving first just means the hand-off is
 	    // a quick catch-up gesture). No teleport.
 	    { const t = targetPos('orch');
-	      L.bubble = '各組就位，開工！';
+	      L.bubble = LZ({ zh:'各組就位，開工！', en:"Everyone's in position, let's go!" });
 	      walkIntoRun(L, t.x, t.y, () => {
 	        L.state = 'idle'; L.facing = 'down';
 	        L.timer = 90; L.onTimer = () => { if (sim.active && !sim.delivering) L.bubble = ''; };
@@ -698,7 +712,7 @@
 	        const slot = REST_SLOTS[restIdx++ % REST_SLOTS.length]; const rc = centreOf(slot[0], slot[1]);
 	        e.bubble = '';
 	        walkIntoRun(e, rc.x, rc.y, () => {
-	          e.tile = slot.slice(); e.asleep = true; e.state = 'idle'; e.bubble = '💤 待命'; e.facing = 'down';
+	          e.tile = slot.slice(); e.asleep = true; e.state = 'idle'; e.bubble = LZ({ zh:'💤 待命', en:'💤 Standby' }); e.facing = 'down';
 	        }, 'idle');
 	        delete taskState[id];
 	      } else {
@@ -727,7 +741,12 @@
 
 	  // ─── Opening delivery: 隊長 hands the task to the active readers ─────────────
 	  // Bubbles 隊長 says as it hands over the task (📋) at the start of a run.
-	  const DELIVER_ORDERS = ['這篇交給你', '開始囉', '麻煩你了', '就靠你了'];
+	  const DELIVER_ORDERS = [
+	    { zh:'這篇交給你', en:'This one is yours' },
+	    { zh:'開始囉', en:"Here we go" },
+	    { zh:'麻煩你了', en:'Over to you' },
+	    { zh:'就靠你了', en:"Counting on you" },
+	  ];
 	  const DELIVER_HOLD = 22;   // frames 隊長 pauses at each reader for the hand-off beat
 
 	  // Which agents 隊長 delivers to, once per group: the FIRST member (podOrder) of
@@ -777,7 +796,7 @@
 	    walkXY(L, t.x, t.y, () => {
 	      // Don't stomp the finale if it began while we were walking back.
 	      if (sim.handoff || sim.presented) return;
-	      L.state = 'idle'; L.facing = 'down'; L.bubble = '各組開工，我盯著';
+	      L.state = 'idle'; L.facing = 'down'; L.bubble = LZ({ zh:'各組開工，我盯著', en:"Everyone's working, I've got eyes on it" });
 	      L.timer = 70; L.onTimer = () => { if (sim.active && !sim.delivering) L.bubble = ''; };
 	    }, 'task');
 	  }
@@ -799,13 +818,14 @@
 	      if (!sim.active || sim.handoff || sim.presented) { sim.delivering = false; L.carryDoc = false; sim.deliverTarget = null; return; }
 	      faceToward(L, w.tile);
 	      L.state = 'assigning';
-	      L.bubble = DELIVER_ORDERS[i % DELIVER_ORDERS.length];
+	      L.bubble = LZ(DELIVER_ORDERS[i % DELIVER_ORDERS.length]);
 	      // A brief acknowledging bubble on the reader if it isn't mid-talking.
-	      if (w.state === 'working' && !w.bubble) w.bubble = '收到！';
+	      const ackMsg = LZ({ zh:'收到！', en:'Got it!' });
+      if (w.state === 'working' && !w.bubble) w.bubble = ackMsg;
 	      L.timer = DELIVER_HOLD;
 	      L.onTimer = () => {
 	        L.bubble = '';
-	        if (w.bubble === '收到！') w.bubble = '';
+	        if (w.bubble === ackMsg) w.bubble = '';
 	        sim.deliverTarget = null;
 	        deliverTaskStep(targets, i + 1);
 	      };
@@ -829,7 +849,7 @@
 	    sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
 	    selected = null;
 	    const L = chars.orch;
-	    L.bubble = '各組就位，準備開工！';
+	    L.bubble = LZ({ zh:'各組就位，準備開工！', en:"Everyone's in position, get ready!" });
 	    // Clear per-agent leftovers, then walk to the computed layout.
 	    Object.values(chars).forEach(e => {
 		      e.timer = 0; e.onTimer = null; e._queuedDeliver = false; e._returningToDesk = false;
@@ -851,7 +871,7 @@
 		    e.statusText = ''; e._report = ''; e.workStart = 0; e.carryDoc = false;
 	    delete taskState[e.id];
 	    e.state = 'recall';
-	    if (e.id !== 'orch') e.bubble = '收到，回座！';
+	    if (e.id !== 'orch') e.bubble = LZ({ zh:'收到，回座！', en:'Got it, back to my seat!' });
 	    const seat = e.station.seat;
 	    const finish = () => { e.tile = seat.slice(); e.state = 'idle'; e.bubble = ''; done(); };
 	    if (e.tile[0] === seat[0] && e.tile[1] === seat[1]) { finish(); return; }
@@ -864,19 +884,19 @@
     const L = chars.orch;
     if (i >= ALL_WORKERS.length) {                   // done assigning → become receiver
       L.state = 'returning';
-      L.bubble = '各組開工';
+      L.bubble = LZ({ zh:'各組開工', en:'Everyone, get to work' });
       walkTo(L, L.station.approach, () => slideTo(L, L.station.seat, () => {
         L.state = 'idle'; L.facing = 'down'; L.bubble = ''; tryLeader();
       }));
       return;
     }
     const w = chars[ALL_WORKERS[i]];
-    const task = ASSIGNMENTS[w.id] || { order:'交給你！', ack:'收到！', card:'處理中' };
+    const task = ASSIGNMENTS[w.id] || { order:{ zh:'交給你！', en:'This one is yours!' }, ack:{ zh:'收到！', en:'Got it!' }, card:{ zh:'處理中', en:'Working' } };
     L.state = 'walking_to_employee';
     walkTo(L, w.station.approach, () => {
       faceToward(L, w.station.seat);
-      L.state = 'assigning'; L.bubble = task.order; w.state = 'called'; w.bubble = task.ack;
-      queuePetCard(w.id, task.card);
+      L.state = 'assigning'; L.bubble = LZ(task.order); w.state = 'called'; w.bubble = LZ(task.ack);
+      queuePetCard(w.id, LZ(task.card));
       L.timer = ASSIGN; L.onTimer = () => {
         L.bubble = ''; w.bubble = '';
         w.state = 'working'; w.workStart = tick;
@@ -911,7 +931,7 @@
 	    }
 	    const w = chars[sim.synthQueue.shift()];
 	    sim.synthBusy = true;
-	    deliver(w, S, w._report || '交稿！', '收到', () => {
+	    deliver(w, S, w._report || LZ({ zh:'交稿！', en:'Draft delivered!' }), LZ({ zh:'收到', en:'Got it' }), () => {
 	      sim.synthBusy = false; sim.handed++;
 	      if (sim.handed >= TO_SYNTH.length) {
         S.state = 'reviewing'; S.workStart = tick; queuePetCard('synth', ASSIGNMENTS.synth.card);
@@ -928,7 +948,7 @@
 	    if (e._returningToDesk) return;
 	    e._returningToDesk = true;
 	    e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
-	    e.bubble = e.id === 'synth' ? '先回電腦前' : '';
+	    e.bubble = e.id === 'synth' ? LZ({ zh:'先回電腦前', en:'Back to my desk first' }) : '';
 	    e.state = 'recall';
 	    const done = () => {
 	      e._returningToDesk = false;
@@ -947,7 +967,7 @@
     const job = sim.leaderQueue.shift();
     sim.leaderBusy = true;
     const w = chars[job];
-    const say = job === 'synth' ? '最終稿！' : (w._report || '完成！');
+    const say = job === 'synth' ? LZ({ zh:'最終稿！', en:'Final draft!' }) : (w._report || LZ({ zh:'完成！', en:'Done!' }));
     deliver(w, L, say, '✓', () => {
       sim.leaderBusy = false; maybeFinish(); tryLeader();
     });
@@ -967,7 +987,7 @@
     const spot = centreOf(WB_APPROACH[0], WB_APPROACH[1]);
     walkXY(L, spot.x, spot.y, () => {
       L.tile = WB_APPROACH.slice();
-      faceToward(L, WB_TILE); L.carryDoc = false; L.state = 'presenting'; L.bubble = '📊 來看報告！';
+      faceToward(L, WB_TILE); L.carryDoc = false; L.state = 'presenting'; L.bubble = LZ({ zh:'📊 來看報告！', en:'📊 Come see the report!' });
       sim.boardActive = true;
       if (presentHandler) presentHandler();
       L.timer = 120; L.onTimer = () => settleAfterReport();
@@ -1024,9 +1044,9 @@
     L.bubble = '';
     walkTo(L, SHELF_APPROACH, () => {
       faceToward(L, [2, 2]);
-      L.state = 'kb_search'; L.bubble = '找單詞本…'; L.timer = 85;
+      L.state = 'kb_search'; L.bubble = LZ({ zh:'找單詞本…', en:'Looking up the wordbook…' }); L.timer = 85;
       L.onTimer = () => {
-        L.bubble = '找到了';
+        L.bubble = LZ({ zh:'找到了', en:'Found it' });
         if (sim.kbOpen) sim.kbOpen();
         sim.kbOpen = null;
         L.timer = 35;
@@ -1042,7 +1062,10 @@
 
   // ─── Ambient office life (game-NPC idle behaviour) ──────────────────────────
   const ambLocks = { kitchen: false, snack: false, cooler: false };
-  const CHATS = ['🙂 歇會', '🥱', '💤 zzz', '🎧', '摸個魚', '🤔', '☕?'];
+  const CHATS = [
+    { zh:'🙂 歇會', en:'🙂 Break' }, '🥱', '💤 zzz', '🎧',
+    { zh:'摸個魚', en:'Slacking off' }, '🤔', '☕?',
+  ];
 
   // The agent's "home" tile = its current computed layout slot (drag override or
   // spec-derived), rounded to the grid so A* can route to/from it. This replaces
@@ -1100,10 +1123,10 @@
     else if (roll < 0.44 && !ambLocks.snack) { ambLocks.snack = true; ambientTrip(e, SNACK_TILE, 'snack', '🍪', 'snack'); }
     else if (roll < 0.56 && !ambLocks.cooler) { ambLocks.cooler = true; ambientTrip(e, COOLER_TILE, 'cooler', '💧', 'cooler'); }
     else if (roll < 0.80) {                                  // answer email at the desk
-      e.state = 'amb_do'; e.ambKind = 'email'; e.bubble = '✉️ 回信'; e.timer = AMB_DO + 60;
+      e.state = 'amb_do'; e.ambKind = 'email'; e.bubble = LZ({ zh:'✉️ 回信', en:'✉️ Replying' }); e.timer = AMB_DO + 60;
       e.onTimer = () => finishAmbient(e);
     } else {                                                 // a little idle chatter
-      e.state = 'amb_do'; e.ambKind = 'chat'; e.bubble = CHATS[Math.floor(Math.random() * CHATS.length)];
+      e.state = 'amb_do'; e.ambKind = 'chat'; e.bubble = LZ(CHATS[Math.floor(Math.random() * CHATS.length)]);
       e.timer = 90; e.onTimer = () => finishAmbient(e);
     }
   }
@@ -1170,7 +1193,12 @@
     return { x: target.x + (leftOK ? -14 : 14), y: target.y };
   }
   // Draft/handover bubbles readers say when they set a doc down at 合成.
-  const DELIVER_SAYS = ['交給你了', '這是我的部分', '我的稿子', '整理好了'];
+  const DELIVER_SAYS = [
+    { zh:'交給你了', en:'Here you go' },
+    { zh:'這是我的部分', en:'This is my part' },
+    { zh:'我的稿子', en:'My draft' },
+    { zh:'整理好了', en:'All sorted' },
+  ];
 
   // In-place custom run: PEOPLE carry documents. Each enabled worker finishes
   // (real `done` + MIN_WORK) → queues to walk its draft to the collector (合成,
@@ -1239,7 +1267,7 @@
       sim.collecting = true;
       S.state = 'reviewing'; S.workStart = tick;
       S.asleep = false;
-      S.bubble = (collectorId === 'synth' && synthOn) ? ASSIGNMENTS.synth.card : '彙整中';
+      S.bubble = (collectorId === 'synth' && synthOn) ? LZ(ASSIGNMENTS.synth.card) : LZ({ zh:'彙整中', en:'Consolidating' });
       if (collectorId === 'synth' && synthOn && taskState.synth !== 'done') taskState.synth = 'typing';
     }
 
@@ -1272,11 +1300,12 @@
     walkXY(w, spot.x, spot.y, () => {
       faceToward(w, S.tile);
       w.state = 'reporting';   // stand + talk during the hand-over beat
-      w.bubble = DELIVER_SAYS[Math.floor(Math.random() * DELIVER_SAYS.length)];
-      if (!S.bubble) S.bubble = '收到';
+      w.bubble = LZ(DELIVER_SAYS[Math.floor(Math.random() * DELIVER_SAYS.length)]);
+      const ackMsg = LZ({ zh:'收到', en:'Got it' });
+      if (!S.bubble) S.bubble = ackMsg;
       w.timer = REPORT;
       w.onTimer = () => {
-        w.bubble = ''; if (S.bubble === '收到') S.bubble = '';
+        w.bubble = ''; if (S.bubble === ackMsg) S.bubble = '';
         w.state = 'delivering';
         walkXY(w, home.x, home.y, () => {
           w.state = 'done'; w.facing = 'down';
@@ -1288,7 +1317,12 @@
   }
 
   // Bubbles a relay member says as it hands the growing doc to the next person.
-  const RELAY_PASS_SAYS = ['接著換你', '換你了', '傳給你', '交棒'];
+  const RELAY_PASS_SAYS = [
+    { zh:'接著換你', en:'Your turn next' },
+    { zh:'換你了', en:'Your turn' },
+    { zh:'傳給你', en:'Passing to you' },
+    { zh:'交棒', en:'Passing the baton' },
+  ];
 
   // ── Relay conveyor ─────────────────────────────────────────────────────────
   // A relay pod is a CONVEYOR LINE: the document is carried person→person in
@@ -1343,11 +1377,12 @@
     walkXY(w, spot.x, spot.y, () => {
       faceToward(w, nxt.tile);
       w.state = 'reporting';                           // hand-over beat
-      w.bubble = RELAY_PASS_SAYS[Math.floor(Math.random() * RELAY_PASS_SAYS.length)];
-      if (!nxt.bubble) nxt.bubble = '接手';
+      w.bubble = LZ(RELAY_PASS_SAYS[Math.floor(Math.random() * RELAY_PASS_SAYS.length)]);
+      const takeMsg = LZ({ zh:'接手', en:'Taking over' });
+      if (!nxt.bubble) nxt.bubble = takeMsg;
       w.timer = REPORT;
       w.onTimer = () => {
-        w.bubble = ''; if (nxt.bubble === '接手') nxt.bubble = '';
+        w.bubble = ''; if (nxt.bubble === takeMsg) nxt.bubble = '';
         w.state = 'delivering';
         walkXY(w, home.x, home.y, () => {
           w.state = 'done'; w.facing = 'down';         // this member is finished
@@ -1387,11 +1422,12 @@
     walkXY(w, spot.x, spot.y, () => {
       faceToward(w, S.tile);
       w.state = 'reporting';
-      w.bubble = DELIVER_SAYS[Math.floor(Math.random() * DELIVER_SAYS.length)];
-      if (!S.bubble) S.bubble = '收到';
+      w.bubble = LZ(DELIVER_SAYS[Math.floor(Math.random() * DELIVER_SAYS.length)]);
+      const ackMsg = LZ({ zh:'收到', en:'Got it' });
+      if (!S.bubble) S.bubble = ackMsg;
       w.timer = REPORT;
       w.onTimer = () => {
-        w.bubble = ''; if (S.bubble === '收到') S.bubble = '';
+        w.bubble = ''; if (S.bubble === ackMsg) S.bubble = '';
         w.state = 'delivering';
         walkXY(w, home.x, home.y, () => {
           w.state = 'done'; w.facing = 'down';
@@ -1420,7 +1456,7 @@
     const F = chars[producer];
     if (!F || producer === 'orch') {
       // Producer IS 隊長 (nothing enabled downstream) → 隊長 already holds it.
-      L.bubble = '拿到報告了';
+      L.bubble = LZ({ zh:'拿到報告了', en:'Got the report' });
       L.timer = HANDOFF_MIN;
       L.onTimer = () => { if (!sim.presented) { sim.presented = true; startPresentInPlace(); } };
       return;
@@ -1431,7 +1467,7 @@
     walkXY(F, spot.x, spot.y, () => {
       faceToward(F, L.tile);
       F.state = 'reporting';   // stand + talk during the hand-over beat
-      F.bubble = '報告好了'; L.bubble = '拿到報告了';
+      F.bubble = LZ({ zh:'報告好了', en:'Report is ready' }); L.bubble = LZ({ zh:'拿到報告了', en:'Got the report' });
       F.timer = REPORT;
       F.onTimer = () => {
         F.bubble = '';
@@ -1463,8 +1499,10 @@
   function startPresentInPlace() {
     const L = chars.orch;
     sim.active = false;   // hand-off complete → run logic ends; the present finale begins
-    // The hand-off is done; clear the producer's "交給隊長" bubble.
-    Object.values(chars).forEach(e => { if (e.id !== 'orch' && e.bubble === '報告交給隊長') e.bubble = ''; });
+    // The hand-off is done; clear the producer's "交給隊長" bubble (legacy guard —
+    // no current code path sets this bubble text, but kept for safety).
+    const handoffMsg = LZ({ zh:'報告交給隊長', en:'Report handed to the Orchestrator' });
+    Object.values(chars).forEach(e => { if (e.id !== 'orch' && e.bubble === handoffMsg) e.bubble = ''; });
     // Walk 隊長 to the whiteboard easel, face it, then present.
     L.state = 'walking_to_employee'; L.bubble = ''; L.carryDoc = true;
     L.walkTarget = null;
@@ -1473,7 +1511,7 @@
       L.tile = WB_APPROACH.slice();
       faceToward(L, WB_TILE);
       L.carryDoc = false;
-      L.state = 'presenting'; L.bubble = '📊 來看報告！';
+      L.state = 'presenting'; L.bubble = LZ({ zh:'📊 來看報告！', en:'📊 Come see the report!' });
       sim.boardActive = true;
       if (presentHandler) presentHandler();
       L.timer = 120; L.onTimer = present_settle;
@@ -1509,7 +1547,7 @@
 
   // ─── Pixel helpers ──────────────────────────────────────────────────────────
   let canvas, c, animId, reducedMotion = false, tick = 0, clickHandler = null, hoverHandler = null, selected = null, presentHandler = null, onSpecChange = null;
-  let kbCount = 0, langMode = 'bilingual', fly = null;   // shelf count, language sign, flying-book anim
+  let kbCount = 0, langMode = 'en', fly = null;   // shelf count, language sign, flying-book anim
   function chan(hx,i){ return parseInt(hx.slice(1+i*2,3+i*2),16); }
   function rgba(hx,a){ return `rgba(${chan(hx,0)},${chan(hx,1)},${chan(hx,2)},${a})`; }
   function shade(hx,f){ const r=Math.max(0,Math.min(255,Math.round(chan(hx,0)*f))),g=Math.max(0,Math.min(255,Math.round(chan(hx,1)*f))),b=Math.max(0,Math.min(255,Math.round(chan(hx,2)*f))); return `rgb(${r},${g},${b})`; }
@@ -1695,7 +1733,7 @@
     // Small "休息區" label above the chairs so the corner reads as the rest area.
     c.save(); c.fillStyle = rgba('#1C1917', 0.35);
     c.font = `${9}px system-ui, sans-serif`; c.textAlign = 'left'; c.textBaseline = 'top';
-    c.fillText('休息區', px(T(MASSAGE_CHAIRS[0][0])+2), px(T(MASSAGE_CHAIRS[0][1])-3)); c.restore();
+    c.fillText(LZ({ zh:'休息區', en:'Rest area' }), px(T(MASSAGE_CHAIRS[0][0])+2), px(T(MASSAGE_CHAIRS[0][1])-3)); c.restore();
   }
   function drawSofa(){ const sx=T(14),sy=T(9)+1,sw=T(3);
     rect(sx,sy,sw,4,SOFA); rect(sx,sy,sw,1,SOFAHI); rect(sx,sy+4,sw,3,SOFAHI);
@@ -2024,10 +2062,11 @@
     else if (mode==='working') { const p=Math.floor(tick/10)%2; rect(bx,ly+1,4,4,p?e.role.shirt:rgba(e.role.shirt,0.45)); }
     else rect(bx,ly+1,4,4,'#CFC4B4');
     c.save(); c.font=`${13}px monospace`; c.textAlign='center'; c.textBaseline='middle';
-    const w=c.measureText(e.role.name).width;
+    const nameStr = LZ(e.role.name);
+    const w=c.measureText(nameStr).width;
     c.fillStyle=rgba('#FFFFFF',0.72); c.fillRect(px(cx)-w/2-2, px(ly)-1, w+4, px(5));
     c.fillStyle=(mode==='idle')?'#9C9384':(e.id==='jargon'?e.role.shirt:LABEL);
-    c.fillText(e.role.name, px(cx)+SCALE, px(ly)+px(2.5)); c.restore();
+    c.fillText(nameStr, px(cx)+SCALE, px(ly)+px(2.5)); c.restore();
   }
   function drawBubble(e) {
     // talk bubbles (assign/report) take priority; while working, show the live
@@ -2143,13 +2182,13 @@
       c.strokeStyle = rgba(stroke, 0.42);
       c.lineWidth = SCALE; c.stroke();
       // Mode badge centred above the pod.
-      const label = relay ? '接力' : '平行';
-      const bw = 26, bh = 11;
+      const label = LZ(relay ? { zh:'接力', en:'Relay' } : { zh:'平行', en:'Parallel' });
+      c.font = `${10}px system-ui, sans-serif`;
+      const bw = Math.max(26, c.measureText(label).width + 10), bh = 11;
       const bx = (minX + maxX) / 2 - bw / 2, by = minY - 16 - bh - 2;
       c.fillStyle = rgba(stroke, 0.85);
       roundRect(px(bx), px(by), px(bw), px(bh), SCALE * 1.5); c.fill();
       c.fillStyle = '#FFFFFF';
-      c.font = `${10}px system-ui, sans-serif`;
       c.textAlign = 'center'; c.textBaseline = 'middle';
       c.fillText(label, px(bx + bw / 2), px(by + bh / 2) + 1);
       c.restore();
@@ -2240,7 +2279,7 @@
     c.fillStyle = rgba('#1C1917', 0.55);
     c.font = `${9}px system-ui, sans-serif`;
     c.textAlign = 'center'; c.textBaseline = 'bottom';
-    c.fillText('休息區 · 拖到這裡=停用', px(REST_ZONE.x + REST_ZONE.w / 2), px(REST_ZONE.y - 1));
+    c.fillText(LZ({ zh:'休息區 · 拖到這裡=停用', en:'Rest area · drag here to disable' }), px(REST_ZONE.x + REST_ZONE.w / 2), px(REST_ZONE.y - 1));
     c.restore();
     // Pod rects (only multi-member pods get a visible cluster box).
     computePods().forEach(pod => {
@@ -2332,8 +2371,9 @@
         minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x); minY = Math.min(minY, e.y);
       });
       const relay = podModeOf(pod) === 'relay';
-      const label = relay ? '接力' : '平行';
-      const bw = 26, bh = 11;
+      const label = LZ(relay ? { zh:'接力', en:'Relay' } : { zh:'平行', en:'Parallel' });
+      c.font = `${10}px system-ui, sans-serif`;
+      const bw = Math.max(26, c.measureText(label).width + 10), bh = 11;
       const bx = (minX + maxX) / 2 - bw / 2;
       const by = minY - 16 - bh - 2;
       const key = podKey(pod);
@@ -2342,7 +2382,6 @@
       c.fillStyle = relay ? '#8B5CF6' : '#14B8A6';
       roundRect(px(bx), px(by), px(bw), px(bh), SCALE * 1.5); c.fill();
       c.fillStyle = '#FFFFFF';
-      c.font = `${10}px system-ui, sans-serif`;
       c.textAlign = 'center'; c.textBaseline = 'middle';
       c.fillText(label, px(bx + bw / 2), px(by + bh / 2) + 1);
       c.restore();
@@ -2352,8 +2391,10 @@
     c.fillStyle = rgba('#1C1917', 0.62);
     c.font = `${10}px system-ui, sans-serif`;
     c.textAlign = 'center'; c.textBaseline = 'top';
-    c.fillText('編輯模式：拖角色=單獨移動（拖開=脫離群組）、拖 平行/接力 標籤=整組移動、點標籤=切換模式、拖到休息區=停用',
-      px(LOGICAL_W / 2), px(WALL * TILE + 2));
+    c.fillText(LZ({
+      zh: '編輯模式：拖角色=單獨移動（拖開=脫離群組）、拖 平行/接力 標籤=整組移動、點標籤=切換模式、拖到休息區=停用',
+      en: 'Edit mode: drag a person = move alone (drag out = leave group); drag the Parallel/Relay badge = move whole group; click badge = toggle mode; drag to rest area = disable',
+    }), px(LOGICAL_W / 2), px(WALL * TILE + 2));
     c.restore();
   }
 
@@ -2368,8 +2409,9 @@
     const val = isActual ? meter.actual : est;
     // 💸 escalate estimate shows the cheap floor with a "↑" — final cost depends on
     // the runtime go/stop decision, so it can only grow from here.
-    const estLabel = editMode.escalate ? '預估 ' + fmtK(val) + '↑' : '預估 ' + fmtK(val);
-    const label = isActual ? '實際 ' + fmtKPlain(val) : estLabel;
+    const estWord = LZ({ zh:'預估', en:'Est.' });
+    const estLabel = editMode.escalate ? estWord + ' ' + fmtK(val) + '↑' : estWord + ' ' + fmtK(val);
+    const label = isActual ? LZ({ zh:'實際', en:'Actual' }) + ' ' + fmtKPlain(val) : estLabel;
     const w = 58, h = 20;
     const x = LOGICAL_W - w - 4, y = WALL * TILE + 3;
     c.save();
@@ -2677,16 +2719,20 @@
   // the same source getGraphConfig()/specSnapshot() read — so the caption always
   // states exactly how the agents are arranged plus the cost estimate. Purely a
   // read of edit-mode state; never throws.
-  const SUMMARY_ZH = { sum: '小摘', jargon: '小詞', comments: '小潛', ctx: '小導', synth: '合成' };
-  const EFFORT_ZH = { low: '低', med: '中', high: '高' };
+  const SUMMARY_NAME = { sum: ROLE.sum.name, jargon: ROLE.jargon.name, comments: ROLE.comments.name, ctx: ROLE.ctx.name, synth: ROLE.synth.name };
+  const EFFORT_LABEL = { low: { zh:'低', en:'Low' }, med: { zh:'中', en:'Med' }, high: { zh:'高', en:'High' } };
   const PRESET_LABEL = {
-    quick: '⚡ 快速掃描', standard: '📄 標準', jargon: '🎯 術語特訓',
-    reliable: '🛡️ 可靠', deep: '🔬 深度精讀', thrifty: '💸 省錢漸進',
+    quick:    { zh:'⚡ 快速掃描', en:'⚡ Quick scan' },
+    standard: { zh:'📄 標準',    en:'📄 Standard' },
+    jargon:   { zh:'🎯 術語特訓', en:'🎯 Jargon focus' },
+    reliable: { zh:'🛡️ 可靠',    en:'🛡️ Reliable' },
+    deep:     { zh:'🔬 深度精讀', en:'🔬 Deep read' },
+    thrifty:  { zh:'💸 省錢漸進', en:'💸 Thrifty ramp' },
   };
   // "小詞(高×2)" — worker name + effort (低/中/高) + optional ×N vote tag.
   function workerToken(id) {
-    let s = SUMMARY_ZH[id] || id;
-    const eff = EFFORT_ZH[effortOf(id)];
+    let s = LZ(SUMMARY_NAME[id]) || id;
+    const eff = LZ(EFFORT_LABEL[effortOf(id)]);
     const rep = replicasOf(id);
     if (EFFORT_NODES.includes(id)) s += '(' + eff + (rep > 1 ? '×' + rep : '') + ')';
     else if (rep > 1) s += '×' + rep;
@@ -2695,21 +2741,25 @@
   function getWorkflowSummary() {
     try {
       const preset = matchActivePreset();
-      const prefix = preset ? PRESET_LABEL[preset] : '🛠️ 自訂';
+      const prefix = preset ? LZ(PRESET_LABEL[preset]) : LZ({ zh:'🛠️ 自訂', en:'🛠️ Custom' });
       const enabledReaders = STAGE1.filter(id => !editMode.bench[id]);
       const disabled = STAGE1.filter(id => editMode.bench[id]);
       const estK = fmtK(estimateTokens());   // e.g. "~28k"
+      const estWord = LZ({ zh:'預估', en:'Est.' });
 
       // 💸 escalate mode reads as a two-phase chain: cheap first, then +candidates.
       if (editMode.escalate) {
         const cand = editMode.escalateCandidates
           .filter(id => enabledReaders.includes(id))
-          .map(id => SUMMARY_ZH[id] || id);
+          .map(id => LZ(SUMMARY_NAME[id]) || id);
         const first = enabledReaders.filter(id => !editMode.escalateCandidates.includes(id))
-          .map(id => SUMMARY_ZH[id] || id);
-        const firstStr = first.length ? first.join('·') : '小摘';
-        const candStr = cand.length ? cand.join('·') : '其餘讀者';
-        return `${prefix} 先 ${firstStr}→小導，值得才 +${candStr} · 預估 ${estK}`;
+          .map(id => LZ(SUMMARY_NAME[id]) || id);
+        const firstStr = first.length ? first.join('·') : LZ(ROLE.sum.name);
+        const candStr = cand.length ? cand.join('·') : LZ({ zh:'其餘讀者', en:'the rest' });
+        return LZ({
+          zh: `${prefix} 先 ${firstStr}→${LZ(ROLE.ctx.name)}，值得才 +${candStr} · ${estWord} ${estK}`,
+          en: `${prefix} ${firstStr} first → ${LZ(ROLE.ctx.name)}, +${candStr} only if worth it · ${estWord} ${estK}`,
+        });
       }
 
       // Group the enabled readers by pod: parallel members joined by ∥, relay
@@ -2729,13 +2779,13 @@
       // the parallel list so nothing is dropped.
       const loose = enabledReaders.filter(id => !grouped.has(id)).map(workerToken);
       const stageParts = podStrs.concat(loose);
-      let chain = stageParts.length ? stageParts.join(' ∥ ') : '（無讀者）';
+      let chain = stageParts.length ? stageParts.join(' ∥ ') : LZ({ zh:'（無讀者）', en:'(no readers)' });
 
-      if (!editMode.bench.ctx) chain += ' → 小導';
-      if (!editMode.bench.synth) chain += ' → 合成';
+      if (!editMode.bench.ctx) chain += ' → ' + LZ(ROLE.ctx.name);
+      if (!editMode.bench.synth) chain += ' → ' + LZ(ROLE.synth.name);
 
-      let line = `${prefix} — ${chain} · 預估 ${estK}`;
-      if (disabled.length) line += ' · 停用: ' + disabled.map(id => SUMMARY_ZH[id] || id).join('、');
+      let line = `${prefix} — ${chain} · ${estWord} ${estK}`;
+      if (disabled.length) line += ' · ' + LZ({ zh:'停用', en:'Disabled' }) + ': ' + disabled.map(id => LZ(SUMMARY_NAME[id]) || id).join(LZ({ zh:'、', en:', ' }));
       return line;
     } catch (e) {
       return '';   // never break the caption
@@ -3310,10 +3360,10 @@
     setSelected(id) { selected = chars[id] ? id : null; if (reducedMotion) render(); },
     setPresentHandler(fn) { presentHandler = typeof fn === 'function' ? fn : null; },
     setKbCount(n) { kbCount = Math.max(0, n | 0); if (reducedMotion) render(); },
-    setLang(mode) { langMode = mode; if (reducedMotion) render(); },
+    setLang(mode) { langMode = mode === 'zh' ? 'zh' : 'en'; if (reducedMotion) render(); },
     flyBook() { if (!reducedMotion) fly = { t: 0 }; },
     fetchWordbook(cb) { fetchWordbook(cb); },
-    getAgentInfo(id) { return chars[id] ? { id, name: chars[id].role.name, role: chars[id].role.role, color: chars[id].role.shirt } : null; },
+    getAgentInfo(id) { return chars[id] ? { id, name: LZ(chars[id].role.name), role: LZ(chars[id].role.role), color: chars[id].role.shirt } : null; },
     reset() {
       sim.active = false; selected = null; sim.presented = false; sim.boardActive = false;
       sim.customView = false; sim.customRun = false; runDocs.length = 0;
