@@ -87,7 +87,7 @@
     .topbar {
       position: fixed;
       top: 0; left: 0; right: 0;
-      height: var(--topbar-h);
+      min-height: var(--topbar-h);
       background: rgba(247, 246, 244, 0.88);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
@@ -95,7 +95,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 20px;
+      padding: 8px 20px;
       z-index: 100;
       gap: 12px;
     }
@@ -1658,7 +1658,7 @@
     @media (max-width: 640px) {
       :root { --topbar-h: 52px; }
 
-      .topbar { padding: 0 14px; gap: 8px; }
+      .topbar { padding: 6px 14px; gap: 8px; }
       .logo { font-size: 14px; }
       .topbar-right { gap: 6px; }
       .toggle-btn { font-size: 10px; padding: 4px 8px; }

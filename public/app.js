@@ -67,8 +67,24 @@ function setPhase(phase) {
   document.documentElement.dataset.phase = phase;
 }
 
+// ── Top bar height sync ──────────────────────────────────────────────────────
+// .topbar is fixed-position and grows to fit its content (preset row + audience
+// row + caption can wrap to different heights). Keep --topbar-h in sync with the
+// real rendered height so .pixel-stage-wrap's margin-top never overlaps it.
+function syncTopbarHeight() {
+  const bar = document.querySelector('.topbar');
+  if (!bar) return;
+  document.documentElement.style.setProperty('--topbar-h', `${bar.getBoundingClientRect().height}px`);
+}
+
 // ── Bootstrap ──────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  const topbarEl = document.querySelector('.topbar');
+  if (topbarEl && window.ResizeObserver) {
+    new ResizeObserver(syncTopbarHeight).observe(topbarEl);
+  }
+  syncTopbarHeight();
+
   if (window.pixelAgents) {
     window.pixelAgents.init('pixel-stage');
     window.pixelAgents.setClickHandler(onAgentClick);
