@@ -59,7 +59,6 @@
   const WALLC='#C7BBA6', WALLHI='#D7CDBB', WALLLO='#B0A488', BASEB='#8C7C5E';
   const WOOD='#B98C5A', WOODHI='#D2A974', WOODLO='#90683D';
   const DESK='#C49A6B', DESKHI='#DCBA8B', DESKLO='#9C7445';
-  const CHAIR='#5B4E40', CHAIRHI='#6E6052';
   const MON='#23201C', SKIN='#F1C9A1', SKINSH='#D8A578', DARK='#241F1B';
   const LABEL='#6B6256', ACCENT='#FF6600';
   const RUG='#6FB7AE', RUGE='#3E8C84', SOFA='#7C8AA6', SOFAHI='#9AA6BE';
@@ -294,11 +293,6 @@
       || editMode.debate                                    // 🥊 debate verdict counts
       || !!editMode.audience;                               // 受眾語氣 (新手/老手) counts
   }
-  // The single source of truth for "custom run": identical to the gate app.js
-  // uses to decide whether to send &graph (getGraphConfig() non-null). When this
-  // is true a run honours the placement (traveling desks + in-place work) rather
-  // than recalling workers to their fixed seats.
-  function isCustomLayout() { return getGraphConfig() !== null; }
   // Latched per-run so the choreography stays consistent for the whole run even
   // if state changes mid-run; set in startRun(). customRunActive() gates the
   // run LOGIC (finish detection, asleep guards) and is true only while active;
@@ -875,22 +869,6 @@
 	    if (sim.pendingStart) startRun();
 	  }
 
-	  function recallToSeat(e, done) {
-	    e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
-	    e.asleep = false; e._queuedDeliver = false; e.ambKind = null;
-		    e._returningToDesk = false;
-		    e.statusText = ''; e._report = ''; e.workStart = 0; e.carryDoc = false;
-	    delete taskState[e.id];
-	    e.state = 'recall';
-	    if (e.id !== 'orch') e.bubble = LZ({ zh:'收到，回座！', en:'Got it, back to my seat!' });
-	    const seat = e.station.seat;
-	    const finish = () => { e.tile = seat.slice(); e.state = 'idle'; e.bubble = ''; done(); };
-	    if (e.tile[0] === seat[0] && e.tile[1] === seat[1]) { finish(); return; }
-	    const approach = e.station.approach;
-	    const sit = () => slideTo(e, seat, finish);
-	    if (e.tile[0] === approach[0] && e.tile[1] === approach[1]) { sit(); return; }
-	    walkTo(e, approach, sit);
-	  }
   function assignTour(i) {
     const L = chars.orch;
     if (i >= ALL_WORKERS.length) {                   // done assigning → become receiver
@@ -1659,13 +1637,6 @@
     // storage jars on the counter (the coffee machine moved to the dining corner)
     rect(x+3,y+2,2,3,'#A3B18A'); rect(x+7,y+2,2,3,'#CBB994'); rect(x+11,y+2,2,3,'#B08968');
   }
-  function drawChair(s) {
-    const x=T(s.seat[0]), y=T(s.seat[1]);
-    rect(x+3,y+1,10,3,CHAIR); rect(x+3,y+1,10,1,CHAIRHI);   // back
-    rect(x+3,y+10,10,3,CHAIR); rect(x+3,y+10,10,1,CHAIRHI); // seat hint
-    rect(x+4,y+4,2,7,shade(CHAIR,0.85)); rect(x+10,y+4,2,7,shade(CHAIR,0.85));
-  }
-
   // Desk origin (logical px tile-origin) for a worker. By default the desk sits
   // at the fixed furniture tile (deskOf) so the default run looks byte-for-byte
   // as today (workers walk away while the desk stays put). In a custom-layout

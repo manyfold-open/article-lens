@@ -1,30 +1,51 @@
-name = "hn-lens"
+# Production Worker. Its workers.dev URL is:
+# https://mf-article-lens.netmind-ai.workers.dev
+name = "mf-article-lens"
 main = "src/index.ts"
-compatibility_date = "2024-09-23"
-compatibility_flags = ["nodejs_compat"]
+compatibility_date = "2026-07-26"
 
 [assets]
 directory = "public"
 binding = "ASSETS"
-
-# Pre-warm the front page so the first view of a top story is instant.
-[triggers]
-crons = ["23 */2 * * *"]
+# The Worker enforces the Article Lens access gate before serving index.html.
+run_worker_first = true
 
 [[kv_namespaces]]
 binding = "CACHE"
-id = "6c7d1cf1c14042639cc5b9d13b09e013"
-preview_id = "66e881a0976b4ab0afeb88e7e5fccc6f"
+id = "276ed8baff904e009bd25cd4bfdca285"
+
+[[durable_objects.bindings]]
+name = "ANALYSIS_JOBS"
+class_name = "AnalysisJob"
+
+[[migrations]]
+tag = "initial-sqlite"
+new_sqlite_classes = ["AnalysisJob"]
+
+[[queues.producers]]
+binding = "ANALYSIS_TASK_QUEUE"
+queue = "mf-article-lens-analysis"
+
+[[queues.consumers]]
+queue = "mf-article-lens-analysis"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 30
+max_concurrency = 2
 
 [vars]
-MF_API_URL = "https://api-staging.manyfold.ai/api"
-MF_AGENT_ID = "agt_agpqh6zu7j2ipjtgdxyrk2skvq"
+MF_API_URL = "https://api.manyfold.ai/api"
+MF_AGENT_ID = "agt_agpzmem6af5rrbztanib4gxfkm"
 SPEC_VERSION = "13"
-AGENT_SUMMARIZER = "agt_agpqh65tur7bpof744f3ocap7y"
-AGENT_CONTEXT    = "agt_agpqh7synf3q5df5ysca4k4npu"
-AGENT_SYNTHESIZER = "agt_agpqh7upcv6vfbug4pozts74ou"
-AGENT_COMMENT_MAP = "agt_agpqh7m5c55ffmxr2vri326dgy"
-AGENT_JARGON     = "agt_agpqh7bmxjy4bmnoywfrernr2q"
-AGENT_COMMENT_REDUCE = "agt_agpqh7qqv53addlck44okx6dvy"
+AGENT_SUMMARIZER = "agt_agpzmenybn42znpqy4izl7lwou"
+AGENT_CONTEXT = "agt_agpzmeozpvzvfdc7ejvwk7ix2u"
+AGENT_SYNTHESIZER = "agt_agpzmepvgf4ghjs2awkl2zv5jq"
+AGENT_COMMENT_MAP = "agt_agpzmeqnlf6qlex4vnwtlnm3gu"
+AGENT_JARGON = "agt_agpzmerdrn65lfptmniusgt3jy"
+AGENT_COMMENT_REDUCE = "agt_agpzmer57f3blmw2ewnqivcxfy"
 
-# Set via: wrangler secret put MF_API_TOKEN
+# Bootstrap /settings with:
+#   npx wrangler secret put ADMIN_SETTINGS_PASSWORD --config wrangler.toml
+# Runtime values above are initial/fallback defaults. After login, /settings
+# stores encrypted overrides in CACHE. MF_API_TOKEN can be entered there, or
+# retained as a Wrangler secret for bootstrap/fallback compatibility.

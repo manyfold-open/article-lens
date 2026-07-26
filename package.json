@@ -1,19 +1,23 @@
 {
-  "name": "hn-lens",
+  "name": "mf-article-lens",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev --port 8787",
-    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --config wrangler.toml --port 8787",
     "typecheck": "tsc --noEmit",
-    "smoke": "bash scripts/smoke.sh",
-    "ship": "bash deploy.sh",
-    "ship:v2": "bash deploy.v2.sh"
+    "test": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --test tests/*.test.js",
+    "test:coverage": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-include='public/workflow-model.js' --test tests/*.test.js",
+    "check:repo": "node scripts/validate-repository.mjs",
+    "check:browser": "node --check public/access.js && node --check public/app.js && node --check public/pixel.js && node --check public/settings.js && node --check public/workflow-model.js && node --check public/workflow-view.js",
+    "check:scripts": "bash -n scripts/smoke-production.sh",
+    "check": "npm run typecheck && npm test && npm run check:repo && npm run check:browser && npm run check:scripts",
+    "check:worker": "wrangler deploy --dry-run --config wrangler.toml",
+    "smoke": "bash scripts/smoke-production.sh"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240729.0",
+    "@cloudflare/workers-types": "^5.20260726.1",
     "typescript": "^5.5.0",
-    "wrangler": "^3.65.0"
+    "wrangler": "^4.114.0"
   },
   "allowScripts": {
     "esbuild@0.17.19": true,

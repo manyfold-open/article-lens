@@ -129,12 +129,35 @@ export interface GraphConfig {
 // ── SSE event types (§7) ──────────────────────────────────────────
 export type AgentName = 'sum' | 'jargon' | 'comments' | 'ctx' | 'synth'
 export type AgentState = 'idle' | 'running' | 'done' | 'error'
+export type AgentRunMode = 'real' | 'cache' | 'fallback' | 'skipped'
+export type WorkflowNodeId = 'input' | AgentName | 'report'
+export type WorkflowNodeState = 'queued' | 'running' | 'retry_wait' | 'done' | 'error'
 
 export interface SSEPlan   { event: 'plan';   agents: AgentName[] }
-export interface SSEStatus { event: 'status'; agent: AgentName; state: AgentState; label: BiStr }
+export interface SSEStatus { event: 'status'; agent: AgentName; state: AgentState; label: BiStr; mode?: AgentRunMode }
 export interface SSEStep   { event: 'step';   agent: AgentName; label: BiStr }
 export interface SSEResult { event: 'result'; data: HNLensResult }
-export interface SSEError  { event: 'error';  agent?: AgentName; message: string; kind?: 'sandbox_unavailable' | 'agent_error' }
+export interface SSEError  {
+  event: 'error'
+  agent?: AgentName
+  message: string
+  kind?: 'sandbox_unavailable' | 'agent_error' | 'orchestration_error'
+}
+export interface SSEAgentTrace {
+  event: 'agent_trace'
+  agent: AgentName
+  call_id: string
+  phase: 'input' | 'progress' | 'output' | 'error'
+  label: BiStr
+  at: string
+  attempt?: number
+  // A failed transport attempt can be recoverable. Consumers must not mark the
+  // whole agent terminal while the caller is about to retry the same call.
+  will_retry?: boolean
+  content?: string
+  truncated?: boolean
+  original_chars?: number
+}
 // A section streams as soon as its agent finishes, so panels populate early.
 export interface SSESection { event: 'section'; agent: AgentName; data: unknown }
 // Token meter: emitted after an agent resolves with that agent's tokens; the
@@ -145,7 +168,64 @@ export interface SSEUsage { event: 'usage'; agent?: string; tokens: number; tota
 // office can react: 'go' → jargon+comments+synth still run; 'stop' → they're
 // skipped. `reason` is a short human-readable note (optional).
 export interface SSEEscalate { event: 'escalate'; decision: 'go' | 'stop'; reason?: string }
-export type SSEEvent = SSEPlan | SSEStatus | SSEStep | SSEResult | SSEError | SSESection | SSEUsage | SSEEscalate
+export interface SSERetry {
+  event: 'retry'
+  attempt: number
+  max_attempts: number
+  delay_seconds: number
+  reason: string
+}
+export interface WorkflowPlanNode {
+  id: WorkflowNodeId
+  kind: 'source' | 'agent' | 'sink'
+  label: BiStr
+  enabled: boolean
+  effort?: Effort
+  replicas?: number
+  debate?: boolean
+}
+export interface WorkflowPlanEdge {
+  id: string
+  from: WorkflowNodeId
+  to: WorkflowNodeId
+  kind: 'dependency' | 'relay' | 'conditional'
+  label?: BiStr
+}
+export interface SSEWorkflowPlan {
+  event: 'workflow_plan'
+  analysis_id: string
+  attempt: number
+  max_attempts: number
+  nodes: WorkflowPlanNode[]
+  edges: WorkflowPlanEdge[]
+  groups: { members: AgentName[]; mode: 'parallel' | 'relay' }[]
+  escalate: boolean
+  debate: boolean
+  audience?: 'beginner' | 'expert'
+}
+export interface SSEWorkflowState {
+  event: 'workflow_state'
+  analysis_id: string
+  attempt: number
+  max_attempts: number
+  state: WorkflowNodeState
+  reason?: string
+  delay_seconds?: number
+}
+export type SSEEvent = (
+  | SSEPlan
+  | SSEStatus
+  | SSEStep
+  | SSEResult
+  | SSEError
+  | SSEAgentTrace
+  | SSESection
+  | SSEUsage
+  | SSEEscalate
+  | SSERetry
+  | SSEWorkflowPlan
+  | SSEWorkflowState
+) & { at?: string }
 
 // ── HN Algolia types ──────────────────────────────────────────────
 export interface HNComment {
@@ -172,6 +252,10 @@ export interface HNItem {
 export interface Env {
   CACHE: KVNamespace
   ASSETS: Fetcher
+  ANALYSIS_JOBS: DurableObjectNamespace<import('./workflow/analysis-job').AnalysisJob>
+  ANALYSIS_TASK_QUEUE: Queue<import('./workflow/analysis-job').AnalysisQueueMessage>
+  ADMIN_SETTINGS_PASSWORD?: string
+  ACCESS_PASSCODE?: string
   MF_API_TOKEN?: string
   MF_API_URL: string
   MF_AGENT_ID?: string

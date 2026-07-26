@@ -6,9 +6,36 @@ import { getSubtrees } from '../hn'
 import { stripHtml } from '../extract'
 import { buildMockResult } from './mock'
 import { callMfAgent } from './mf'
+import {
+  normalizeGraph,
+  type EffortAgent,
+  type NormalizedGraph,
+  type Stage1Agent,
+  STAGE1,
+} from './graph'
 import { parseLoose } from './json'
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+// Cloudflare Queue consumers have a 15-minute wall-clock ceiling. Reserve
+// three minutes for input extraction, final persistence, and runtime jitter;
+// every A2A call in one orchestration shares this absolute deadline.
+const ORCHESTRATION_BUDGET_MS = 12 * 60_000
+const runDeadlines = new WeakMap<(event: SSEEvent) => void, number>()
+
+function callAgent(
+  env: Env,
+  peerId: string,
+  prompt: string,
+  agent: AgentName,
+  emit: (event: SSEEvent) => void,
+  opts: { timeoutMs?: number; attempts?: number } = {},
+): Promise<string> {
+  return callMfAgent(env, peerId, prompt, {
+    ...opts,
+    deadlineAt: runDeadlines.get(emit),
+    trace: { agent, emit },
+  })
+}
 
 // ── zh-first helpers ──────────────────────────────────────────────
 // Agents now generate Chinese only (to save tokens); English is fetched lazily
@@ -100,10 +127,31 @@ interface OrchestrateOpts {
   kbTerms?: string[]
   cachedShared?: SharedSections | null
   cachedJargon?: JargonTerm[] | null
+  // First durable job attempt: stop before spending on downstream agents when
+  // a critical dependency already degraded. The final attempt may continue and
+  // return an explicit fallback result.
+  requireCriticalAgents?: boolean
   // Optional client-supplied orchestration graph (v1). When present & valid it
   // OVERRIDES the captain's run/skip decisions and can group stage-1 workers
   // into sequential "relay" chains. The no-graph path is unaffected.
   graph?: GraphConfig | null
+}
+
+export class CriticalAgentFallbackError extends Error {
+  constructor(readonly agents: AgentName[]) {
+    super(`Critical agents used fallback output: ${agents.join(', ')}.`)
+    this.name = 'CriticalAgentFallbackError'
+  }
+}
+
+function assertCriticalAgents(
+  fallbacks: Set<AgentName>,
+  required: boolean | undefined,
+  agents: AgentName[],
+): void {
+  if (!required) return
+  const failed = agents.filter(agent => fallbacks.has(agent))
+  if (failed.length) throw new CriticalAgentFallbackError(failed)
 }
 
 type WorkerAgent = Exclude<AgentName, 'synth'>
@@ -130,20 +178,20 @@ export async function mockOrchestrate(
 
   emit({ event: 'plan', agents: order })
   for (const a of order) {
-    emit({ event: 'status', agent: a, state: 'running', label: LABELS[a].running })
+    emit({ event: 'status', agent: a, state: 'running', mode: 'fallback', label: LABELS[a].running })
     await sleep(120)
   }
   await sleep(320)
-  emit({ event: 'status', agent: 'sum', state: 'done', label: bi('TL;DR 完成!', 'TL;DR done!') })
+  emit({ event: 'status', agent: 'sum', state: 'done', mode: 'fallback', label: bi('TL;DR 完成!', 'TL;DR done!') })
   emit({ event: 'section', agent: 'sum', data: result.summary })
   await sleep(260)
-  emit({ event: 'status', agent: 'jargon', state: 'done', label: bi(`找到 ${result.jargon.length} 個詞! 💡`, `Found ${result.jargon.length} terms! 💡`) })
+  emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'fallback', label: bi(`找到 ${result.jargon.length} 個詞! 💡`, `Found ${result.jargon.length} terms! 💡`) })
   emit({ event: 'section', agent: 'jargon', data: result.jargon })
   await sleep(260)
-  emit({ event: 'status', agent: 'comments', state: 'done', label: bi(`分成 ${result.comment_digest.camps.length} 派!`, `Split into ${result.comment_digest.camps.length} camps!`) })
+  emit({ event: 'status', agent: 'comments', state: 'done', mode: 'fallback', label: bi(`分成 ${result.comment_digest.camps.length} 派!`, `Split into ${result.comment_digest.camps.length} camps!`) })
   emit({ event: 'section', agent: 'comments', data: result.comment_digest })
   await sleep(260)
-  emit({ event: 'status', agent: 'ctx', state: 'done', label: bi('裁定完成!', 'Verdict is in!') })
+  emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'fallback', label: bi('裁定完成!', 'Verdict is in!') })
   emit({ event: 'section', agent: 'ctx', data: result.verdict })
   await sleep(220)
   return result
@@ -161,6 +209,7 @@ export async function orchestrateAnalysis(
   emit: (event: SSEEvent) => void,
   opts: OrchestrateOpts = {}
 ): Promise<HNLensResult> {
+  runDeadlines.set(emit, Date.now() + ORCHESTRATION_BUDGET_MS)
   const mock = buildMockResult(item, articleText, itemType)
   const graph = normalizeGraph(opts.graph)
   // 辯論裁定 flag rides on the raw graph (like escalate). Applies wherever 小導 runs.
@@ -201,19 +250,50 @@ export async function orchestrateAnalysis(
     // effort via `single`) and relay (the merged output is threaded downstream).
     const withReplicas = async <T>(
       agent: Stage1Agent, n: number,
-      single: (quiet: boolean) => Promise<T>,
+      single: (
+        quiet: boolean,
+        replicaFallbacks: Set<AgentName>,
+        replicaSources: NonNullable<HNLensResult['flags']['agent_sources']>,
+      ) => Promise<T>,
       merge: (results: Awaited<T>[]) => Awaited<T>,
       doneLabel: (merged: Awaited<T>) => BiStr,
     ): Promise<Awaited<T>> => {
-      if (n <= 1) return await single(false)
+      if (n <= 1) return await single(false, fallbackAgents, agentSources)
       emit({ event: 'status', agent, state: 'running', label: LABELS[agent].running })
-      const settled = await Promise.allSettled(Array.from({ length: n }, () => single(true)))
-      const ok = settled.filter((s): s is PromiseFulfilledResult<Awaited<T>> => s.status === 'fulfilled').map(s => s.value)
-      // All replicas threw (rare — producers already swallow errors into fallback):
-      // fall back to a single non-quiet run so the office still gets one section.
-      if (!ok.length) return await single(false)
-      const merged = merge(ok)
-      emit({ event: 'status', agent, state: 'done', label: doneLabel(merged) })
+      const replicaState = Array.from({ length: n }, () => ({
+        fallbacks: new Set<AgentName>(),
+        sources: {} as NonNullable<HNLensResult['flags']['agent_sources']>,
+      }))
+      const settled = await Promise.allSettled(replicaState.map(state =>
+        single(true, state.fallbacks, state.sources)))
+      const fulfilled = settled
+        .map((result, index) => ({ result, state: replicaState[index] }))
+        .filter((entry): entry is {
+          result: PromiseFulfilledResult<Awaited<T>>
+          state: typeof replicaState[number]
+        } => entry.result.status === 'fulfilled')
+      // A successful replica wins over another replica's local fallback. Only
+      // mark the whole agent degraded when every completed replica degraded.
+      const real = fulfilled.filter(entry => !entry.state.fallbacks.has(agent))
+      const usable = real.length ? real : fulfilled
+      if (!usable.length) return await single(false, fallbackAgents, agentSources)
+      if (!real.length) {
+        fallbackAgents.add(agent)
+        agentSources[agent] = usable[0].state.sources[agent] ?? {
+          mode: 'fallback',
+          reason: bi('所有投票副本都使用備援結果。', 'Every voting replica used fallback output.'),
+        }
+      } else {
+        agentSources[agent] = {
+          mode: 'real',
+          reason: bi(
+            `${real.length}/${n} 個投票副本成功，已合併有效結果。`,
+            `${real.length}/${n} voting replicas succeeded; merged the valid results.`,
+          ),
+        }
+      }
+      const merged = merge(usable.map(entry => entry.result.value))
+      emit({ event: 'status', agent, state: 'done', mode: real.length ? 'real' : 'fallback', label: doneLabel(merged) })
       emit({ event: 'section', agent, data: merged })
       meter.finish(agent)
       return merged
@@ -223,19 +303,19 @@ export async function orchestrateAnalysis(
       haveShared ? replaySection('sum', opts.cachedShared!.summary, emit, agentSources)
         : graph.enabled.sum === false ? skipSummary(mock, emit, skippedAgents, agentSources)
           : withReplicas('sum', graph.replicas.sum,
-              q => runSummary(env, item, articleText, itemType, mock, emit, fallbackAgents, agentSources, extra, eff.sum, meter, q, audience),
+              (q, fallbacks, sources) => runSummary(env, item, articleText, itemType, mock, emit, fallbacks, sources, extra, eff.sum, meter, q, audience),
               bestSummary, () => bi('TL;DR 完成!', 'TL;DR done!'))
     const runCom = (extra?: string): Promise<HNLensResult['comment_digest']> =>
       haveShared ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
         : graph.enabled.comments === false ? skipComments(mock, emit, skippedAgents, agentSources)
           : withReplicas('comments', graph.replicas.comments,
-              q => runComments(env, item, mock, emit, fallbackAgents, agentSources, extra, eff.comments, meter, q),
+              (q, fallbacks, sources) => runComments(env, item, mock, emit, fallbacks, sources, extra, eff.comments, meter, q),
               bestDigest, () => LABELS.comments.done)
     const runJar = (extra?: string): Promise<JargonTerm[]> =>
       haveJargon ? replaySection('jargon', opts.cachedJargon!, emit, agentSources)
         : graph.enabled.jargon === false ? skipJargon(emit, skippedAgents, agentSources)
           : withReplicas('jargon', graph.replicas.jargon,
-              q => runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbackAgents, agentSources, extra, eff.jargon, meter, q, audience),
+              (q, fallbacks, sources) => runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbacks, sources, extra, eff.jargon, meter, q, audience),
               mergeJargonReplicas, m => bi(`找到 ${m.length} 個詞!`, `Found ${m.length} terms!`))
     // ctx producer, parameterised by the comment_digest to feed it (cheap phase
     // passes an empty digest — summary-only is fine for a quick worth-reading call).
@@ -249,10 +329,12 @@ export async function orchestrateAnalysis(
       // Phase 1 (cheap): sum + ctx only. ctx runs on the summary alone (empty
       // comment_digest) — good enough for a quick "is it worth reading" call.
       summary = await runSum()
+      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'])
       const emptyDigest = normalizeDigest({
         overview: bz(''), camps: [], consensus: bz(''), disputes: [], expert_corrections: [], spicy: [],
       })
       verdict = await runCtx(emptyDigest)
+      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['ctx'])
 
       // Decision: read a machine-readable worth-reading boolean from the verdict.
       const go = isWorthReading(verdict)
@@ -280,6 +362,7 @@ export async function orchestrateAnalysis(
       summary = stage1.sum
       comment_digest = stage1.comments
       jargon = stage1.jargon
+      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'])
 
       // ── Stage 2: ctx — now also fed 小詞's jargon density (dep edge). ──
       verdict = await runCtx(comment_digest, jargon)
@@ -309,12 +392,14 @@ export async function orchestrateAnalysis(
     // weigh jargon density (the 小詞→小導 dependency edge). It's usually already
     // resolved by now, so this rarely adds latency.
     jargon = await jargonP
+    assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'])
 
     // ── Stage 2: verdict, now that it can see real content + jargon ──
     verdict = haveShared
       ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
       : await runContext(env, item, summary, comment_digest, jargon, mock, emit, fallbackAgents, agentSources, meter, debate, audience)
   }
+  assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['ctx'])
 
   // ── Assemble ────────────────────────────────────────────────────
   const result: HNLensResult = {
@@ -339,7 +424,20 @@ export async function orchestrateAnalysis(
   }
 
   // ── Synthesizer: integration + QA prune ─────────────────────────
-  await curate(env, item, result, emit, agentSources, meter, audience)
+  if (graph?.enabled.synth === false) {
+    skippedAgents.add('synth')
+    agentSources.synth = {
+      mode: 'skipped',
+      reason: bi('你在編輯面板關掉合成，保留各角色的原始結果。', 'You turned Synthesizer off in the editor, so the original role outputs were kept.'),
+    }
+    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'skipped', label: bi('已關閉，略過整合', 'Turned off — skipping synthesis') })
+  } else {
+    await curate(env, item, result, emit, agentSources, meter, audience, fallbackAgents)
+  }
+  // `fallback_agents` was initially copied before Synth ran. Refresh it so a
+  // Synth fallback reaches cache policy and downstream clients.
+  result.flags.fallback_agents = [...fallbackAgents]
+  result.flags.skipped_agents = [...skippedAgents]
 
   // ── Token meter: finalise total + per-agent, emit a closing usage. ──
   result.usage = { total: meter.total(), byAgent: meter.byAgent }
@@ -355,7 +453,7 @@ async function replaySection<T>(
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<T> {
   if (agentSources) agentSources[agent] = { mode: 'cache', reason: bi('這段直接使用上一輪快取，沒有重新呼叫 agent。', 'Reused this section from the previous cache — the agent was not called again.') }
-  emit({ event: 'status', agent, state: 'done', label: LABELS[agent].done })
+  emit({ event: 'status', agent, state: 'done', mode: 'cache', label: LABELS[agent].done })
   emit({ event: 'section', agent, data })
   return data
 }
@@ -427,71 +525,6 @@ function actionEn(action: RouteAction): string {
 
 function shouldRun(plan: CaptainPlan, agent: WorkerAgent): boolean {
   return (plan.assignments.find(a => a.agent === agent)?.action || 'run') === 'run'
-}
-
-// ── Graph (v1) helpers ─────────────────────────────────────────────
-type Stage1Agent = 'sum' | 'jargon' | 'comments'
-// Agents whose effort knob changes concrete params. ctx/synth are effort-less.
-type EffortAgent = 'sum' | 'jargon' | 'comments'
-interface NormalizedGraph {
-  enabled: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx', boolean>>
-  // Per-agent effort (defaults 'med' = today). Only sum/jargon/comments matter.
-  effort: Record<EffortAgent, Effort>
-  // Per-agent replicas / vote ×N (defaults 1 = today). Only sum/jargon/comments.
-  replicas: Record<EffortAgent, number>
-  groups: { members: Stage1Agent[]; mode: 'parallel' | 'relay' }[]
-}
-
-const STAGE1: Stage1Agent[] = ['sum', 'jargon', 'comments']
-function isStage1(s: string): s is Stage1Agent {
-  return s === 'sum' || s === 'jargon' || s === 'comments'
-}
-
-function normEffort(e: unknown): Effort {
-  return e === 'low' || e === 'high' ? e : 'med'
-}
-
-// Clamp a per-node replicas value into a sane range. Absent/invalid/≤1 → 1
-// (= today's single run). Capped at 3 to bound fan-out (and cost).
-function normReplicas(r: unknown): number {
-  const n = typeof r === 'number' && Number.isFinite(r) ? Math.floor(r) : 1
-  return Math.min(3, Math.max(1, n))
-}
-
-// Validate + normalise a client graph into something safe to execute. Returns
-// null if it isn't a usable v1/v2 object, so callers fall back to today's path.
-// v2: derive enabled+effort from `nodes`. v1: fall back to the legacy `enabled`
-// map with effort 'med' throughout (so v1 graphs keep today's params).
-function normalizeGraph(g: GraphConfig | null | undefined): NormalizedGraph | null {
-  if (!g || typeof g.v !== 'number') return null
-  const effort: Record<EffortAgent, Effort> = { sum: 'med', jargon: 'med', comments: 'med' }
-  const replicas: Record<EffortAgent, number> = { sum: 1, jargon: 1, comments: 1 }
-  let enabled: NormalizedGraph['enabled']
-  if (g.nodes && typeof g.nodes === 'object') {
-    // ── v2: nodes carry per-agent enabled + effort + replicas ───────
-    enabled = {}
-    for (const a of ['sum', 'jargon', 'comments', 'ctx'] as const) {
-      const n = g.nodes[a]
-      if (n && typeof n === 'object' && n.enabled === false) enabled[a] = false
-    }
-    for (const a of ['sum', 'jargon', 'comments'] as const) {
-      const n = g.nodes[a]
-      if (n && typeof n === 'object') { effort[a] = normEffort(n.effort); replicas[a] = normReplicas(n.replicas) }
-    }
-  } else {
-    // ── v1: legacy skip map, all agents at 'med' (= today's params) ──
-    enabled = (g.enabled && typeof g.enabled === 'object') ? g.enabled : {}
-  }
-  const rawGroups = Array.isArray(g.groups) ? g.groups : []
-  const groups: NormalizedGraph['groups'] = []
-  for (const grp of rawGroups) {
-    if (!grp || !Array.isArray(grp.members)) continue
-    // Keep only stage-1 workers (sum/jargon/comments); ctx is never grouped.
-    const members = grp.members.filter(isStage1)
-    if (!members.length) continue
-    groups.push({ members, mode: grp.mode === 'relay' ? 'relay' : 'parallel' })
-  }
-  return { enabled, effort, replicas, groups }
 }
 
 // Mirror graph.enabled into the captain plan so the office shows the right set.
@@ -650,23 +683,25 @@ async function runSummary(
   if (!quiet) emit({ event: 'status', agent: 'sum', state: 'running', label: LABELS.sum.running })
   try {
     const prompt = buildSummarizerPrompt(item, articleText, itemType, extraContext, effort, audience)
-    const text = await callMfAgent(env, env.AGENT_SUMMARIZER, prompt)
+    const text = await callAgent(env, env.AGENT_SUMMARIZER, prompt, 'sum', emit)
     meter?.add('sum', prompt.length, text.length)
     const p = parseLoose<{ tldr?: unknown; key_points?: unknown[] }>(text)
-    const summary: HNLensResult['summary'] = (p && p.tldr)
-      ? { tldr: toBi(p.tldr), key_points: (Array.isArray(p.key_points) ? p.key_points : []).map(toBi).filter(k => k.zh) }
-      : mock.summary
+    if (!p?.tldr) throw new Error('Summarizer returned output that could not be parsed as the required JSON.')
+    const summary: HNLensResult['summary'] = {
+      tldr: toBi(p.tldr),
+      key_points: (Array.isArray(p.key_points) ? p.key_points : []).map(toBi).filter(k => k.zh),
+    }
     if (!quiet) {
-      emit({ event: 'status', agent: 'sum', state: 'done', label: bi('TL;DR 完成!', 'TL;DR done!') })
+      emit({ event: 'status', agent: 'sum', state: 'done', mode: 'real', label: bi('TL;DR 完成!', 'TL;DR done!') })
       emit({ event: 'section', agent: 'sum', data: summary })
     }
     if (agentSources) agentSources.sum = { mode: 'real', reason: bi('小摘實際讀取文章內容後產出。', 'Summarizer actually read the article content to produce this.') }
     return summary
   } catch (e) {
     fallbackAgents?.add('sum')
-    const sandboxReason = emitSandboxUnavailable('sum', e, emit)
+    const sandboxReason = emitAgentFailure('sum', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'sum', state: 'done', label: bi('摘要用備援內容', 'Summary used fallback content') })
+      emit({ event: 'status', agent: 'sum', state: 'done', mode: 'fallback', label: bi('摘要用備援內容', 'Summary used fallback content') })
       emit({ event: 'section', agent: 'sum', data: mock.summary })
     }
     if (agentSources) agentSources.sum = { mode: 'fallback', reason: fallbackReason('sum', e, sandboxReason, bi('改用本地備援摘要', 'falling back to the local backup summary')) }
@@ -689,7 +724,7 @@ async function skipSummary(
     tldr: bi('你在編輯面板把小摘關掉了，這輪沒有產生摘要。', 'You turned Summarizer off in the editor panel — no summary was produced this round.'),
     key_points: [],
   }
-  emit({ event: 'status', agent: 'sum', state: 'done', label: bi('已關閉，略過摘要', 'Turned off — skipping summary') })
+  emit({ event: 'status', agent: 'sum', state: 'done', mode: 'skipped', label: bi('已關閉，略過摘要', 'Turned off — skipping summary') })
   emit({ event: 'section', agent: 'sum', data: empty })
   if (agentSources) agentSources.sum = { mode: 'skipped', reason: bi('你在編輯面板關掉小摘，沒有呼叫摘要 agent。', 'You turned Summarizer off in the editor panel, so the summary agent was not called.') }
   return empty
@@ -703,11 +738,16 @@ async function skipSummary(
 // Parse a 小導 verdict JSON into a typed verdict, or null if unusable.
 function parseVerdict(text: string): HNLensResult['verdict'] | null {
   const p = parseLoose<{ worth_reading?: string; why_frontpage?: unknown; tier?: string }>(text)
-  if (!p || !p.worth_reading) return null
+  const worth = String(p?.worth_reading ?? '').trim().toLowerCase()
+  if (worth !== 'high' && worth !== 'medium' && worth !== 'low') return null
+  const why = toBi(p?.why_frontpage)
+  if (!why.zh.trim()) return null
+  const rawTier = String(p?.tier ?? '').trim()
+  const tier = rawTier === '10s' || rawTier === '1min' || rawTier === 'deep' ? rawTier : '1min'
   return {
-    worth_reading: p.worth_reading as HNLensResult['verdict']['worth_reading'],
-    why_frontpage: toBi(p.why_frontpage),
-    tier: (p.tier as HNLensResult['verdict']['tier']) || '1min',
+    worth_reading: worth,
+    why_frontpage: why,
+    tier,
   }
 }
 
@@ -722,8 +762,8 @@ async function debateVerdict(
   const proPrompt = buildDebatePrompt(item, summary, cd, jargon, 'pro', audience)
   const conPrompt = buildDebatePrompt(item, summary, cd, jargon, 'con', audience)
   const [proR, conR] = await Promise.allSettled([
-    callMfAgent(env, env.AGENT_CONTEXT, proPrompt),
-    callMfAgent(env, env.AGENT_CONTEXT, conPrompt),
+    callAgent(env, env.AGENT_CONTEXT, proPrompt, 'ctx', emit),
+    callAgent(env, env.AGENT_CONTEXT, conPrompt, 'ctx', emit),
   ])
   const proText = proR.status === 'fulfilled' ? proR.value : ''
   const conText = conR.status === 'fulfilled' ? conR.value : ''
@@ -733,10 +773,12 @@ async function debateVerdict(
   const con = parseVerdict(conText)
   emit({ event: 'step', agent: 'ctx', label: bi('首席裁判合議中…', 'Head judge deliberating…') })
   const mergePrompt = buildDebateMergePrompt(item, pro, con)
-  const mergeText = await callMfAgent(env, env.AGENT_CONTEXT, mergePrompt)
+  const mergeText = await callAgent(env, env.AGENT_CONTEXT, mergePrompt, 'ctx', emit)
   meter?.add('ctx', mergePrompt.length, mergeText.length)
   // Prefer the adjudicated verdict; else fall back to whichever side parsed.
-  return parseVerdict(mergeText) ?? pro ?? con ?? mock.verdict
+  const verdict = parseVerdict(mergeText) ?? pro ?? con
+  if (!verdict) throw new Error('Context debate returned no parseable verdict JSON.')
+  return verdict
 }
 
 async function runContext(
@@ -751,11 +793,13 @@ async function runContext(
       verdict = await debateVerdict(env, item, summary, cd, jargon, mock, emit, meter, audience)
     } else {
       const prompt = buildContextPrompt(item, summary, cd, jargon, audience)
-      const text = await callMfAgent(env, env.AGENT_CONTEXT, prompt)
+      const text = await callAgent(env, env.AGENT_CONTEXT, prompt, 'ctx', emit)
       meter?.add('ctx', prompt.length, text.length)
-      verdict = parseVerdict(text) ?? mock.verdict
+      const parsed = parseVerdict(text)
+      if (!parsed) throw new Error('Context returned output that could not be parsed as the required verdict JSON.')
+      verdict = parsed
     }
-    emit({ event: 'status', agent: 'ctx', state: 'done', label: debate ? bi('辯論裁定完成!', 'Debate verdict is in!') : bi('裁定完成!', 'Verdict is in!') })
+    emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'real', label: debate ? bi('辯論裁定完成!', 'Debate verdict is in!') : bi('裁定完成!', 'Verdict is in!') })
     emit({ event: 'section', agent: 'ctx', data: verdict })
     if (agentSources) agentSources.ctx = { mode: 'real', reason: bi(
       debate ? '小導以正反雙方辯論後合議出平衡裁定。'
@@ -767,8 +811,8 @@ async function runContext(
     return verdict
   } catch (e) {
     fallbackAgents?.add('ctx')
-    const sandboxReason = emitSandboxUnavailable('ctx', e, emit)
-    emit({ event: 'status', agent: 'ctx', state: 'done', label: bi('裁定用備援內容', 'Verdict used fallback content') })
+    const sandboxReason = emitAgentFailure('ctx', e, emit)
+    emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'fallback', label: bi('裁定用備援內容', 'Verdict used fallback content') })
     emit({ event: 'section', agent: 'ctx', data: mock.verdict })
     if (agentSources) agentSources.ctx = { mode: 'fallback', reason: fallbackReason('ctx', e, sandboxReason, bi('改用本地裁定', 'falling back to the local verdict')) }
     return mock.verdict
@@ -815,28 +859,25 @@ async function skipContext(
     why_frontpage: bi('你在編輯面板把小導關掉了，這輪沒有重新裁定。', 'You turned Verdict off in the editor panel — no new verdict was made this round.'),
     tier: mock.verdict.tier,
   }
-  emit({ event: 'status', agent: 'ctx', state: 'done', label: bi('已關閉，略過裁定', 'Turned off — skipping verdict') })
+  emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'skipped', label: bi('已關閉，略過裁定', 'Turned off — skipping verdict') })
   emit({ event: 'section', agent: 'ctx', data: empty })
   if (agentSources) agentSources.ctx = { mode: 'skipped', reason: bi('你在編輯面板關掉小導，沒有呼叫裁定 agent。', 'You turned Verdict off in the editor panel, so the verdict agent was not called.') }
   return empty
 }
 
-// Comment pipeline knobs per effort. 'med' reproduces today's numbers exactly:
-// single-thread ranked budget 2600, up to 8 subtrees, ~550-token map budget,
-// reduce summaries capped at 8000 chars, standard camps ask.
+// Comment pipeline knobs per effort. Comments are ranked locally and sent in
+// one bounded reduce call so remote startup latency is paid once.
 interface CommentParams {
   rankedBudget: number
-  maxSubtrees: number
-  mapBudget: number
   reduceCap: number
   campsHint: string
 }
 function commentParams(effort: Effort): CommentParams {
   if (effort === 'low')
-    return { rankedBudget: 1400, maxSubtrees: 4, mapBudget: 350, reduceCap: 4000, campsHint: '只挑最主要的 2-3 個派別（寧缺勿濫）。' }
+    return { rankedBudget: 1400, reduceCap: 4000, campsHint: '只挑最主要的 2-3 個派別（寧缺勿濫）。' }
   if (effort === 'high')
-    return { rankedBudget: 3600, maxSubtrees: 12, mapBudget: 750, reduceCap: 12000, campsHint: '盡量涵蓋更多派別（含 vocal-minority／fringe），最多 6 個。' }
-  return { rankedBudget: 2600, maxSubtrees: 8, mapBudget: 550, reduceCap: 8000, campsHint: '' }
+    return { rankedBudget: 3600, reduceCap: 12000, campsHint: '盡量涵蓋更多派別（含 vocal-minority／fringe），最多 6 個。' }
+  return { rankedBudget: 2600, reduceCap: 8000, campsHint: '' }
 }
 
 // ── 小潛 comments (token-budgeted, high-signal first) ──────────────
@@ -849,8 +890,13 @@ async function runComments(
   if (commentCount === 0) {
     if (!quiet) {
       emit({ event: 'status', agent: 'comments', state: 'running', label: bi('這篇沒有 HN 討論', 'No HN discussion on this one') })
-      emit({ event: 'status', agent: 'comments', state: 'done', label: bi('無留言', 'No comments') })
+      emit({ event: 'status', agent: 'comments', state: 'done', mode: 'skipped', label: bi('無留言', 'No comments') })
       emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
+      meter?.finish('comments')
+    }
+    if (agentSources) agentSources.comments = {
+      mode: 'skipped',
+      reason: bi('這篇內容沒有 HN 留言，因此沒有呼叫留言 agent。', 'This item has no HN comments, so the Comments agent was not called.'),
     }
     return mock.comment_digest
   }
@@ -859,9 +905,10 @@ async function runComments(
   try {
     const text = await runCommentPipeline(item, env, emit, extraContext, params, meter, quiet)
     const p = parseLoose<HNLensResult['comment_digest']>(text)
-    const cd = (p?.overview || p?.camps) ? normalizeDigest(p!) : mock.comment_digest
+    if (!p?.overview && !p?.camps) throw new Error('Comments returned output that could not be parsed as the required digest JSON.')
+    const cd = normalizeDigest(p)
     if (!quiet) {
-      emit({ event: 'status', agent: 'comments', state: 'done', label: LABELS.comments.done })
+      emit({ event: 'status', agent: 'comments', state: 'done', mode: 'real', label: LABELS.comments.done })
       emit({ event: 'section', agent: 'comments', data: cd })
     }
     if (agentSources) agentSources.comments = {
@@ -873,9 +920,9 @@ async function runComments(
     return cd
   } catch (e) {
     fallbackAgents?.add('comments')
-    const sandboxReason = emitSandboxUnavailable('comments', e, emit)
+    const sandboxReason = emitAgentFailure('comments', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'comments', state: 'done', label: bi('留言用備援內容', 'Comments used fallback content') })
+      emit({ event: 'status', agent: 'comments', state: 'done', mode: 'fallback', label: bi('留言用備援內容', 'Comments used fallback content') })
       emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
     }
     if (agentSources) agentSources.comments = { mode: 'fallback', reason: fallbackReason('comments', e, sandboxReason, bi('改用本地留言摘要', 'falling back to the local comment digest')) }
@@ -900,7 +947,7 @@ async function skipComments(
     expert_corrections: [],
     spicy: [],
   })
-  emit({ event: 'status', agent: 'comments', state: 'done', label: bi('留言太少，略過', 'Too few comments — skipped') })
+  emit({ event: 'status', agent: 'comments', state: 'done', mode: 'skipped', label: bi('留言太少，略過', 'Too few comments — skipped') })
   emit({ event: 'section', agent: 'comments', data: empty.overview.zh ? empty : mock.comment_digest })
   if (agentSources) agentSources.comments = { mode: 'skipped', reason: bi('留言太少，隊長判斷不用呼叫小潛。', 'Too few comments — the captain decided Comments did not need to be called.') }
   return empty.overview.zh ? empty : mock.comment_digest
@@ -935,13 +982,13 @@ async function curate(
   emit: (e: SSEEvent) => void,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
   meter?: UsageMeter,
-  audience?: Audience
+  audience?: Audience,
+  fallbackAgents?: Set<AgentName>,
 ): Promise<void> {
   if (!result.jargon.length && !result.summary.key_points.length && !result.comment_digest.camps.length) return
   // Build the prompt first so we can meter the moment the agent is actually
   // invoked. The synthesizer legitimately runs long (~40s+) but is called with a
-  // tight budget (timeoutMs 25s, attempts 1), so the call frequently times out
-  // and throws — jumping straight to the catch. Metering the prompt up-front (and
+  // bounded budget with one transient retry, so metering the prompt up-front (and
   // the response below, when we get it) ensures synth's tokens are counted
   // whenever the call happens, consistent with the other agents, instead of the
   // `finally` emitting a misleading synth:0 for a call that really ran.
@@ -949,15 +996,17 @@ async function curate(
   emit({ event: 'status', agent: 'synth', state: 'running', label: bi('整合中…', 'Synthesizing…') })
   meter?.add('synth', prompt.length, 0)
   try {
-    const text = await callMfAgent(env, env.AGENT_SYNTHESIZER, prompt, { timeoutMs: 55_000, attempts: 1 })
+    const text = await callAgent(env, env.AGENT_SYNTHESIZER, prompt, 'synth', emit, { timeoutMs: 240_000, attempts: 2 })
     meter?.add('synth', 0, text.length)
     const d = parseLoose<CuratorDecision>(text)
-    if (d) applyCuration(result, d)
-    emit({ event: 'status', agent: 'synth', state: 'done', label: bi('整合完成!', 'Synthesis done!') })
+    if (!d) throw new Error('Synthesizer returned output that could not be parsed as the required curation JSON.')
+    applyCuration(result, d)
+    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'real', label: bi('整合完成!', 'Synthesis done!') })
     if (agentSources) agentSources.synth = { mode: 'real', reason: bi('合成實際檢查並修剪各段輸出。', 'Synth actually reviewed and pruned each section’s output.') }
   } catch (e) {
-    const sandboxReason = emitSandboxUnavailable('synth', e, emit)
-    emit({ event: 'status', agent: 'synth', state: 'done', label: bi('整合略過', 'Synthesis skipped') })
+    fallbackAgents?.add('synth')
+    const sandboxReason = emitAgentFailure('synth', e, emit)
+    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'fallback', label: bi('整合略過', 'Synthesis skipped') })
     if (agentSources) agentSources.synth = {
       mode: 'fallback',
       reason: sandboxReason
@@ -966,8 +1015,8 @@ async function curate(
             `Synth's sandbox/runtime is offline — keeping each section's raw results instead of waiting for QA pruning. Reason: ${sandboxReason}`
           )
         : bi(
-            `合成超過 25 秒或 runtime 失敗；保留各組原始結果，不再等 QA 修剪。原因：${shortErr(e)}`,
-            `Synth took over 25s or the runtime failed — keeping each section's raw results instead of waiting for QA pruning. Reason: ${shortErr(e)}`
+            `合成超過等待時間或 runtime 失敗；保留各組原始結果，不再等 QA 修剪。原因：${shortErr(e)}`,
+            `Synth exceeded its wait budget or the runtime failed — keeping each section's raw results instead of waiting for QA pruning. Reason: ${shortErr(e)}`
           ),
     }
   } finally {
@@ -1021,52 +1070,32 @@ const LABELS: Record<AgentName, { running: BiStr; done: BiStr }> = {
   synth:    { running: bi('整合中…', 'Synthesizing…'),     done: bi('整合完成!', 'Synthesis done!') },
 }
 
-// ── Comment pipeline (map → reduce), high-signal first + token budget ──
+// ── Comment pipeline: local ranking → one reduce, token-budgeted ──
 async function runCommentPipeline(
   item: HNItem, env: Env, emit: (e: SSEEvent) => void, extraContext?: string,
   params: CommentParams = commentParams('med'), meter?: UsageMeter, quiet = false
 ): Promise<string> {
   const commentCount = item.children?.length ?? 0
 
-  // Small thread: a single call over the (ranked) comments.
-  if (commentCount < 10) {
-    const allText = rankedCommentsText(item.children ?? [], params.rankedBudget)
-    return singleCommentCall(env, allText, item, extraContext, params, meter)
-  }
-
-  // Large thread: map-reduce over the highest-signal top-level subtrees.
-  const subtrees = topSubtrees(item, params.maxSubtrees)
-  const sampled = subtrees.length < commentCount
-  if (!quiet) emit({ event: 'step', agent: 'comments',
-    label: bi(
-      `挑出 ${subtrees.length} 串高關注留言${sampled ? '（採樣）' : ''}`,
-      `Picked out ${subtrees.length} high-attention threads${sampled ? ' (sampled)' : ''}`
-    ) })
-
-  const mapResults: string[] = []
-  for (let i = 0; i < subtrees.length; i += 5) {
-    const batch = subtrees.slice(i, i + 5)
-    const results = await Promise.all(batch.map(sub => mapSubtree(env, sub, item.id, params.mapBudget, meter)))
-    mapResults.push(...results.filter(Boolean))
-    if (!quiet) emit({ event: 'step', agent: 'comments', label: bi(
-      `已摘要 ${Math.min(i + 5, subtrees.length)}/${subtrees.length} 串`,
-      `Summarized ${Math.min(i + 5, subtrees.length)}/${subtrees.length} threads`
-    ) })
-  }
-
-  if (!quiet) emit({ event: 'step', agent: 'comments', label: bi('聚類派別分析中…', 'Clustering into camps…') })
-  const reducePrompt = buildCommentReducePrompt(mapResults, item, extraContext, params)
-  const reduceText = await callMfAgent(env, env.AGENT_COMMENT_REDUCE, reducePrompt)
-  meter?.add('comments', reducePrompt.length, reduceText.length)
-  return reduceText
+  // Hosted Gemini CLI peers have high first-token latency. The old 8–12 call
+  // map fan-out could consume most of a Queue invocation before ctx/synth even
+  // started. Rank and cap the raw comments locally, then make one grounded
+  // reduce call; this preserves high-signal coverage with one remote turn.
+  const ranked = rankedCommentsText(item.children ?? [], params.rankedBudget)
+  if (commentCount >= 10 && !quiet) emit({
+    event: 'step',
+    agent: 'comments',
+    label: bi('已挑出高訊號留言，直接聚類分析…', 'Ranked high-signal comments; clustering directly…'),
+  })
+  return singleCommentCall(env, ranked, item, emit, extraContext, params, meter)
 }
 
 async function singleCommentCall(
-  env: Env, text: string, item: HNItem, extraContext?: string,
+  env: Env, text: string, item: HNItem, emit: (e: SSEEvent) => void, extraContext?: string,
   params: CommentParams = commentParams('med'), meter?: UsageMeter
 ): Promise<string> {
   const prompt = buildCommentReducePrompt([text], item, extraContext, params)
-  const out = await callMfAgent(env, env.AGENT_COMMENT_REDUCE, prompt)
+  const out = await callAgent(env, env.AGENT_COMMENT_REDUCE, prompt, 'comments', emit)
   meter?.add('comments', prompt.length, out.length)
   return out
 }
@@ -1090,35 +1119,6 @@ function topSubtrees(item: HNItem, max: number): HNComment[][] {
   })
   scored.sort((a, b) => b.score - a.score)
   return scored.slice(0, max).map(s => s.sub)
-}
-
-async function mapSubtree(env: Env, subtree: HNComment[], itemId: number, budget = 550, meter?: UsageMeter): Promise<string> {
-  // Budget ~`budget` tokens of thread text, highest-signal comments first.
-  let used = 0
-  const lines: string[] = []
-  for (const c of subtree) {
-    const t = stripHtml(c.text ?? '')
-    if (!t) continue
-    const line = `[id:${c.id}] ${c.author ?? 'anon'}: ${t.slice(0, 500)}`
-    const tk = tokens(line)
-    if (used + tk > budget && lines.length) break
-    lines.push(line); used += tk
-  }
-  const text = lines.join('\n')
-  const prompt = `用一個 JSON 物件總結這串 HN 留言（只用中文）。
-
-Thread (item ${itemId}):
-${text}
-
-只回傳這個 JSON：
-{"stance":{"zh":"..."},"key_claims":[{"zh":"..."}],"is_correction_of_article":false,"sentiment":"agree","top_comment_id":${subtree[0]?.id ?? 0}}`
-  try {
-    const out = await callMfAgent(env, env.AGENT_COMMENT_MAP, prompt)
-    meter?.add('comments', prompt.length, out.length)
-    return out
-  } catch {
-    return ''
-  }
 }
 
 // Flatten the highest-signal comments (by length) within a token budget.
@@ -1240,7 +1240,7 @@ async function runJargon(
     if (prompts.length > 1 && !quiet) emit({ event: 'step', agent: 'jargon', label: bi(`通讀全文 ${prompts.length} 段…`, `Reading the full article in ${prompts.length} passes…`) })
     // Run windows independently — a slow/failed window must NOT zero the rest.
     const settled = await Promise.allSettled(prompts.map(p =>
-      callMfAgent(env, env.AGENT_JARGON, p, { timeoutMs, attempts: 1 })))
+      callAgent(env, env.AGENT_JARGON, p, 'jargon', emit, { timeoutMs, attempts: 2 })))
     // Meter each window that returned: sum its prompt + response chars.
     settled.forEach((s, i) => {
       if (s.status === 'fulfilled') meter?.add('jargon', prompts[i].length, s.value.length)
@@ -1250,12 +1250,17 @@ async function runJargon(
       const rej = settled.find(s => s.status === 'rejected') as PromiseRejectedResult | undefined
       throw rej ? rej.reason : new Error('jargon: no windows returned')
     }
+    const parseable = outputs.some(output => {
+      const parsed = parseLoose<unknown>(output)
+      return Array.isArray(parsed) || Boolean(parsed && Array.isArray((parsed as { jargon?: unknown }).jargon))
+    })
+    if (!parseable) throw new Error('Jargon returned no parseable JSON from any completed window.')
     let merged = mergeJargon(outputs)
     // Hard filter: never show a term the user already knows (case-insensitive).
     const knownSet = new Set(known.map(k => k.trim().toLowerCase()))
     merged = merged.filter(t => !knownSet.has((t.term || '').trim().toLowerCase()))
     if (!quiet) {
-      emit({ event: 'status', agent: 'jargon', state: 'done', label: bi(`找到 ${merged.length} 個詞!`, `Found ${merged.length} terms!`) })
+      emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'real', label: bi(`找到 ${merged.length} 個詞!`, `Found ${merged.length} terms!`) })
       emit({ event: 'section', agent: 'jargon', data: merged })
     }
     if (agentSources) agentSources.jargon = {
@@ -1268,9 +1273,9 @@ async function runJargon(
     return merged
   } catch (e) {
     fallbackAgents?.add('jargon')
-    const sandboxReason = emitSandboxUnavailable('jargon', e, emit)
+    const sandboxReason = emitAgentFailure('jargon', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'jargon', state: 'done', label: bi('術語用備援內容', 'Jargon used fallback content') })
+      emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'fallback', label: bi('術語用備援內容', 'Jargon used fallback content') })
       emit({ event: 'section', agent: 'jargon', data: [] })
     }
     if (agentSources) agentSources.jargon = {
@@ -1297,7 +1302,7 @@ async function skipJargon(
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<JargonTerm[]> {
   skippedAgents.add('jargon')
-  emit({ event: 'status', agent: 'jargon', state: 'done', label: bi('非技術文，略過術語', 'Not technical — skipping jargon') })
+  emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'skipped', label: bi('非技術文，略過術語', 'Not technical — skipping jargon') })
   emit({ event: 'section', agent: 'jargon', data: [] })
   if (agentSources) agentSources.jargon = { mode: 'skipped', reason: bi('隊長判斷內容太短或不像技術文，沒有呼叫小詞。', 'The captain judged the content too short or not technical, so Jargon was not called.') }
   return []
@@ -1307,7 +1312,7 @@ function jargonTimeoutMs(text: string): number {
   // The bottleneck is generating 10-16 explanations, not reading the input —
   // so even short articles need a generous budget. (Empirically the agent does
   // ~5 terms in ~12s; a full pass with the candidate list can take 40-70s.)
-  return text.length > 9000 ? 100_000 : 80_000
+  return 240_000
 }
 
 function shortErr(e: unknown): string {
@@ -1324,10 +1329,15 @@ function sandboxUnavailableReason(e: unknown): string | null {
   return (explicit || (mentionsRuntime && hasDownWord)) ? msg : null
 }
 
-function emitSandboxUnavailable(agent: AgentName, e: unknown, emit: (event: SSEEvent) => void): string | null {
-  const reason = sandboxUnavailableReason(e)
-  if (reason) emit({ event: 'error', agent, kind: 'sandbox_unavailable', message: reason })
-  return reason
+function emitAgentFailure(agent: AgentName, e: unknown, emit: (event: SSEEvent) => void): string | null {
+  const sandboxReason = sandboxUnavailableReason(e)
+  emit({
+    event: 'error',
+    agent,
+    kind: sandboxReason ? 'sandbox_unavailable' : 'agent_error',
+    message: sandboxReason ?? shortErr(e),
+  })
+  return sandboxReason
 }
 
 function fallbackReason(agent: WorkerAgent, e: unknown, sandboxReason: string | null, fallbackText: BiStr): BiStr {

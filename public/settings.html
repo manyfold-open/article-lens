@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Article Lens · Settings</title>
+  <link rel="stylesheet" href="/settings.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="back" href="/" aria-label="Back to Article Lens">← Article Lens</a>
+      <button id="logout" class="quiet hidden" type="button">Sign out</button>
+    </header>
+
+    <section id="login-view" class="login-card">
+      <p class="eyebrow">ADMIN</p>
+      <h1>Settings</h1>
+      <p class="lede">Enter the password configured in <code>ADMIN_SETTINGS_PASSWORD</code>.</p>
+      <form id="login-form">
+        <label for="password">Admin password</label>
+        <div class="password-row">
+          <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+          <button type="submit">Unlock</button>
+        </div>
+        <p id="login-message" class="message" role="status"></p>
+      </form>
+    </section>
+
+    <section id="settings-view" class="hidden">
+      <div class="heading">
+        <div>
+          <p class="eyebrow">ARTICLE LENS · ADMIN</p>
+          <h1>Runtime settings</h1>
+          <p class="lede">Saved values override Wrangler defaults. Secret values are encrypted and never sent back to this page.</p>
+        </div>
+        <span id="save-state" class="save-state">Ready</span>
+      </div>
+
+      <div id="warning" class="warning hidden" role="alert"></div>
+      <form id="settings-form">
+        <div id="fields" class="field-grid"></div>
+        <div class="actions">
+          <p id="form-message" class="message" role="status"></p>
+          <button id="save" type="submit">Save settings</button>
+        </div>
+      </form>
+
+      <section class="infrastructure">
+        <p class="eyebrow">DEPLOYMENT</p>
+        <h2>Infrastructure bindings</h2>
+        <p>These resources are fixed at deploy time and remain in <code>wrangler.toml</code>.</p>
+        <div id="infrastructure" class="infra-grid"></div>
+      </section>
+    </section>
+  </main>
+  <script src="/settings.js" defer></script>
+</body>
+</html>

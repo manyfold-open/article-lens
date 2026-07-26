@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Article Lens · Access</title>
+  <link rel="stylesheet" href="/access.css">
+</head>
+<body>
+  <main class="gate">
+    <a class="brand" href="/access" aria-label="Article Lens access">
+      <span class="brand-mark" aria-hidden="true">AL</span>
+      <span>Article Lens</span>
+    </a>
+
+    <section class="card" aria-labelledby="access-title">
+      <p class="eyebrow">PRIVATE WORKSPACE</p>
+      <h1 id="access-title">Enter access code</h1>
+      <p class="lede">This Article Lens workspace is protected. Enter the six-digit code to continue.</p>
+
+      <form id="access-form">
+        <label for="passcode">6-digit access code</label>
+        <input id="passcode" name="passcode" type="password"
+          inputmode="numeric" pattern="\d{6}" minlength="6" maxlength="6"
+          autocomplete="one-time-code" aria-describedby="access-message"
+          required autofocus>
+        <button id="unlock" type="submit">Open Article Lens</button>
+        <p id="access-message" class="message" role="status" aria-live="polite"></p>
+      </form>
+
+      <div class="admin-note">
+        <span>Workspace administrator?</span>
+        <a href="/settings">Configure access in Settings →</a>
+      </div>
+    </section>
+  </main>
+  <script src="/access.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# Required only to unlock /settings and encrypt saved runtime configuration.
+# Use a long, random value and keep the real .dev.vars file uncommitted.
+ADMIN_SETTINGS_PASSWORD=replace-with-a-long-random-password

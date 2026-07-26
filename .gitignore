@@ -6,7 +6,6 @@ dist/
 # secrets — never commit
 .env
 .env.*
-!.env.example
 .dev.vars
 
 # local artefacts

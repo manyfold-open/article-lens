@@ -3,8 +3,6 @@
 // ── State ──────────────────────────────────────────────────────────────────
 let currentPhase = 'input';
 let currentResult = null;
-let agentsDone = 0;
-let totalAgents = 4;
 let reportReady = false;     // result has arrived; report is filled but hidden
 let reportTimer = 0;         // fallback timer to reveal the report
 let kbFilter = 'all';
@@ -12,6 +10,10 @@ let kbSort = 'recent';
 let kbQuery = '';
 let latestBriefing = null;
 let workflowStage = 'idle';
+let workflowState = window.WorkflowModel?.createState('') || null;
+let analysisPollGeneration = 0;
+let workflowRenderTimer = 0;
+let workbenchCollapsed = false;
 
 const AGENT_NAMES = {
   orch:     { zh: '隊長', en: 'Orchestrator' },
@@ -27,15 +29,18 @@ const AGENT_COLORS = {
 };
 // latest SSE label/state per agent — powers the click-to-inspect panel
 const agentStatus = {};
+const agentTraces = {};
+const agentOutputs = {};
+let openAgentId = null;
+const activityEntries = [];
+let activitySeq = 0;
+let activityAgentFilter = 'all';
+let activityKindFilter = 'all';
+let activityAutoscroll = true;
+let activityCollapsed = false;
+let activityRenderPending = false;
 const sandboxDownAgents = new Set();
 const sandboxDownReasons = {};
-const WORKFLOW_STAGES = [
-  { key: 'recall', label: { zh: '集合', en: 'Gather' } },
-  { key: 'assign', label: { zh: '分派', en: 'Assign' } },
-  { key: 'analyze', label: { zh: '分析', en: 'Analyze' } },
-  { key: 'synth', label: { zh: '整合', en: 'Integrate' } },
-  { key: 'present', label: { zh: '簡報', en: 'Present' } },
-];
 
 // ── i18n ─────────────────────────────────────────────────────────────────
 function getLang() { return document.documentElement.dataset.lang || 'en'; }
@@ -56,7 +61,9 @@ function syncI18nAttrs() {
 // edit-toggle button, front-page toggle, static attrs) when the language flips.
 function refreshChrome() {
   syncI18nAttrs();
-  renderWorkflowStrip();
+  renderWorkflowInspector();
+  renderActivityLog();
+  syncWorkbench();
   syncEditToggle();
   syncFpToggleLabel();
 }
@@ -65,6 +72,51 @@ function refreshChrome() {
 function setPhase(phase) {
   currentPhase = phase;
   document.documentElement.dataset.phase = phase;
+  syncWorkbench();
+}
+
+// ── Bottom workbench ───────────────────────────────────────────────────────
+// Analyze, Workflow and Activity stay open together. During a live run the
+// Analyze controls remain visible but locked so a second run cannot race it.
+function syncWorkbench() {
+  const root = document.getElementById('workbench');
+  if (!root) return;
+  document.querySelectorAll('[data-workbench-panel]').forEach(panel => {
+    panel.hidden = false;
+  });
+
+  const runLocked = currentPhase === 'running';
+  root.classList.toggle('run-locked', runLocked);
+  document.getElementById('hn-input')?.toggleAttribute('disabled', runLocked);
+  document.getElementById('analyze-btn')?.toggleAttribute('disabled', runLocked);
+  root.querySelectorAll('.chat-chips button').forEach(button => {
+    button.toggleAttribute('disabled', runLocked);
+  });
+  const analyzeState = document.getElementById('analyze-panel-state');
+  if (analyzeState) {
+    analyzeState.textContent = L(runLocked
+      ? { zh: '目前任務執行中', en: 'Current run in progress' }
+      : currentPhase === 'results'
+        ? { zh: '可直接分析下一篇', en: 'Ready for the next article' }
+        : { zh: '貼上連結或文字開始', en: 'Paste a link or text to begin' });
+  }
+  root.classList.toggle('collapsed', workbenchCollapsed);
+  const collapse = document.getElementById('workbench-collapse');
+  if (collapse) {
+    collapse.setAttribute('aria-expanded', String(!workbenchCollapsed));
+    collapse.textContent = workbenchCollapsed ? '⌃' : '⌄';
+    collapse.title = workbenchCollapsed
+      ? L({ zh: '展開分析控制台', en: 'Expand analysis console' })
+      : L({ zh: '收起分析控制台', en: 'Collapse analysis console' });
+  }
+  const context = document.getElementById('workbench-context');
+  if (context) {
+    context.textContent = L(currentPhase === 'input'
+      ? { zh: '準備開始', en: 'Ready' }
+      : currentPhase === 'running'
+        ? { zh: '執行中 · 即時更新', en: 'Live run · updating' }
+        : { zh: '執行完成 · 可查看記錄', en: 'Run complete · inspect the record' });
+  }
 }
 
 // ── Top bar height sync ──────────────────────────────────────────────────────
@@ -91,10 +143,57 @@ document.addEventListener('DOMContentLoaded', () => {
     window.pixelAgents.setHoverHandler(onAgentHover);
     window.pixelAgents.setPresentHandler(revealReport);
   }
+  window.WorkflowInspector?.init({
+    getLang,
+    onSelectAgent: openAgentPanel,
+    agentNames: AGENT_NAMES,
+  });
   document.getElementById('agent-panel-close').addEventListener('click', closeAgentPanel);
   document.getElementById('agent-panel-overlay').addEventListener('click', closeAgentPanel);
+  document.getElementById('activity-agent-filter')?.addEventListener('change', e => {
+    activityAgentFilter = e.target.value;
+    renderActivityLog();
+  });
+  document.getElementById('activity-kind-filter')?.addEventListener('change', e => {
+    activityKindFilter = e.target.value;
+    renderActivityLog();
+  });
+  document.getElementById('activity-autoscroll')?.addEventListener('change', e => {
+    activityAutoscroll = Boolean(e.target.checked);
+    if (activityAutoscroll) scrollActivityToBottom();
+  });
+  document.getElementById('activity-collapse')?.addEventListener('click', () => {
+    activityCollapsed = !activityCollapsed;
+    syncActivityPanel();
+  });
+  document.getElementById('activity-clear')?.addEventListener('click', clearActivityLog);
+  document.getElementById('workbench-collapse')?.addEventListener('click', () => {
+    workbenchCollapsed = !workbenchCollapsed;
+    syncWorkbench();
+  });
+  document.getElementById('access-lock')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/access/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+    } finally {
+      window.location.assign('/access');
+    }
+  });
+  document.getElementById('activity-stream')?.addEventListener('scroll', e => {
+    if (!activityAutoscroll) return;
+    const stream = e.currentTarget;
+    if (stream.scrollHeight - stream.scrollTop - stream.clientHeight > 72) {
+      activityAutoscroll = false;
+      const toggle = document.getElementById('activity-autoscroll');
+      if (toggle) toggle.checked = false;
+    }
+  });
   kbRender();
-  renderWorkflowStrip();
+  renderWorkflowInspector();
   loadFrontPage();
 
   // Core actions
@@ -103,6 +202,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') onAnalyzeClick();
   });
   document.getElementById('back-btn').addEventListener('click', () => {
+    stopAnalysisPolling();
+    clearAnalysisUrl();
     setPhase('input');
     if (window.pixelAgents) window.pixelAgents.reset();
   });
@@ -186,6 +287,11 @@ document.addEventListener('DOMContentLoaded', () => {
     syncAudiencePicker(); // reflect the restored/persisted reader level
   }
   refreshChrome();
+  const recoverId = new URLSearchParams(window.location.search).get('analysis');
+  if (recoverId) recoverAnalysis(recoverId);
+  workflowRenderTimer = window.setInterval(() => {
+    if (currentPhase === 'running') renderWorkflowInspector();
+  }, 1000);
 });
 
 // ── Task presets ─────────────────────────────────────────────────────────────
@@ -362,13 +468,21 @@ function resolveInput(raw) {
   return { kind: 'text', value: raw };
 }
 
-function startAnalysis(input) {
-  agentsDone = 0;
-  totalAgents = 4;
-  document.getElementById('progress-fill').style.width = '0%';
-  document.getElementById('progress-text').textContent = L({ zh: '分析中…', en: 'Analyzing…' });
-  document.getElementById('agents-status').innerHTML = '';
+function prepareAnalysisUi(input, restoring = false) {
+  workbenchCollapsed = false;
+  clearActivityLog();
+  appendActivity({
+    agent: 'system',
+    kind: restoring ? 'restore' : 'request',
+    level: 'info',
+    message: restoring
+      ? { zh: '正在恢復先前的分析現場', en: 'Restoring the previous analysis' }
+      : { zh: `開始分析 ${input.kind}`, en: `Analysis started · ${input.kind}` },
+    detail: restoring ? String(input.analysisId || '') : String(input.value || ''),
+  });
   Object.keys(agentStatus).forEach(k => delete agentStatus[k]);
+  Object.keys(agentTraces).forEach(k => delete agentTraces[k]);
+  Object.keys(agentOutputs).forEach(k => delete agentOutputs[k]);
   sandboxDownAgents.clear();
   Object.keys(sandboxDownReasons).forEach(k => delete sandboxDownReasons[k]);
   latestBriefing = null;
@@ -377,81 +491,220 @@ function startAnalysis(input) {
   closeAgentPanel();
   reportReady = false; clearTimeout(reportTimer);
   setWorkflowStage('recall');
-  if (window.pixelAgents) window.pixelAgents.receiveTask();
+  if (window.pixelAgents && !restoring) window.pixelAgents.receiveTask();
   syncEditToggle();   // a run auto-exits edit mode in the sim; reflect it on the button
   setPhase('running');
+}
 
-  let qs = input.kind === 'id'  ? 'id=' + encodeURIComponent(input.value)
-         : input.kind === 'url' ? 'url=' + encodeURIComponent(input.value)
-         :                        'text=' + encodeURIComponent(input.value.slice(0, 4000));
+async function startAnalysis(input) {
+  stopAnalysisPolling();
+  clearAnalysisUrl();
+  workflowState = window.WorkflowModel?.createState('') || null;
+  prepareAnalysisUi(input);
+  const body = {};
+  body[input.kind] = input.kind === 'text' ? input.value.slice(0, 8000) : input.value;
   // Send the user's saved terms so 小詞 skips what they already know.
   const kb = kbLoad().map(i => String(i.term).replace(/,/g, ' ')).filter(Boolean).slice(0, 80);
-  if (kb.length) qs += '&kb=' + encodeURIComponent(kb.join(','));
+  if (kb.length) body.kb = kb;
   // If the user has arranged the office (drag/pods/mode/disable), pass the
   // resulting graphConfig so the arrangement drives the real analysis. When the
   // layout is the default, getGraphConfig() returns null and nothing is sent.
   const cfg = window.pixelAgents?.getGraphConfig?.();
-  if (cfg) qs += '&graph=' + encodeURIComponent(JSON.stringify(cfg));
-  const es = new EventSource(`/api/analyze?${qs}`);
-  es.onmessage = e => {
-    let ev;
-    try { ev = JSON.parse(e.data); } catch { return; }
-    handleSSEEvent(ev, es);
-  };
-  es.onerror = () => {
-    es.close();
-    showError(L({ zh: '連線中斷', en: 'Connection lost' }));
+  if (cfg) body.graph = cfg;
+  try {
+    const response = await fetch('/api/analyses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.analysis_id) throw new Error(data.error || `HTTP ${response.status}`);
+    workflowState = window.WorkflowModel?.createState(data.analysis_id) || null;
+    setAnalysisUrl(data.analysis_id);
+    renderWorkflowInspector();
+    pollAnalysis(data.analysis_id, false);
+  } catch (error) {
+    appendActivity({
+      agent: 'system',
+      kind: 'error',
+      level: 'error',
+      message: { zh: '無法建立分析任務', en: 'Could not create the analysis job' },
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    showError(error instanceof Error ? error.message : String(error));
     setPhase('input');
-  };
+  }
 }
 
-function handleSSEEvent(ev, es) {
+function recoverAnalysis(analysisId) {
+  stopAnalysisPolling();
+  workflowState = window.WorkflowModel?.createState(analysisId) || null;
+  prepareAnalysisUi({ analysisId }, true);
+  pollAnalysis(analysisId, true);
+}
+
+function setAnalysisUrl(analysisId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('analysis', analysisId);
+  history.replaceState(null, '', url);
+}
+
+function clearAnalysisUrl() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has('analysis')) return;
+  url.searchParams.delete('analysis');
+  history.replaceState(null, '', url);
+}
+
+function stopAnalysisPolling() {
+  analysisPollGeneration++;
+  if (workflowState) workflowState.reconnecting = false;
+}
+
+function pollDelay(milliseconds) {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+}
+
+async function pollAnalysis(analysisId, restoring) {
+  const generation = ++analysisPollGeneration;
+  let restorePass = restoring;
+  let failures = 0;
+  while (generation === analysisPollGeneration) {
+    try {
+      const cursor = workflowState?.cursor || 0;
+      const response = await fetch(`/api/analyses/${encodeURIComponent(analysisId)}/status?after=${cursor}`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      if (response.status === 404) {
+        clearAnalysisUrl();
+        setPhase('input');
+        showError(L({ zh: '運行記錄已過期，請重新開始分析。', en: 'This run has expired. Start a new analysis.' }));
+        return;
+      }
+      if (!response.ok) throw new Error(`Status request failed (HTTP ${response.status})`);
+      const snapshot = await response.json();
+      failures = 0;
+      if (workflowState) workflowState.reconnecting = false;
+      const envelopes = Array.isArray(snapshot.events)
+        ? [...snapshot.events].sort((a, b) => (Number(a.seq) || 0) - (Number(b.seq) || 0))
+        : [];
+      for (const envelope of envelopes) {
+        const seq = Number(envelope.seq);
+        if (workflowState?.seenSeq?.[seq]) continue;
+        window.WorkflowModel?.applyEnvelope(workflowState, envelope);
+        handleSSEEvent(envelope.data, { restoring: restorePass });
+      }
+      window.WorkflowModel?.applySnapshot(workflowState, { ...snapshot, events: [] });
+      if (snapshot.result && !currentResult) {
+        handleSSEEvent({ event: 'result', data: snapshot.result, at: snapshot.updated_at }, { restoring: restorePass });
+      }
+      renderWorkflowInspector();
+      restorePass = false;
+      if (snapshot.phase === 'done') {
+        if (reportReady && currentPhase !== 'results') revealReport();
+        return;
+      }
+      if (snapshot.phase === 'error') {
+        showError(snapshot.error || L({ zh: 'Workflow 執行失敗', en: 'Workflow failed' }));
+        return;
+      }
+      await pollDelay(500);
+    } catch (error) {
+      if (generation !== analysisPollGeneration) return;
+      failures++;
+      if (workflowState) workflowState.reconnecting = true;
+      renderWorkflowInspector();
+      const seconds = Math.min(15, Math.max(1, 2 ** Math.min(failures - 1, 4)));
+      appendActivity({
+        agent: 'system',
+        kind: 'reconnect',
+        level: 'warn',
+        message: { zh: `${seconds} 秒後重連`, en: `Reconnecting in ${seconds}s` },
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      await pollDelay(seconds * 1000);
+    }
+  }
+}
+
+function handleSSEEvent(ev, options = {}) {
+  recordActivityEvent(ev);
   switch (ev.event) {
     case 'plan':
       setWorkflowStage('assign');
-      totalAgents = ev.agents.length;
       ev.agents.forEach(a => {
-        ensureAgentRow(a);
         sandboxDownAgents.delete(a);
         delete sandboxDownReasons[a];
-        if (window.pixelAgents) window.pixelAgents.setAgentState(a, 'idle');
+        if (window.pixelAgents && !options.restoring) window.pixelAgents.setAgentState(a, 'idle');
       });
       // Kick off the office choreography: 隊長 walks over to assign the work.
-      if (window.pixelAgents) window.pixelAgents.startRun();
+      if (window.pixelAgents && !options.restoring) window.pixelAgents.startRun();
       break;
     case 'status':
-      agentStatus[ev.agent] = { state: ev.state, label: ev.label };
-      // 合成 (Synthesizer) has a desk now — animate it, but it doesn't count
-      // toward the progress bar (only the 4 workers do). Also mirror to the
-      // progress line so its step text stays visible.
+      agentStatus[ev.agent] = { ...agentStatus[ev.agent], state: ev.state, label: ev.label };
+      if (ev.state === 'running') {
+        // A durable workflow retry starts a fresh attempt for this agent.
+        delete agentStatus[ev.agent].error;
+        delete agentStatus[ev.agent].errorKind;
+      }
+      pushAgentTrace(ev.agent, {
+        phase: 'progress',
+        label: ev.label,
+        at: ev.at || new Date().toISOString(),
+        call_id: 'workflow',
+      });
+      refreshOpenAgentPanel(ev.agent);
+      // 合成 (Synthesizer) has a desk now, so reflect its live state in the
+      // office as well as the Workflow Inspector.
       if (ev.agent === 'synth') {
         if (ev.state === 'running') setWorkflowStage('synth');
-        const pt = document.getElementById('progress-text');
-        if (pt && ev.label) pt.textContent = L(ev.label);
-        if (window.pixelAgents && !sandboxDownAgents.has('synth')) {
+        if (window.pixelAgents && !options.restoring && !sandboxDownAgents.has('synth')) {
           const sState = ev.state === 'running' ? 'typing' : ev.state;
           window.pixelAgents.setAgentState('synth', sState);
           if (ev.label) window.pixelAgents.setSpeechBubble('synth', L(ev.label));
         }
         break;
       }
-      updateAgentRow(ev.agent, ev.state, ev.label);
       if (ev.state === 'running') setWorkflowStage('analyze');
-      if (window.pixelAgents && !sandboxDownAgents.has(ev.agent)) {
+      if (window.pixelAgents && !options.restoring && !sandboxDownAgents.has(ev.agent)) {
         const pxState = ev.state === 'running' ? 'typing' : ev.state;
         window.pixelAgents.setAgentState(ev.agent, pxState);
         if (ev.label) window.pixelAgents.setSpeechBubble(ev.agent, L(ev.label));
       }
-      if (ev.state === 'done') { agentsDone++; updateProgress(); }
       break;
     case 'step':
-      agentStatus[ev.agent] = { state: 'running', label: ev.label };
-      updateBubble(ev.agent, ev.label);
-      if (window.pixelAgents && ev.label && !sandboxDownAgents.has(ev.agent)) window.pixelAgents.setSpeechBubble(ev.agent, L(ev.label));
+      agentStatus[ev.agent] = { ...agentStatus[ev.agent], state: 'running', label: ev.label };
+      pushAgentTrace(ev.agent, {
+        phase: 'progress',
+        label: ev.label,
+        at: ev.at || new Date().toISOString(),
+        call_id: 'workflow',
+      });
+      if (window.pixelAgents && !options.restoring && ev.label && !sandboxDownAgents.has(ev.agent)) window.pixelAgents.setSpeechBubble(ev.agent, L(ev.label));
+      refreshOpenAgentPanel(ev.agent);
+      break;
+    case 'agent_trace':
+      pushAgentTrace(ev.agent, ev);
+      if (ev.phase === 'error' && ev.will_retry !== true) {
+        agentStatus[ev.agent] = {
+          ...agentStatus[ev.agent],
+          error: ev.content || L(ev.label),
+          errorKind: 'agent_error',
+        };
+      }
+      refreshOpenAgentPanel(ev.agent);
       break;
     case 'section':
-      if (ev.data?.briefing) latestBriefing = ev.data.briefing;
+      if (ev.data?.briefing) {
+        latestBriefing = ev.data.briefing;
+        agentOutputs.orch = ev.data.briefing;
+        refreshOpenAgentPanel('orch');
+      } else {
+        agentOutputs[ev.agent] = ev.data;
+      }
       renderSection(ev.agent, ev.data);   // populate this panel as soon as it's ready
+      refreshOpenAgentPanel(ev.agent);
       break;
     case 'usage':
       // Per-agent token usage — accumulate into the office token meter (actual).
@@ -462,73 +715,106 @@ function handleSSEEvent(ev, es) {
       // article is worth reading. 'go' → wake the standby candidates (jargon+comments)
       // from the dining corner into the readers zone; 'stop' → they stay asleep and
       // the run wraps with just sum+ctx→synth→隊長.
-      if (window.pixelAgents?.escalateDecision) {
+      if (!options.restoring && window.pixelAgents?.escalateDecision) {
         window.pixelAgents.escalateDecision(ev.decision === 'go' ? 'go' : 'stop');
       }
       break;
+    case 'retry':
+      setWorkflowStage('assign');
+      break;
     case 'result':
-      es.close();
       currentResult = ev.data;
       // Finalize the token meter from the authoritative total, if provided.
       if (ev.data?.usage && window.pixelAgents?.setUsageTotal && typeof ev.data.usage.total === 'number') {
         window.pixelAgents.setUsageTotal(ev.data.usage.total);
       }
       renderResults(ev.data);     // fill the report, but keep it hidden…
+      if (openAgentId) refreshOpenAgentPanel(openAgentId);
       if (getLang() === 'en') ensureEnglish();   // default lang is en; agents only wrote zh
       setWorkflowStage('present');
-      armReport();                // …until 隊長 walks to the whiteboard to present
+      if (options.restoring) {
+        reportReady = true;
+        revealReport();
+      } else {
+        armReport();                // …until 隊長 walks to the whiteboard to present
+      }
       break;
     case 'error':
       if (ev.agent) {
         const sandboxDown = ev.kind === 'sandbox_unavailable';
         const current = agentStatus[ev.agent]?.state;
-        if (!sandboxDown && (current === 'running' || current === 'done')) break;
         if (sandboxDown) {
           sandboxDownAgents.add(ev.agent);
           sandboxDownReasons[ev.agent] = ev.message ? { zh: ev.message, en: ev.message } : { zh: 'sandbox/runtime 不在線', en: 'sandbox/runtime offline' };
         }
         agentStatus[ev.agent] = {
+          ...agentStatus[ev.agent],
+          error: ev.message,
+          errorKind: ev.kind || 'agent_error',
           state: 'error',
           label: sandboxDown
             ? { zh: 'sandbox 睡著了 💤', en: 'sandbox asleep 💤' }
-            : { zh: '睡著了 💤', en: 'asleep 💤' },
+            : { zh: 'Agent 呼叫失敗', en: 'Agent call failed' },
         };
-        if (window.pixelAgents) {
-          window.pixelAgents.setAsleep(ev.agent, true);
-          window.pixelAgents.setSpeechBubble(ev.agent, sandboxDown ? L({ zh: '💤 sandbox 睡著了', en: '💤 sandbox asleep' }) : L({ zh: '💤 睡著了', en: '💤 asleep' }));
+        const alreadyTraced = (agentTraces[ev.agent] || []).some(entry =>
+          entry.phase === 'error' && entry.content === ev.message
+        );
+        if (!alreadyTraced) {
+          pushAgentTrace(ev.agent, {
+            phase: 'error',
+            label: sandboxDown
+              ? { zh: '執行環境不可用', en: 'Runtime unavailable' }
+              : { zh: 'Agent 執行錯誤', en: 'Agent execution error' },
+            content: ev.message,
+            at: ev.at || new Date().toISOString(),
+            call_id: 'workflow-error',
+          });
         }
+        if (window.pixelAgents && !options.restoring && sandboxDown) {
+          window.pixelAgents.setAsleep(ev.agent, true);
+          window.pixelAgents.setSpeechBubble(ev.agent, L({ zh: '💤 sandbox 睡著了', en: '💤 sandbox asleep' }));
+        }
+        if (!options.restoring && !sandboxDown && current !== 'done' && window.pixelAgents) {
+          window.pixelAgents.setAgentState(ev.agent, 'error');
+          window.pixelAgents.setSpeechBubble(ev.agent, L(agentStatus[ev.agent].label));
+        }
+        refreshOpenAgentPanel(ev.agent);
+      } else if (ev.kind === 'orchestration_error') {
+        agentStatus.orch = {
+          ...agentStatus.orch,
+          state: 'error',
+          label: { zh: '編排失敗，已切換備援', en: 'Orchestration failed; using fallback' },
+          error: ev.message,
+          errorKind: ev.kind,
+        };
+        pushAgentTrace('orch', {
+          phase: 'error',
+          label: agentStatus.orch.label,
+          content: ev.message,
+          at: ev.at || new Date().toISOString(),
+          call_id: 'orchestration-error',
+        });
+        refreshOpenAgentPanel('orch');
       } else {
-        // Fatal error — abort the run.
-        es.close();
+        // Durable workflow state decides whether the job retries or terminates.
+        // Keep the Inspector visible so the exact reason remains available.
         showError(ev.message);
-        if (currentPhase === 'running') setPhase('input');
       }
       break;
+    case 'workflow_plan':
+    case 'workflow_state':
+      break;
   }
-}
-
-function updateProgress() {
-  const pct = Math.round((agentsDone / totalAgents) * 100);
-  document.getElementById('progress-fill').style.width = pct + '%';
-  if (pct >= 100) document.getElementById('progress-text').textContent = L({ zh: '整合結果中…', en: 'Synthesizing…' });
+  renderWorkflowInspector();
 }
 
 function setWorkflowStage(stage) {
   workflowStage = stage;
-  renderWorkflowStrip();
+  renderWorkflowInspector();
 }
 
-function renderWorkflowStrip() {
-  const el = document.getElementById('workflow-strip');
-  if (!el) return;
-  const activeIdx = WORKFLOW_STAGES.findIndex(s => s.key === workflowStage);
-  el.innerHTML = WORKFLOW_STAGES.map((s, i) => {
-    const state = activeIdx < 0 ? 'idle' : i < activeIdx ? 'done' : i === activeIdx ? 'active' : 'idle';
-    return `<div class="workflow-step ${state}">
-      <span class="workflow-dot"></span>
-      <span class="workflow-label">${esc(L(s.label))}</span>
-    </div>`;
-  }).join('');
+function renderWorkflowInspector() {
+  if (workflowState) window.WorkflowInspector?.render(workflowState);
 }
 
 // The report is filled as soon as the result arrives, but stays hidden until
@@ -561,18 +847,399 @@ function revealReport() {
   setPhase('results');
 }
 
+// ── Global activity log ────────────────────────────────────────────────────
+// This is deliberately fed from the single SSE switch above, so it observes the
+// same ordered event stream as the office, Agent drawer, and final report.
+function recordActivityEvent(ev) {
+  const now = ev.at || new Date().toISOString();
+  switch (ev.event) {
+    case 'workflow_plan':
+      appendActivity({
+        at: now,
+        agent: 'orch',
+        kind: 'workflow_plan',
+        level: 'info',
+        message: {
+          zh: `已建立第 ${ev.attempt}/${ev.max_attempts} 輪執行拓撲`,
+          en: `Execution graph ready for attempt ${ev.attempt}/${ev.max_attempts}`,
+        },
+        detail: safeActivityJson({
+          nodes: ev.nodes,
+          edges: ev.edges,
+          groups: ev.groups,
+          escalate: ev.escalate,
+          debate: ev.debate,
+          audience: ev.audience,
+        }),
+        attempt: ev.attempt,
+      });
+      break;
+    case 'workflow_state':
+      appendActivity({
+        at: now,
+        agent: 'orch',
+        kind: 'workflow_state',
+        level: ev.state === 'error' ? 'error' : ev.state === 'retry_wait' ? 'warn' : ev.state === 'done' ? 'success' : 'info',
+        message: {
+          zh: `Workflow：${ev.state}`,
+          en: `Workflow: ${ev.state}`,
+        },
+        detail: ev.reason,
+        attempt: ev.attempt,
+      });
+      break;
+    case 'plan':
+      {
+      const agents = Array.isArray(ev.agents) ? ev.agents : [];
+      appendActivity({
+        at: now,
+        agent: 'orch',
+        kind: 'plan',
+        level: 'info',
+        message: {
+          zh: `分派 ${agents.length} 位 Agent`,
+          en: `Assigned ${agents.length} agents`,
+        },
+        detail: agents.join(' → '),
+      });
+      break;
+      }
+    case 'status':
+      appendActivity({
+        at: now,
+        agent: ev.agent,
+        kind: 'status',
+        level: ev.state === 'error' ? 'error' : ev.state === 'done' ? 'success' : 'info',
+        message: ev.label,
+        detail: `state=${ev.state}`,
+      });
+      break;
+    case 'step':
+      appendActivity({
+        at: now,
+        agent: ev.agent,
+        kind: 'step',
+        level: 'info',
+        message: ev.label,
+      });
+      break;
+    case 'agent_trace':
+      appendActivity({
+        at: now,
+        agent: ev.agent,
+        kind: ev.phase,
+        level: ev.phase === 'error'
+          ? (ev.will_retry ? 'warn' : 'error')
+          : ev.phase === 'output' ? 'success' : 'info',
+        message: ev.label,
+        detail: ev.content,
+        callId: ev.call_id,
+        attempt: ev.attempt,
+        truncated: ev.truncated,
+        originalChars: ev.original_chars,
+      });
+      break;
+    case 'section': {
+      const isBriefing = Boolean(ev.data?.briefing);
+      appendActivity({
+        at: now,
+        agent: isBriefing ? 'orch' : ev.agent,
+        kind: isBriefing ? 'briefing' : 'section',
+        level: 'success',
+        message: isBriefing
+          ? { zh: '任務簡報已建立', en: 'Task briefing created' }
+          : { zh: '結構化結果已就緒', en: 'Structured result ready' },
+        detail: safeActivityJson(isBriefing ? ev.data.briefing : ev.data),
+      });
+      break;
+    }
+    case 'usage':
+      appendActivity({
+        at: now,
+        agent: ev.agent || 'system',
+        kind: 'usage',
+        level: 'info',
+        message: ev.total !== undefined
+          ? { zh: `累計約 ${ev.total} tokens`, en: `About ${ev.total} tokens total` }
+          : { zh: `本次約 ${ev.tokens} tokens`, en: `About ${ev.tokens} tokens` },
+      });
+      break;
+    case 'escalate':
+      appendActivity({
+        at: now,
+        agent: 'orch',
+        kind: 'decision',
+        level: ev.decision === 'go' ? 'success' : 'warn',
+        message: ev.decision === 'go'
+          ? { zh: '決定升級為完整分析', en: 'Escalating to the full analysis' }
+          : { zh: '決定停止後續昂貴步驟', en: 'Stopping the remaining expensive steps' },
+        detail: ev.reason,
+      });
+      break;
+    case 'retry':
+      appendActivity({
+        at: now,
+        agent: 'orch',
+        kind: 'retry',
+        level: 'warn',
+        message: {
+          zh: `${ev.delay_seconds} 秒後重跑整個流程（第 ${ev.attempt}/${ev.max_attempts} 輪）`,
+          en: `Retrying the workflow in ${ev.delay_seconds}s (attempt ${ev.attempt}/${ev.max_attempts})`,
+        },
+        detail: ev.reason,
+        attempt: ev.attempt,
+      });
+      break;
+    case 'result':
+      appendActivity({
+        at: now,
+        agent: 'orch',
+        kind: 'result',
+        level: 'success',
+        message: { zh: '分析完成，最終報告已就緒', en: 'Analysis complete; final report ready' },
+      });
+      break;
+    case 'error':
+      appendActivity({
+        at: now,
+        agent: ev.agent || (ev.kind === 'orchestration_error' ? 'orch' : 'system'),
+        kind: 'error',
+        level: 'error',
+        message: ev.kind === 'sandbox_unavailable'
+          ? { zh: 'Agent runtime 不可用', en: 'Agent runtime unavailable' }
+          : ev.kind === 'orchestration_error'
+            ? { zh: '編排失敗，切換備援', en: 'Orchestration failed; using fallback' }
+            : { zh: '執行錯誤', en: 'Execution error' },
+        detail: ev.message,
+      });
+      break;
+    default:
+      appendActivity({
+        at: now,
+        agent: 'system',
+        kind: ev.event || 'event',
+        level: 'warn',
+        message: { zh: '未識別事件', en: 'Unknown event' },
+        detail: safeActivityJson(ev),
+      });
+  }
+}
+
+function safeActivityJson(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function clipActivityDetail(value, max = 10000) {
+  const text = value == null ? '' : String(value);
+  if (text.length <= max) return { text, clipped: false, originalChars: text.length };
+  return {
+    text: `${text.slice(0, max - 900)}\n\n… [activity payload truncated] …\n\n${text.slice(-800)}`,
+    clipped: true,
+    originalChars: text.length,
+  };
+}
+
+function appendActivity(entry) {
+  const clipped = clipActivityDetail(entry.detail);
+  activityEntries.push({
+    id: ++activitySeq,
+    at: entry.at || new Date().toISOString(),
+    agent: entry.agent || 'system',
+    kind: entry.kind || 'event',
+    level: entry.level || 'info',
+    message: entry.message || { zh: '事件', en: 'Event' },
+    detail: clipped.text,
+    clipped: Boolean(entry.truncated || clipped.clipped),
+    originalChars: entry.originalChars || clipped.originalChars,
+    callId: entry.callId,
+    attempt: entry.attempt,
+  });
+  if (activityEntries.length > 500) activityEntries.splice(0, activityEntries.length - 500);
+  document.getElementById('activity-panel')?.classList.add('has-entries');
+  scheduleActivityRender();
+}
+
+function clearActivityLog() {
+  activityEntries.length = 0;
+  activitySeq = 0;
+  const panel = document.getElementById('activity-panel');
+  const stream = document.getElementById('activity-stream');
+  if (panel) panel.classList.remove('has-entries');
+  if (stream) stream.innerHTML = '';
+  const count = document.getElementById('activity-count');
+  if (count) count.textContent = '0';
+  const workbenchCount = document.getElementById('workbench-activity-count');
+  if (workbenchCount) {
+    workbenchCount.textContent = '0';
+    workbenchCount.classList.remove('has-errors');
+  }
+}
+
+function scheduleActivityRender() {
+  if (activityRenderPending) return;
+  activityRenderPending = true;
+  requestAnimationFrame(() => {
+    activityRenderPending = false;
+    renderActivityLog();
+  });
+}
+
+function activityMatches(entry) {
+  if (activityAgentFilter !== 'all' && entry.agent !== activityAgentFilter) return false;
+  if (activityKindFilter === 'errors') return entry.level === 'error';
+  if (activityKindFilter === 'calls') return ['input', 'progress', 'output'].includes(entry.kind);
+  if (activityKindFilter === 'results') return ['output', 'section', 'result', 'briefing'].includes(entry.kind);
+  if (activityKindFilter === 'workflow') {
+    return ['request', 'restore', 'reconnect', 'workflow_plan', 'workflow_state', 'plan', 'status', 'step', 'usage', 'decision', 'retry'].includes(entry.kind);
+  }
+  return true;
+}
+
+function activityAgentLabel(agent) {
+  if (agent === 'system') return L({ zh: '系統', en: 'System' });
+  return L(AGENT_NAMES[agent]) || agent;
+}
+
+function activityTime(at) {
+  try {
+    return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+function renderActivityLog() {
+  const stream = document.getElementById('activity-stream');
+  if (!stream) return;
+  const filtered = activityEntries.filter(activityMatches);
+  stream.innerHTML = filtered.length
+    ? filtered.map(activityEntryHtml).join('')
+    : `<div class="activity-empty">${esc(L({ zh: '這個篩選條件下還沒有事件。', en: 'No events match this filter yet.' }))}</div>`;
+  document.getElementById('activity-panel')?.classList.toggle('has-entries', activityEntries.length > 0);
+  const count = document.getElementById('activity-count');
+  if (count) count.textContent = activityAgentFilter === 'all' && activityKindFilter === 'all'
+    ? String(activityEntries.length)
+    : `${filtered.length}/${activityEntries.length}`;
+  const workbenchCount = document.getElementById('workbench-activity-count');
+  if (workbenchCount) {
+    workbenchCount.textContent = String(activityEntries.length);
+    workbenchCount.classList.toggle('has-errors', activityEntries.some(entry => entry.level === 'error'));
+  }
+  stream.querySelectorAll('[data-activity-open-agent]').forEach(button => {
+    button.addEventListener('click', () => openAgentPanel(button.dataset.activityOpenAgent));
+  });
+  syncActivityPanel();
+  if (activityAutoscroll) scrollActivityToBottom();
+}
+
+function activityEntryHtml(entry) {
+  const agent = activityAgentLabel(entry.agent);
+  const clickableAgent = entry.agent !== 'system' && AGENT_NAMES[entry.agent];
+  const metadata = [
+    entry.attempt ? L({ zh: `第 ${entry.attempt} 次`, en: `attempt ${entry.attempt}` }) : '',
+    entry.callId ? `call ${entry.callId.slice(0, 8)}` : '',
+  ].filter(Boolean).join(' · ');
+  const detail = entry.detail
+    ? `<details class="activity-detail">
+        <summary>${esc(L({
+          zh: `payload · ${entry.detail.length} 字${entry.clipped ? `（原始 ${entry.originalChars || '?'}）` : ''}`,
+          en: `payload · ${entry.detail.length} chars${entry.clipped ? ` (from ${entry.originalChars || '?'})` : ''}`,
+        }))}</summary>
+        <pre>${esc(entry.detail)}</pre>
+      </details>`
+    : '';
+  return `<article class="activity-entry level-${esc(entry.level)} kind-${esc(entry.kind)}">
+    <time class="activity-time">${esc(activityTime(entry.at))}</time>
+    ${clickableAgent
+      ? `<button type="button" class="activity-agent" data-activity-open-agent="${esc(entry.agent)}"><span class="activity-agent-dot" style="--agent-color:${esc(AGENT_COLORS[entry.agent] || '#94A3B8')}"></span>${esc(agent)}</button>`
+      : `<span class="activity-agent"><span class="activity-agent-dot" style="--agent-color:#64748B"></span>${esc(agent)}</span>`}
+    <span class="activity-kind">${esc(entry.kind)}</span>
+    <div class="activity-message">
+      <span>${esc(L(entry.message))}</span>
+      ${metadata ? `<span class="activity-meta">${esc(metadata)}</span>` : ''}
+      ${detail}
+    </div>
+  </article>`;
+}
+
+function scrollActivityToBottom() {
+  const stream = document.getElementById('activity-stream');
+  if (stream) stream.scrollTop = stream.scrollHeight;
+}
+
+function syncActivityPanel() {
+  const panel = document.getElementById('activity-panel');
+  const button = document.getElementById('activity-collapse');
+  if (!panel || !button) return;
+  panel.classList.toggle('collapsed', activityCollapsed);
+  button.setAttribute('aria-expanded', String(!activityCollapsed));
+  button.textContent = activityCollapsed
+    ? L({ zh: '展開', en: 'Expand' })
+    : L({ zh: '收起', en: 'Collapse' });
+}
+
 // ── Agent detail panel (click a character in the office) ────────────────────
+function pushAgentTrace(id, entry) {
+  if (!id || !entry) return;
+  const list = agentTraces[id] || (agentTraces[id] = []);
+  const normalized = {
+    call_id: entry.call_id || 'workflow',
+    phase: entry.phase || 'progress',
+    label: entry.label || { zh: '處理中', en: 'Processing' },
+    at: entry.at || new Date().toISOString(),
+    attempt: entry.attempt,
+    will_retry: Boolean(entry.will_retry),
+    content: entry.content,
+    truncated: Boolean(entry.truncated),
+    original_chars: entry.original_chars,
+  };
+  const last = list[list.length - 1];
+  const sameAsLast = last
+    && last.phase === normalized.phase
+    && L(last.label) === L(normalized.label)
+    && (last.content || '') === (normalized.content || '')
+    && last.call_id === normalized.call_id;
+  if (!sameAsLast) list.push(normalized);
+  if (list.length > 120) list.splice(0, list.length - 120);
+}
+
+function refreshOpenAgentPanel(id) {
+  if (openAgentId !== id) return;
+  const panel = document.getElementById('agent-panel');
+  if (!panel || panel.hidden) return;
+  const scrollTop = panel.scrollTop;
+  document.getElementById('agent-panel-status').textContent = agentPanelStatus(id);
+  document.getElementById('agent-panel-body').innerHTML = agentPanelBody(id);
+  panel.scrollTop = scrollTop;
+}
+
+function agentPanelStatus(id) {
+  const st = agentStatus[id];
+  if (st?.state === 'error') {
+    return `${L({ zh: '失敗', en: 'Failed' })} · ${L(st.label) || st.error || ''} ✕`;
+  }
+  if (st?.error && st?.state === 'done') {
+    return `${L(st.label) || L({ zh: '已完成', en: 'Done' })} · ${L({ zh: '含錯誤／備援', en: 'with errors/fallback' })} ⚠`;
+  }
+  if (st?.label) {
+    const suffix = st.state === 'done' ? ' ✓' : st.state === 'running' ? ' …' : '';
+    return `${L(st.label)}${suffix}`;
+  }
+  if (currentResult || agentOutputs[id]) return L({ zh: '已完成 ✓', en: 'Done ✓' });
+  return L({ zh: '等待輸入／事件會自動更新', en: 'Waiting for input · updates appear live' });
+}
+
 function openAgentPanel(id) {
+  openAgentId = id;
   const info = AGENT_NAMES[id] || { zh: id, en: id };
   document.getElementById('agent-panel-swatch').style.background = AGENT_COLORS[id] || 'var(--accent)';
   document.getElementById('agent-panel-title').textContent = L(info);
   document.getElementById('agent-panel-role').textContent = getLang() === 'zh' ? info.en : info.zh;
-
-  const st = agentStatus[id];
-  const statusEl = document.getElementById('agent-panel-status');
-  if (st && st.label) statusEl.textContent = `${L(st.label)} ${st.state === 'done' ? '✓' : '…'}`;
-  else statusEl.textContent = currentResult ? L({ zh: '已完成 ✓', en: 'Done ✓' }) : L({ zh: '待命中', en: 'Standby' });
-
+  document.getElementById('agent-panel-status').textContent = agentPanelStatus(id);
   document.getElementById('agent-panel-body').innerHTML = agentPanelBody(id);
 
   const ov = document.getElementById('agent-panel-overlay');
@@ -582,6 +1249,7 @@ function openAgentPanel(id) {
 }
 
 function closeAgentPanel() {
+  openAgentId = null;
   const ov = document.getElementById('agent-panel-overlay');
   const panel = document.getElementById('agent-panel');
   if (!ov || !panel) return;
@@ -589,33 +1257,131 @@ function closeAgentPanel() {
   setTimeout(() => { ov.hidden = true; panel.hidden = true; }, 200);
 }
 
-function agentPanelEmpty() { return `<p class="muted">${esc(L({ zh: '這位目前沒有可顯示的產出。', en: 'Nothing to show yet.' }))}</p>`; }
+function agentPanelEmpty(message) {
+  return `<p class="muted">${esc(message || L({ zh: '尚未產生結構化結果；這裡會自動更新，不用再點一次。', en: 'No structured result yet. This panel updates automatically.' }))}</p>`;
+}
 
 function agentPanelBody(id) {
-  const r = currentResult;
-  if (!r) return `<p class="muted">${esc(L({ zh: '分析還在進行中… 完成後再點一次看完整結果。', en: 'Still working — click again once done.' }))}</p>`;
-  const trust = sectionTrustNote(id);
-  switch (id) {
-    case 'sum':
-      return r.summary ? `${trust}<p><strong>${esc(L(r.summary.tldr))}</strong></p>
-        <ul>${(r.summary.key_points || []).map(k => `<li>${esc(L(k))}</li>`).join('')}</ul>` : agentPanelEmpty();
-    case 'jargon':
-      return (r.jargon && r.jargon.length) ? `${trust}<ul>${r.jargon.map(t =>
-        `<li><strong class="mono">${esc(t.term)}</strong>（${esc(t.zh_term)}）— ${esc(L(t.explain))}</li>`).join('')}</ul>` : trust || agentPanelEmpty();
-    case 'comments': {
-      const cd = r.comment_digest; if (!cd) return agentPanelEmpty();
-      return `${trust}<p>${esc(L(cd.overview))}</p>
-        <ul>${(cd.camps || []).map(c => `<li><strong>${esc(L(c.label))}</strong>（${esc(L(WEIGHT_LABEL[c.weight]) || c.weight)}）：${esc(L(c.stance))}</li>`).join('')}</ul>`;
-    }
-    case 'ctx':
-      return r.verdict ? `${trust}<p><strong>${esc(L(WORTH_LABEL[r.verdict.worth_reading]) || r.verdict.worth_reading)}</strong>（${esc(L(TIER_LABEL[r.verdict.tier]) || r.verdict.tier)}）</p>
-        <p>${esc(L(r.verdict.why_frontpage))}</p>` : agentPanelEmpty();
-    case 'synth':
-      return (r.editor_note && (r.editor_note.zh || r.editor_note.en)) ? `${trust}<p>📋 ${esc(L(r.editor_note))}</p>` : `${trust}<p class="muted">${esc(L({ zh: '已將各組輸出整合成最終結果。', en: 'Integrated all outputs into the final result.' }))}</p>`;
-    case 'orch':
-      return agentPanelCaptain(r);
-    default: return agentPanelEmpty();
+  return `${agentTracePanel(id)}${agentStructuredResult(id)}`;
+}
+
+function agentTracePanel(id) {
+  const entries = agentTraces[id] || [];
+  const st = agentStatus[id];
+  const error = st?.error;
+  const errorAlreadyListed = error && entries.some(entry => entry.phase === 'error' && entry.content === error);
+  const all = errorAlreadyListed ? entries : error
+    ? [...entries, {
+        call_id: 'status-error',
+        phase: 'error',
+        label: { zh: '錯誤原因', en: 'Error reason' },
+        content: error,
+        at: new Date().toISOString(),
+      }]
+    : entries;
+  const assignment = latestBriefing?.assignments?.find(a => a.agent === id);
+  let content;
+  if (!all.length) {
+    const note = assignment
+      ? `${L(ASSIGN_ACTION_LABEL[assignment.action]) || assignment.action} · ${L(assignment.reason)}`
+      : L({ zh: '尚未收到這位 Agent 的執行事件；有新事件時會即時出現在這裡。', en: 'No execution events yet. New events will appear here live.' });
+    content = `<div class="agent-trace-empty">${esc(note)}</div>`;
+  } else {
+    content = all.map(agentTraceEntry).join('');
   }
+  return `<section class="agent-panel-section">
+    <h3>${esc(L({ zh: '輸入 · 執行過程 · 原始輸出', en: 'Input · execution · raw output' }))}</h3>
+    <div class="agent-trace-list">${content}</div>
+  </section>`;
+}
+
+function agentTraceEntry(entry) {
+  const phaseLabel = entry.phase === 'error' && entry.will_retry
+    ? { zh: '重試', en: 'Retry' }
+    : ({
+    input: { zh: '輸入', en: 'Input' },
+    progress: { zh: '過程', en: 'Progress' },
+    output: { zh: '輸出', en: 'Output' },
+    error: { zh: '錯誤', en: 'Error' },
+  }[entry.phase] || { zh: entry.phase, en: entry.phase });
+  let time = '';
+  try {
+    time = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch {}
+  const content = typeof entry.content === 'string' ? entry.content : '';
+  const detail = content
+    ? `<details class="agent-trace-detail" ${entry.phase === 'input' || entry.phase === 'output' || entry.phase === 'error' ? 'open' : ''}>
+        <summary>${esc(L({
+          zh: `${content.length} 字${entry.truncated ? `（原始 ${entry.original_chars || '?'} 字，畫面已截短）` : ''}`,
+          en: `${content.length} chars${entry.truncated ? ` (trimmed from ${entry.original_chars || '?'})` : ''}`,
+        }))}</summary>
+        <pre>${esc(content)}</pre>
+      </details>`
+    : '';
+  return `<article class="agent-trace-entry ${esc(entry.phase)}${entry.will_retry ? ' retrying' : ''}">
+    <div class="agent-trace-meta">
+      <span class="agent-trace-phase">${esc(L(phaseLabel))}</span>
+      ${entry.attempt ? `<span>${esc(L({ zh: `第 ${entry.attempt} 次`, en: `attempt ${entry.attempt}` }))}</span>` : ''}
+      <time>${esc(time)}</time>
+    </div>
+    <div class="agent-trace-label">${esc(L(entry.label))}</div>
+    ${detail}
+  </article>`;
+}
+
+function agentStructuredResult(id) {
+  const r = currentResult;
+  const trust = r ? sectionTrustNote(id) : '';
+  let body = '';
+  switch (id) {
+    case 'sum': {
+      const summary = r?.summary || agentOutputs.sum;
+      body = summary ? `${trust}<p><strong>${esc(L(summary.tldr))}</strong></p>
+        <ul>${(summary.key_points || []).map(k => `<li>${esc(L(k))}</li>`).join('')}</ul>` : agentPanelEmpty();
+      break;
+    }
+    case 'jargon': {
+      const jargon = r?.jargon || agentOutputs.jargon;
+      body = (jargon && jargon.length) ? `${trust}<ul>${jargon.map(t =>
+        `<li><strong class="mono">${esc(t.term)}</strong>（${esc(t.zh_term)}）— ${esc(L(t.explain))}</li>`).join('')}</ul>` : `${trust}${agentPanelEmpty()}`;
+      break;
+    }
+    case 'comments': {
+      const cd = r?.comment_digest || agentOutputs.comments;
+      body = cd ? `${trust}<p>${esc(L(cd.overview))}</p>
+        <ul>${(cd.camps || []).map(c => `<li><strong>${esc(L(c.label))}</strong>（${esc(L(WEIGHT_LABEL[c.weight]) || c.weight)}）：${esc(L(c.stance))}</li>`).join('')}</ul>`
+        : agentPanelEmpty();
+      break;
+    }
+    case 'ctx': {
+      const verdict = r?.verdict || agentOutputs.ctx;
+      body = verdict ? `${trust}<p><strong>${esc(L(WORTH_LABEL[verdict.worth_reading]) || verdict.worth_reading)}</strong>（${esc(L(TIER_LABEL[verdict.tier]) || verdict.tier)}）</p>
+        <p>${esc(L(verdict.why_frontpage))}</p>` : agentPanelEmpty();
+      break;
+    }
+    case 'synth':
+      body = r
+        ? ((r.editor_note && (r.editor_note.zh || r.editor_note.en))
+            ? `${trust}<p>📋 ${esc(L(r.editor_note))}</p>`
+            : `${trust}<p class="muted">${esc(L({ zh: '已檢查各組輸出；沒有額外編輯註記。', en: 'Reviewed every section; no extra editor note was added.' }))}</p>`)
+        : agentPanelEmpty();
+      break;
+    case 'orch': {
+      const briefing = r?.briefing || latestBriefing || agentOutputs.orch;
+      body = briefing ? agentPanelCaptain({
+        briefing,
+        jargon: r?.jargon || agentOutputs.jargon || [],
+        comment_digest: r?.comment_digest || agentOutputs.comments || { camps: [] },
+      }) : agentPanelEmpty();
+      break;
+    }
+    default:
+      body = agentPanelEmpty();
+  }
+  return `<section class="agent-panel-section agent-result-section">
+    <h3>${esc(L({ zh: '結構化結果', en: 'Structured result' }))}</h3>
+    ${body}
+  </section>`;
 }
 
 const ASSIGN_ACTION_LABEL = { run: { zh: '開工', en: 'Run' }, skip: { zh: '略過', en: 'Skip' }, reuse: { zh: '快取', en: 'Cache' } };
@@ -631,38 +1397,6 @@ function agentPanelCaptain(r) {
   return `<p class="muted">${esc(L({ zh: '讀題、分派任務給組員，再彙整成果。', en: 'Reads the brief, assigns tasks to the team, then compiles the results.' }))}</p>
     ${briefing ? `<ul>${rows}</ul>` : ''}
     <p>${esc(L({ zh: `術語 ${(r.jargon || []).length} 個 · 留言派別 ${((r.comment_digest || {}).camps || []).length} 組`, en: `${(r.jargon || []).length} terms · ${((r.comment_digest || {}).camps || []).length} camps` }))}</p>`;
-}
-
-// ── Agent rows ─────────────────────────────────────────────────────────────
-function ensureAgentRow(agent) {
-  const container = document.getElementById('agents-status');
-  if (!container.querySelector(`[data-agent="${agent}"]`)) {
-    const info = AGENT_NAMES[agent] || { zh: agent, en: agent };
-    const row = document.createElement('div');
-    row.className = 'agent-row idle';
-    row.dataset.agent = agent;
-    row.innerHTML = `
-      <div class="agent-dot"></div>
-      <div class="agent-info">
-        <span class="agent-name">${esc(L(info))}</span>
-        <span class="agent-bubble"></span>
-      </div>`;
-    container.appendChild(row);
-  }
-}
-
-function updateAgentRow(agent, state, label) {
-  const row = document.querySelector(`[data-agent="${agent}"]`);
-  if (!row) return;
-  row.className = `agent-row ${state}`;
-  if (label) updateBubble(agent, label);
-}
-
-function updateBubble(agent, label) {
-  const row = document.querySelector(`[data-agent="${agent}"]`);
-  if (!row || !label) return;
-  const b = row.querySelector('.agent-bubble');
-  if (b) b.textContent = L(label);
 }
 
 // ── Results rendering ──────────────────────────────────────────────────────
@@ -948,7 +1682,7 @@ function selectAgentSection(id) {
 function onAgentClick(id) {
   hideAgentTooltip();
   if (currentPhase === 'results' && currentResult) selectAgentSection(id);
-  else openAgentPanel(id);
+  openAgentPanel(id);
 }
 
 function onAgentHover(id, pos) {
@@ -1072,10 +1806,6 @@ function renderJargon(terms) {
 function kbHas(term) {
   const key = normalizeTermKey(term);
   return kbLoad().some(i => normalizeTermKey(i.term) === key);
-}
-
-function seenLabel(s) {
-  return { article: '文章', comments: '留言', both: '兩者 both' }[s] || s;
 }
 
 function renderSummary(s) {
@@ -1328,8 +2058,6 @@ function kbRemove(term) {
 
 function kbRender() {
   const items = kbLoad();
-  const count = document.getElementById('kb-count');
-  if (count) count.textContent = items.length;
   const total = document.getElementById('kb-total');
   if (total) total.textContent = String(items.length);
   if (window.pixelAgents) window.pixelAgents.setKbCount(items.length);   // shelf fills up
