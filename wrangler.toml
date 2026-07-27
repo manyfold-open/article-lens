@@ -34,14 +34,14 @@ max_concurrency = 2
 
 [vars]
 MF_API_URL = "https://api.manyfold.ai/api"
-MF_AGENT_ID = "agt_agpzmem6af5rrbztanib4gxfkm"
+MF_AGENT_ID = "agt_agp2f7i4zj44pj2niaiv2aryoy"
 SPEC_VERSION = "13"
-AGENT_SUMMARIZER = "agt_agpzmenybn42znpqy4izl7lwou"
-AGENT_CONTEXT = "agt_agpzmeozpvzvfdc7ejvwk7ix2u"
-AGENT_SYNTHESIZER = "agt_agpzmepvgf4ghjs2awkl2zv5jq"
-AGENT_COMMENT_MAP = "agt_agpzmeqnlf6qlex4vnwtlnm3gu"
-AGENT_JARGON = "agt_agpzmerdrn65lfptmniusgt3jy"
-AGENT_COMMENT_REDUCE = "agt_agpzmer57f3blmw2ewnqivcxfy"
+AGENT_SUMMARIZER = "agt_agp2f7ggfv7lxpheoveiawvk6q"
+AGENT_CONTEXT = "agt_agp2f7i7bry43ju3omvwtnngie"
+AGENT_SYNTHESIZER = "agt_agp2f7jbwvyp5gkigkqxggzuay"
+AGENT_COMMENT_MAP = "agt_agp2f7jd5zzdjhuggdiimhrui4"
+AGENT_JARGON = "agt_agp2f7jgjn7txo663jeetsxcwu"
+AGENT_COMMENT_REDUCE = "agt_agp2f7jilj42lobuzbjov7urzq"
 
 # Bootstrap /settings with:
 #   npx wrangler secret put ADMIN_SETTINGS_PASSWORD --config wrangler.toml
