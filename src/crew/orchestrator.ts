@@ -20,7 +20,12 @@ const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 // three minutes for input extraction, final persistence, and runtime jitter;
 // every A2A call in one orchestration shares this absolute deadline.
 const ORCHESTRATION_BUDGET_MS = 12 * 60_000
+// Free Workers allow 50 external subrequests per invocation. A2A gets a shared
+// hard budget of 30, leaving 20 for article resolution and other upstream work.
+// The normal SSE path uses roughly one token mint plus one stream per peer.
+const FREE_WORKERS_A2A_SUBREQUEST_BUDGET = 30
 const runDeadlines = new WeakMap<(event: SSEEvent) => void, number>()
+const runRequestBudgets = new WeakMap<(event: SSEEvent) => void, { remaining: number }>()
 
 function callAgent(
   env: Env,
@@ -33,6 +38,7 @@ function callAgent(
   return callMfAgent(env, peerId, prompt, {
     ...opts,
     deadlineAt: runDeadlines.get(emit),
+    requestBudget: runRequestBudgets.get(emit),
     trace: { agent, emit },
   })
 }
@@ -210,6 +216,7 @@ export async function orchestrateAnalysis(
   opts: OrchestrateOpts = {}
 ): Promise<HNLensResult> {
   runDeadlines.set(emit, Date.now() + ORCHESTRATION_BUDGET_MS)
+  runRequestBudgets.set(emit, { remaining: FREE_WORKERS_A2A_SUBREQUEST_BUDGET })
   const mock = buildMockResult(item, articleText, itemType)
   const graph = normalizeGraph(opts.graph)
   // 辯論裁定 flag rides on the raw graph (like escalate). Applies wherever 小導 runs.
@@ -1077,7 +1084,7 @@ async function runCommentPipeline(
 ): Promise<string> {
   const commentCount = item.children?.length ?? 0
 
-  // Hosted Gemini CLI peers have high first-token latency. The old 8–12 call
+  // Hosted peers have high first-token latency. The old 8–12 call
   // map fan-out could consume most of a Queue invocation before ctx/synth even
   // started. Rank and cap the raw comments locally, then make one grounded
   // reduce call; this preserves high-signal coverage with one remote turn.

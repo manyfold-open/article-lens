@@ -3,7 +3,7 @@
 //   1. mint a short-lived per-peer bearer:
 //        POST {MF_API_URL}/agent-self/a2a/peers/{peerId}/token   (Bearer = identity token)
 //        → { token, rpcUrl, expiresAt }
-//   2. call the peer's rpcUrl with that bearer using JSON-RPC message/send.
+//   2. call the peer's rpcUrl with that bearer using JSON-RPC message/stream.
 // Minted tokens are cached per peer (they last ~15 min) so concurrent calls
 // reuse one token instead of stampeding the credential endpoint.
 
@@ -15,15 +15,18 @@ const tokenInflight = new Map<string, Promise<PeerToken>>()
 const TRACE_TEXT_LIMIT = 8_000
 const ERROR_TEXT_LIMIT = 1_000
 const DEFAULT_ATTEMPTS = 2
-// Manyfold usage data for these Gemini CLI peers shows first-token latency
+// Manyfold usage data for these hosted peers shows first-token latency
 // commonly around 120–200s. A shorter deadline incorrectly kills healthy work.
 const DEFAULT_TIMEOUT_MS = 240_000
 const MIN_ATTEMPT_BUDGET_MS = 5_000
-const TASK_POLL_INTERVAL_MS = 1_000
 // A standard run already fans out summary, jargon windows, and comments.
-// Keep the per-isolate pressure below the Manyfold in-flight ceiling;
-// queued calls retain their own timeout budget because it starts after permit.
+// Keep the per-isolate pressure below both Manyfold's in-flight ceiling and
+// Cloudflare's six simultaneous outbound connections per invocation.
 const MAX_CONCURRENT_A2A_CALLS = 4
+// message/stream normally needs one external subrequest per agent. If a stream
+// is interrupted after the Task was accepted, use a small, sparse recovery
+// schedule instead of returning to one tasks/get request per second.
+const RECOVERY_POLL_DELAYS_MS = [0, 2_000, 5_000, 10_000, 20_000, 40_000, 60_000]
 let activeA2ACalls = 0
 const callWaiters: Array<() => void> = []
 
@@ -39,8 +42,18 @@ interface CallOptions {
   // queue consumer below Cloudflare's wall-clock limit even when several
   // agents are slow in sequence.
   deadlineAt?: number
+  // Shared by every A2A call in one Queue invocation. Article Lens reserves
+  // the rest of Free Workers' 50 external subrequests for article resolution
+  // and other upstream work.
+  requestBudget?: A2ASubrequestBudget
   trace?: TraceContext
 }
+
+interface A2ASubrequestBudget {
+  remaining: number
+}
+
+type TaskStateCallback = (state: string, taskId: string, detail?: string) => void
 
 const bi = (zh: string, en: string): BiStr => ({ zh, en })
 
@@ -54,6 +67,17 @@ class A2AError extends Error {
     super(message)
     this.name = 'A2AError'
   }
+}
+
+function consumeRequestBudget(budget: A2ASubrequestBudget | undefined, operation: string): void {
+  if (!budget) return
+  if (budget.remaining <= 0) {
+    throw new A2AError(
+      `Free Workers A2A subrequest budget exhausted before ${operation}.`,
+      false,
+    )
+  }
+  budget.remaining -= 1
 }
 
 function clippedContent(content: string): Pick<Extract<SSEEvent, { event: 'agent_trace' }>, 'content' | 'truncated' | 'original_chars'> {
@@ -159,7 +183,11 @@ async function withCallPermit<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function getPeerToken(env: Env, peerId: string): Promise<PeerToken> {
+async function getPeerToken(
+  env: Env,
+  peerId: string,
+  requestBudget?: A2ASubrequestBudget,
+): Promise<PeerToken> {
   const key = peerCacheKey(env, peerId)
   const cached = tokenCache.get(key)
   if (cached && cached.exp > Date.now() + 30_000) return cached
@@ -171,6 +199,7 @@ async function getPeerToken(env: Env, peerId: string): Promise<PeerToken> {
 
   const mint = (async (): Promise<PeerToken> => {
     const q = env.MF_AGENT_ID ? `?agentId=${encodeURIComponent(env.MF_AGENT_ID)}` : ''
+    consumeRequestBudget(requestBudget, `minting a credential for ${peerId}`)
     const res = await fetchTimeout(`${env.MF_API_URL}/agent-self/a2a/peers/${encodeURIComponent(peerId)}/token${q}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${env.MF_API_TOKEN}`, accept: 'application/json' },
@@ -268,23 +297,222 @@ async function parseRpcResponse(res: Response, peerId: string): Promise<Record<s
   return data
 }
 
+interface StreamAccumulator {
+  taskId: string | null
+  state: string
+  artifacts: Map<string, string>
+  artifactOrder: string[]
+  directText: string
+  statusText: string
+}
+
+interface StreamReadOutcome {
+  data: Record<string, unknown>
+  interrupted?: A2AError
+}
+
+function createStreamAccumulator(): StreamAccumulator {
+  return {
+    taskId: null,
+    state: '',
+    artifacts: new Map(),
+    artifactOrder: [],
+    directText: '',
+    statusText: '',
+  }
+}
+
+function streamPartsText(raw: unknown): string {
+  return textParts(Array.isArray(raw) ? raw as Array<Record<string, unknown>> : undefined)
+}
+
+function rememberArtifact(
+  accumulator: StreamAccumulator,
+  artifact: Record<string, unknown>,
+  append = false,
+): void {
+  const artifactId = typeof artifact.artifactId === 'string' && artifact.artifactId
+    ? artifact.artifactId
+    : typeof artifact.id === 'string' && artifact.id
+      ? artifact.id
+      : 'artifact'
+  const text = streamPartsText(artifact.parts)
+  if (!accumulator.artifactOrder.includes(artifactId)) accumulator.artifactOrder.push(artifactId)
+  accumulator.artifacts.set(
+    artifactId,
+    append ? `${accumulator.artifacts.get(artifactId) ?? ''}${text}` : text,
+  )
+}
+
+function applyStreamResult(accumulator: StreamAccumulator, raw: unknown): void {
+  if (!raw || typeof raw !== 'object') return
+  const value = raw as Record<string, unknown>
+  const kind = String(value.kind ?? '').trim().toLowerCase()
+  const id = value.taskId ?? value.id
+  if (typeof id === 'string' && id) accumulator.taskId = id
+
+  if (kind === 'artifact-update' || value.artifact) {
+    const artifact = value.artifact
+    if (artifact && typeof artifact === 'object') {
+      rememberArtifact(accumulator, artifact as Record<string, unknown>, value.append === true)
+    }
+  }
+  const artifacts = Array.isArray(value.artifacts)
+    ? value.artifacts as Array<Record<string, unknown>>
+    : []
+  for (const artifact of artifacts) rememberArtifact(accumulator, artifact)
+
+  if (kind === 'message' || (value.role && value.parts)) {
+    accumulator.directText = streamPartsText(value.parts) || accumulator.directText
+  }
+
+  const status = value.status && typeof value.status === 'object'
+    ? value.status as Record<string, unknown>
+    : undefined
+  const state = String(status?.state ?? value.state ?? '').trim().toLowerCase()
+  if (state) accumulator.state = state
+  const statusMessage = status?.message
+  if (statusMessage && typeof statusMessage === 'object') {
+    accumulator.statusText = streamPartsText(
+      (statusMessage as Record<string, unknown>).parts,
+    ) || accumulator.statusText
+  }
+}
+
+function streamTaskData(accumulator: StreamAccumulator): Record<string, unknown> {
+  const artifacts = accumulator.artifactOrder
+    .map((id) => ({
+      artifactId: id,
+      parts: [{ kind: 'text', text: accumulator.artifacts.get(id) ?? '' }],
+    }))
+    .filter(artifact => artifact.parts[0].text)
+  const result: Record<string, unknown> = {
+    kind: 'task',
+    status: {
+      state: accumulator.state,
+      ...(accumulator.statusText
+        ? {
+            message: {
+              kind: 'message',
+              role: 'agent',
+              parts: [{ kind: 'text', text: accumulator.statusText }],
+            },
+          }
+        : {}),
+    },
+    ...(accumulator.taskId ? { id: accumulator.taskId } : {}),
+    ...(artifacts.length ? { artifacts } : {}),
+    ...(!artifacts.length && accumulator.directText
+      ? { parts: [{ kind: 'text', text: accumulator.directText }] }
+      : {}),
+  }
+  return { jsonrpc: '2.0', result }
+}
+
+function isTerminalTaskState(state: string): boolean {
+  return state === 'completed'
+    || state === 'failed'
+    || state === 'canceled'
+    || state === 'rejected'
+    || state === 'input-required'
+    || state === 'auth-required'
+}
+
+async function readTaskStream(
+  res: Response,
+  peerId: string,
+  onState?: TaskStateCallback,
+): Promise<StreamReadOutcome> {
+  if (!res.body) throw new A2AError(`Agent ${peerId} streaming response had no body.`, true)
+  const accumulator = createStreamAccumulator()
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let received = false
+  let previousState = ''
+  let interrupted: A2AError | undefined
+
+  const applyBlock = (block: string): void => {
+    const payload = block
+      .split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n')
+    if (!payload || payload === '[DONE]') return
+    let envelope: Record<string, unknown>
+    try {
+      envelope = JSON.parse(payload) as Record<string, unknown>
+    } catch (error) {
+      throw new A2AError(`Agent ${peerId} stream emitted invalid JSON. ${safeErrorText(error)}`, true)
+    }
+    const failure = rpcFailure(envelope, peerId)
+    if (failure) throw failure
+    applyStreamResult(accumulator, envelope.result)
+    received = true
+    if (accumulator.taskId && accumulator.state && accumulator.state !== previousState) {
+      previousState = accumulator.state
+      onState?.(accumulator.state, accumulator.taskId)
+    }
+  }
+
+  try {
+    while (!isTerminalTaskState(accumulator.state)) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let boundary = buffer.match(/\r?\n\r?\n/)
+      while (boundary?.index !== undefined) {
+        applyBlock(buffer.slice(0, boundary.index))
+        buffer = buffer.slice(boundary.index + boundary[0].length)
+        if (isTerminalTaskState(accumulator.state)) break
+        boundary = buffer.match(/\r?\n\r?\n/)
+      }
+    }
+    buffer += decoder.decode()
+    if (!isTerminalTaskState(accumulator.state) && buffer.trim()) applyBlock(buffer)
+  } catch (error) {
+    interrupted = normalizeCallError(error)
+  } finally {
+    if (isTerminalTaskState(accumulator.state)) {
+      await reader.cancel().catch(() => undefined)
+    }
+    reader.releaseLock()
+  }
+
+  if (!received && interrupted) throw interrupted
+  if (!received) {
+    throw new A2AError(`Agent ${peerId} stream ended without A2A events.`, true)
+  }
+  if (!isTerminalTaskState(accumulator.state) && !interrupted) {
+    interrupted = new A2AError(`Agent ${peerId} stream ended before the Task reached a terminal state.`, true)
+  }
+  return { data: streamTaskData(accumulator), interrupted }
+}
+
 async function pollTask(
   env: Env,
   credential: PeerToken,
   peerId: string,
   id: string,
   deadline: number,
-  onState?: (state: string, taskId: string) => void,
+  onState?: TaskStateCallback,
   initialState = '',
+  requestBudget?: A2ASubrequestBudget,
 ): Promise<Record<string, unknown>> {
   let previousState = initialState
-  let pollFailures = 0
-  while (Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, TASK_POLL_INTERVAL_MS))
+  for (const delay of RECOVERY_POLL_DELAYS_MS) {
+    if (Date.now() >= deadline) break
+    if (delay > 0) {
+      await new Promise(resolve => setTimeout(
+        resolve,
+        Math.min(delay, Math.max(0, deadline - Date.now())),
+      ))
+    }
     const remaining = deadline - Date.now()
     if (remaining <= 0) break
     let data: Record<string, unknown>
     try {
+      consumeRequestBudget(requestBudget, `recovering accepted task ${id}`)
       const res = await fetchTimeout(credential.rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', authorization: `Bearer ${credential.token}` },
@@ -296,23 +524,19 @@ async function pollTask(
         }),
       }, Math.max(1_000, Math.min(remaining, 15_000)))
       data = await parseRpcResponse(res, peerId)
-      pollFailures = 0
     } catch (error) {
       const failure = normalizeCallError(error)
       if (!failure.retryable) throw failure
-      pollFailures += 1
       if (failure.refreshCredential) {
         forgetPeerToken(env, peerId)
         try {
-          credential = await getPeerToken(env, peerId)
+          credential = await getPeerToken(env, peerId, requestBudget)
         } catch {
           // Keep polling the same Task. A later iteration can refresh again;
           // escaping here would resubmit an already-accepted message.
         }
       }
-      onState?.('poll-retrying', id)
-      const waitMs = Math.min(retryDelay(failure, pollFailures), Math.max(0, deadline - Date.now()))
-      if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs))
+      onState?.('poll-retrying', id, failure.message)
       continue
     }
     const state = taskState(data)
@@ -329,13 +553,16 @@ async function pollTask(
       throw new A2AError(`Agent ${peerId} task stopped in state "${state}".`, false)
     }
   }
-  const canceled = await cancelTask(credential.rpcUrl, credential.token, peerId, id)
+  const canceled = await cancelTask(
+    credential.rpcUrl,
+    credential.token,
+    peerId,
+    id,
+    requestBudget,
+  )
   onState?.(canceled ? 'canceled-after-timeout' : 'timed-out', id)
-  // Do not immediately submit a second copy of an accepted task. Critical
-  // roles can still trigger the workflow-owned retry; non-critical roles
-  // degrade explicitly.
   throw new A2AError(
-    `Agent ${peerId} task ${id} did not complete within its wait budget${canceled ? ' and was canceled' : ''}.`,
+    `Agent ${peerId} task ${id} did not complete within the bounded stream-recovery budget${canceled ? ' and was canceled' : ''}.`,
     false,
   )
 }
@@ -345,8 +572,10 @@ async function cancelTask(
   token: string,
   peerId: string,
   id: string,
+  requestBudget?: A2ASubrequestBudget,
 ): Promise<boolean> {
   try {
+    consumeRequestBudget(requestBudget, `canceling task ${id}`)
     const res = await fetchTimeout(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', authorization: `Bearer ${token}` },
@@ -370,27 +599,66 @@ async function executeAttempt(
   body: string,
   timeoutMs: number,
   deadlineAt?: number,
-  onTaskState?: (state: string, taskId: string) => void,
+  onTaskState?: TaskStateCallback,
+  requestBudget?: A2ASubrequestBudget,
 ): Promise<string> {
   return withCallPermit(async () => {
     const deadline = Math.min(deadlineAt ?? Number.POSITIVE_INFINITY, Date.now() + timeoutMs)
-    const credential = await getPeerToken(env, peerId)
+    const credential = await getPeerToken(env, peerId, requestBudget)
     const remaining = deadline - Date.now()
     if (remaining <= 0) {
       throw new A2AError(`Agent ${peerId} exhausted the orchestration time budget before submission.`, true)
     }
-    const res = await fetchTimeout(credential.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${credential.token}` },
-      body,
-    }, Math.max(1_000, remaining))
-    let data = await parseRpcResponse(res, peerId)
+    consumeRequestBudget(requestBudget, `opening a stream to ${peerId}`)
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), Math.max(1_000, remaining))
+    let data: Record<string, unknown>
+    let interruption: A2AError | undefined
+    try {
+      const res = await fetch(credential.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          authorization: `Bearer ${credential.token}`,
+        },
+        body,
+        signal: ctrl.signal,
+      })
+      const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
+      if (!res.ok || !contentType.includes('text/event-stream')) {
+        data = await parseRpcResponse(res, peerId)
+      } else {
+        const outcome = await readTaskStream(res, peerId, onTaskState)
+        data = outcome.data
+        interruption = outcome.interrupted
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+
     let state = taskState(data)
-    if (state === 'submitted' || state === 'working') {
-      const id = taskId(data)
-      if (!id) throw new A2AError(`Agent ${peerId} returned state "${state}" without a task id.`, true)
-      onTaskState?.(state, id)
-      data = await pollTask(env, credential, peerId, id, deadline, onTaskState, state)
+    const id = taskId(data)
+    if (interruption && id) {
+      onTaskState?.('stream-recovering', id, interruption.message)
+    } else if (interruption) {
+      throw interruption
+    }
+    if ((state === 'submitted' || state === 'working') && !id) {
+      throw new A2AError(`Agent ${peerId} returned state "${state}" without a task id.`, true)
+    }
+    if (id && (state === 'submitted' || state === 'working' || !state)) {
+      if (!interruption && state) onTaskState?.(state, id)
+      data = await pollTask(
+        env,
+        credential,
+        peerId,
+        id,
+        deadline,
+        onTaskState,
+        state,
+        requestBudget,
+      )
       state = taskState(data)
     }
     if (state === 'failed' || state === 'canceled' || state === 'rejected') {
@@ -432,17 +700,17 @@ export async function callMfAgent(
   )
   const body = JSON.stringify({
     jsonrpc: '2.0',
-    method: 'message/send',
+    method: 'message/stream',
     id: crypto.randomUUID(),
     params: {
       message: {
         kind: 'message', role: 'user', messageId: crypto.randomUUID(),
         parts: [{ kind: 'text', text: prompt }],
       },
-      // A2A v0.3: return the Task immediately and monitor it with tasks/get.
-      // Holding message/send open for the full agent run caused healthy, slow
-      // peers to look like transport timeouts and tied up outbound connections.
-      configuration: { blocking: false },
+      // A2A v0.3: one SSE stream carries Task state and artifact updates. This
+      // replaces the old one-request-per-second tasks/get loop, which exhausted
+      // Free Workers' 50 external-subrequest allowance in about 20 seconds.
+      configuration: { acceptedOutputModes: ['text/plain'] },
     },
   })
 
@@ -479,7 +747,7 @@ export async function callMfAgent(
         opts.trace,
         callId,
         'progress',
-        bi('已送出請求，等待 Agent 回覆', 'Request sent; waiting for the agent'),
+        bi('已開啟串流，等待 Agent 回覆', 'Stream opened; waiting for the agent'),
         undefined,
         attempt + 1,
       )
@@ -489,18 +757,24 @@ export async function callMfAgent(
         body,
         Math.min(timeoutMs, remainingBudget),
         opts.deadlineAt,
-        (state, id) => {
+        (state, id, detail) => {
+          const label = state === 'completed'
+            ? bi('Agent 任務已完成', 'Agent task completed')
+            : state === 'stream-recovering'
+              ? bi('串流中斷，恢復已接受的任務', 'Stream disconnected; recovering the accepted task')
+              : state === 'poll-retrying'
+                ? bi('已接受任務的恢復請求重試中', 'Accepted-task recovery request is retrying')
+                : bi(`Agent 任務狀態：${state}`, `Agent task state: ${state}`)
           emitTrace(
             opts.trace,
             callId,
             'progress',
-            state === 'completed'
-              ? bi('Agent 任務已完成', 'Agent task completed')
-              : bi(`Agent 任務狀態：${state}`, `Agent task state: ${state}`),
-            `task_id=${id}`,
+            label,
+            `task_id=${id}${detail ? ` · ${safeErrorText(detail)}` : ''}`,
             attempt + 1,
           )
         },
+        opts.requestBudget,
       )
       emitTrace(
         opts.trace,

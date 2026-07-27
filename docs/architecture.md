@@ -54,7 +54,7 @@ src/
     health.ts          GET /api/health and on-demand peer checks
   crew/
     orchestrator.ts    application-owned multi-agent DAG
-    mf.ts              Manyfold token mint + A2A message/send client
+    mf.ts              Manyfold token mint + A2A message/stream client
     mock.ts            offline/failure fallback
     json.ts            tolerant LLM JSON repair
   cache.ts             best-effort result cache
@@ -199,10 +199,11 @@ the input state with an explicit message.
 
 1. mint a short-lived peer token from
    `MF_API_URL/agent-self/a2a/peers/{targetAgentId}/token?agentId={sourceAgentId}`;
-2. send JSON-RPC A2A `message/send` with `configuration.blocking=false` so the
-   submission connection is not held open for a long-running agent;
-3. when the server returns a `submitted` or `working` Task, poll `tasks/get`
-   until the Task reaches a terminal state.
+2. send JSON-RPC A2A `message/stream` and aggregate Task status plus artifact
+   updates from its SSE response;
+3. only when that stream ends after the Task was accepted, recover the same
+   Task with at most seven sparse `tasks/get` checks. Never resubmit the prompt
+   merely because an accepted Task's stream disconnected.
 
 The source identity is `MF_AGENT_ID`; peer targets are the six `AGENT_*`
 settings. `MF_API_TOKEN` is the source identity's runtime secret and needs
@@ -210,14 +211,26 @@ settings. `MF_API_TOKEN` is the source identity's runtime secret and needs
 
 Credential minting is single-flight per peer, so concurrent fan-out does not
 stampede the token endpoint. The Worker admits at most four A2A calls per
-isolate. Calls default to two attempts with bounded exponential backoff and
-`Retry-After` support. HTTP 408/409/425/429, 5xx, network errors, timeouts, and
-temporary runtime failures retry; invalid requests and permanent protocol
-errors fail fast. A peer HTTP 401 invalidates only the short-lived peer token
-before retrying. Once a remote Task has been accepted, an application timeout
-does not submit a duplicate: the exact Task is canceled best-effort and the
+isolate, below Cloudflare's six simultaneous outbound-connection limit.
+
+Free Workers allow 50 external subrequests per invocation. Each orchestration
+therefore gives all A2A calls one shared 30-request application budget and
+reserves the other 20 for article resolution and other upstream work. The
+normal path costs one stream per agent plus a token mint when the peer
+credential is not cached, instead of one `tasks/get` request per second. Budget
+exhaustion is an explicit agent failure, so the fallback/retry policy runs
+before Cloudflare starts rejecting unrelated fetches. See Cloudflare's
+[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
+and [Wrangler limits configuration](https://developers.cloudflare.com/workers/wrangler/configuration/#limits).
+
+Calls default to two attempts with bounded exponential backoff and `Retry-After`
+support. HTTP 408/409/425/429, 5xx, network errors, timeouts, and temporary
+runtime failures retry; invalid requests and permanent protocol errors fail
+fast. A peer HTTP 401 invalidates only the short-lived peer token before
+retrying. Once a remote Task has been accepted, an application timeout does
+not submit a duplicate: the exact Task is canceled best-effort and the
 role/workflow fallback policy decides the next step. Calls use a 240-second
-per-attempt budget, based on observed hosted Gemini CLI first-token latency.
+per-attempt budget, based on observed hosted-agent first-token latency.
 
 Comments are ranked and token-capped locally, then sent to the reduce peer in
 one call. The previous 8–12 peer map fan-out paid the hosted runtime startup

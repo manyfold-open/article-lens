@@ -33,6 +33,16 @@ function jsonResponse(value, init = {}) {
   });
 }
 
+function sseResponse(results) {
+  const body = results
+    .map(result => `data: ${JSON.stringify({ jsonrpc: '2.0', id: 'rpc', result })}\r\n\r\n`)
+    .join('');
+  return new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
 test('extracts text from direct parts, artifacts, and status messages', () => {
   assert.equal(manyfold.extractAgentText({
     result: { parts: [{ text: 'first' }, { text: 'second' }] },
@@ -54,7 +64,7 @@ test('extracts text from direct parts, artifacts, and status messages', () => {
   }), 'gemini exited 1');
 });
 
-test('sends non-blocking A2A requests and emits input/output traces', async t => {
+test('streams an A2A task to completion and emits input/output traces', async t => {
   const requests = [];
   mockFetch(t, async (url, init = {}) => {
     requests.push({ url: String(url), init });
@@ -66,12 +76,40 @@ test('sends non-blocking A2A requests and emits input/output traces', async t =>
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       });
     }
-    return jsonResponse({
-      result: {
-        status: { state: 'completed' },
-        artifacts: [{ parts: [{ text: '{"ok":true}' }] }],
+    return sseResponse([
+      {
+        kind: 'status-update',
+        taskId: 'task-success',
+        status: { state: 'working' },
+        final: false,
       },
-    });
+      {
+        kind: 'artifact-update',
+        taskId: 'task-success',
+        artifact: {
+          artifactId: 'answer',
+          parts: [{ kind: 'text', text: '{"ok":' }],
+        },
+        append: false,
+        lastChunk: false,
+      },
+      {
+        kind: 'artifact-update',
+        taskId: 'task-success',
+        artifact: {
+          artifactId: 'answer',
+          parts: [{ kind: 'text', text: 'true}' }],
+        },
+        append: true,
+        lastChunk: true,
+      },
+      {
+        kind: 'status-update',
+        taskId: 'task-success',
+        status: { state: 'completed' },
+        final: true,
+      },
+    ]);
   });
 
   const traces = [];
@@ -86,20 +124,22 @@ test('sends non-blocking A2A requests and emits input/output traces', async t =>
   assert.equal(output, '{"ok":true}');
   assert.equal(requests.length, 2);
   const rpcBody = JSON.parse(requests[1].init.body);
-  assert.equal(rpcBody.method, 'message/send');
-  assert.deepEqual(rpcBody.params.configuration, { blocking: false });
+  assert.equal(rpcBody.method, 'message/stream');
+  assert.deepEqual(rpcBody.params.configuration, { acceptedOutputModes: ['text/plain'] });
   assert.equal(rpcBody.params.message.parts[0].text, 'real prompt');
+  assert.equal(requests[1].init.headers.Accept, 'text/event-stream');
   assert.deepEqual(
     traces.map(trace => trace.phase),
-    ['input', 'progress', 'progress', 'output'],
+    ['input', 'progress', 'progress', 'progress', 'progress', 'output'],
   );
   assert.equal(traces[0].content, 'real prompt');
   assert.equal(traces.at(-1).content, '{"ok":true}');
   assert.ok(traces.every(trace => !JSON.stringify(trace).includes('short-lived-peer-token')));
 });
 
-test('polls an accepted A2A task without submitting the prompt twice', async t => {
+test('recovers an accepted task after stream interruption without resubmitting the prompt', async t => {
   const methods = [];
+  const traces = [];
   mockFetch(t, async (url, init = {}) => {
     if (String(url).includes('/token')) {
       return jsonResponse({
@@ -110,13 +150,13 @@ test('polls an accepted A2A task without submitting the prompt twice', async t =
     }
     const body = JSON.parse(init.body);
     methods.push(body.method);
-    if (body.method === 'message/send') {
-      return jsonResponse({
-        result: {
-          id: 'task-1',
-          status: { state: 'submitted' },
-        },
-      });
+    if (body.method === 'message/stream') {
+      return sseResponse([{
+        kind: 'status-update',
+        taskId: 'task-1',
+        status: { state: 'working' },
+        final: false,
+      }]);
     }
     assert.equal(body.method, 'tasks/get');
     assert.equal(body.params.id, 'task-1');
@@ -132,9 +172,14 @@ test('polls an accepted A2A task without submitting the prompt twice', async t =
   const output = await manyfold.callMfAgent(environment(), 'agt_async', 'prompt', {
     attempts: 1,
     timeoutMs: 5_000,
+    trace: {
+      agent: 'sum',
+      emit(event) { traces.push(event); },
+    },
   });
   assert.equal(output, 'completed asynchronously');
-  assert.deepEqual(methods, ['message/send', 'tasks/get']);
+  assert.deepEqual(methods, ['message/stream', 'tasks/get']);
+  assert.ok(traces.some(trace => trace.content?.includes('stream ended before')));
 });
 
 test('surfaces the remote task failure reason without hiding it', async t => {
@@ -146,16 +191,19 @@ test('surfaces the remote task failure reason without hiding it', async t => {
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       });
     }
-    return jsonResponse({
-      result: {
-        status: {
+    return sseResponse([{
+      kind: 'status-update',
+      taskId: 'task-failed',
+      status: {
           state: 'failed',
           message: {
-            parts: [{ text: 'gemini exited 1: SyntaxError: Unexpected end of JSON input' }],
+            kind: 'message',
+            role: 'agent',
+            parts: [{ kind: 'text', text: 'gemini exited 1: SyntaxError: Unexpected end of JSON input' }],
           },
         },
-      },
-    });
+      final: true,
+    }]);
   });
 
   await assert.rejects(
@@ -198,4 +246,26 @@ test('reports invalid RPC JSON responses precisely', async t => {
     /returned invalid JSON/,
   );
   assert.equal(requestCount, 2);
+});
+
+test('stops before exceeding the shared Free Workers A2A request budget', async t => {
+  let requestCount = 0;
+  mockFetch(t, async url => {
+    requestCount += 1;
+    assert.ok(String(url).includes('/token'));
+    return jsonResponse({
+      token: 'peer-token',
+      rpcUrl: 'https://agent.manyfold.test/rpc',
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    });
+  });
+
+  await assert.rejects(
+    manyfold.callMfAgent(environment(), 'agt_budget', 'prompt', {
+      attempts: 1,
+      requestBudget: { remaining: 1 },
+    }),
+    /Free Workers A2A subrequest budget exhausted before opening a stream/,
+  );
+  assert.equal(requestCount, 1);
 });

@@ -11,8 +11,11 @@ and deployment, see [Operations](./operations.md).
 - A2A transport admits at most four concurrent calls per Worker isolate.
 - Peer-token minting is single-flight and cached until shortly before expiry.
 - Normal peer calls get up to two attempts; only transient failures retry.
-- `message/send` is non-blocking. The caller follows accepted work with
-  `tasks/get`, and task transitions appear in Activity.
+- `message/stream` carries Task status and artifacts in one SSE subrequest.
+- A disconnected accepted Task gets at most seven sparse `tasks/get` recovery
+  checks; its prompt is not submitted a second time.
+- All A2A calls share a 30-request budget, preserving 20 of Free Workers' 50
+  external subrequests for input and other upstream work.
 - Calls in one orchestration attempt share a 12-minute deadline.
 - An accepted Task that exceeds its budget is canceled best-effort; the same
   role is not immediately submitted again.
