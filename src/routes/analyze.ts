@@ -16,7 +16,9 @@ interface ResolvedInput {
   source: 'hn' | 'article' | 'text'
 }
 
-const CACHE_QUALITY_TAG = ':stable-v1'
+// Agent bindings changed from Gemini CLI to Codex. Do not replay results
+// produced by the previous backend after the routing migration.
+const CACHE_QUALITY_TAG = ':stable-v2'
 const REQUIRED_RESULT_AGENTS = ['sum', 'jargon', 'comments', 'ctx'] as const
 const CRITICAL_RESULT_AGENTS = new Set(['sum', 'ctx'])
 

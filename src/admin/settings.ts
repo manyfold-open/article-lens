@@ -24,6 +24,24 @@ const SESSION_TTL_SECONDS = 8 * 60 * 60
 const ACCESS_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 const ACCESS_RATE_LIMIT_ATTEMPTS = 5
 const ACCESS_RATE_LIMIT_SECONDS = 10 * 60
+const AGENT_ROUTING_KEYS = [
+  'MF_AGENT_ID',
+  'AGENT_SUMMARIZER',
+  'AGENT_CONTEXT',
+  'AGENT_SYNTHESIZER',
+  'AGENT_COMMENT_MAP',
+  'AGENT_JARGON',
+  'AGENT_COMMENT_REDUCE',
+] as const
+const LEGACY_GEMINI_AGENT_IDS = new Set([
+  'agt_agpzmem6af5rrbztanib4gxfkm',
+  'agt_agpzmenybn42znpqy4izl7lwou',
+  'agt_agpzmeozpvzvfdc7ejvwk7ix2u',
+  'agt_agpzmepvgf4ghjs2awkl2zv5jq',
+  'agt_agpzmeqnlf6qlex4vnwtlnm3gu',
+  'agt_agpzmerdrn65lfptmniusgt3jy',
+  'agt_agpzmer57f3blmw2ewnqivcxfy',
+])
 
 const FIELDS: SettingsField[] = [
   {
@@ -195,7 +213,9 @@ async function readStoredSettings(env: Env): Promise<{ settings: StoredSettings;
   const raw = await env.CACHE.get(SETTINGS_KEY)
   if (!raw) return { settings: empty }
   try {
-    return { settings: await decryptSettings(raw, env.ADMIN_SETTINGS_PASSWORD) }
+    const settings = await decryptSettings(raw, env.ADMIN_SETTINGS_PASSWORD)
+    settings.values = migrateLegacyAgentSettings(env, settings.values)
+    return { settings }
   } catch {
     return {
       settings: empty,
@@ -207,6 +227,17 @@ async function readStoredSettings(env: Env): Promise<{ settings: StoredSettings;
 function envValue(env: Env, key: string): string {
   const value = (env as unknown as Record<string, unknown>)[key]
   return typeof value === 'string' ? value : ''
+}
+
+function migrateLegacyAgentSettings(env: Env, values: RuntimeValues): RuntimeValues {
+  const migrated = { ...values }
+  for (const key of AGENT_ROUTING_KEYS) {
+    const saved = migrated[key]
+    if (!saved || !LEGACY_GEMINI_AGENT_IDS.has(saved)) continue
+    const replacement = envValue(env, key)
+    if (replacement && !LEGACY_GEMINI_AGENT_IDS.has(replacement)) migrated[key] = replacement
+  }
+  return migrated
 }
 
 function effectiveValue(env: Env, values: RuntimeValues, key: string): string {

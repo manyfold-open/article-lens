@@ -144,6 +144,36 @@ test('encrypts saved overrides and resolves them without exposing secrets', asyn
   );
 });
 
+test('migrates saved legacy Gemini routing IDs to the deployed Codex bindings', async () => {
+  const env = environment();
+  const { cookie } = await login(env);
+  const response = await settings.handleAdminSettings(request('/api/admin/settings', {
+    method: 'PUT',
+    headers: { cookie },
+    body: JSON.stringify({
+      values: {
+        MF_AGENT_ID: 'agt_agpzmem6af5rrbztanib4gxfkm',
+        AGENT_SUMMARIZER: 'agt_agpzmenybn42znpqy4izl7lwou',
+        AGENT_CONTEXT: 'agt_agpzmeozpvzvfdc7ejvwk7ix2u',
+        AGENT_SYNTHESIZER: 'agt_agpzmepvgf4ghjs2awkl2zv5jq',
+        AGENT_COMMENT_MAP: 'agt_agpzmeqnlf6qlex4vnwtlnm3gu',
+        AGENT_JARGON: 'agt_agpzmerdrn65lfptmniusgt3jy',
+        AGENT_COMMENT_REDUCE: 'agt_agpzmer57f3blmw2ewnqivcxfy',
+      },
+    }),
+  }), env);
+  assert.equal(response.status, 200);
+
+  const runtime = await settings.resolveRuntimeEnv(env);
+  assert.equal(runtime.MF_AGENT_ID, 'agt_source');
+  assert.equal(runtime.AGENT_SUMMARIZER, 'agt_sum');
+  assert.equal(runtime.AGENT_CONTEXT, 'agt_ctx');
+  assert.equal(runtime.AGENT_SYNTHESIZER, 'agt_synth');
+  assert.equal(runtime.AGENT_COMMENT_MAP, 'agt_comment_map');
+  assert.equal(runtime.AGENT_JARGON, 'agt_jargon');
+  assert.equal(runtime.AGENT_COMMENT_REDUCE, 'agt_comment_reduce');
+});
+
 test('reports encrypted settings that cannot be read after password rotation', async () => {
   const env = environment();
   const firstLogin = await login(env);
