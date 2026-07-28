@@ -6,6 +6,7 @@ import { getSubtrees } from '../hn'
 import { stripHtml } from '../extract'
 import { buildMockResult } from './mock'
 import { callMfAgent } from './mf'
+import { normalizeContextVerdict, toBi } from './verdict'
 import {
   normalizeGraph,
   type EffortAgent,
@@ -53,12 +54,6 @@ const bz = (zh = ''): BiStr => ({ en: '', zh })
 // walks title/summary/jargon/comment_digest/why_frontpage/editor_note) — so
 // these need a real `en` baked in at the source, via `bi(zh, en)` below.
 const bi = (zh: string, en: string): BiStr => ({ zh, en })
-function toBi(v: unknown): BiStr {
-  if (v == null) return bz('')
-  if (typeof v === 'string') return bz(v)
-  const o = v as { en?: string; zh?: string }
-  return { en: o.en || '', zh: o.zh || o.en || '' }
-}
 
 export type SharedSections = Pick<HNLensResult, 'summary' | 'comment_digest' | 'verdict'>
 
@@ -742,20 +737,12 @@ async function skipSummary(
 // (how many blocking / hard terms) so its worth_reading/tier/why reflect the
 // article's reading accessibility, not just its content. `jargon` may be empty
 // (e.g. the cheap escalate phase before 小詞 runs) — then it's ignored.
-// Parse a 小導 verdict JSON into a typed verdict, or null if unusable.
 function parseVerdict(text: string): HNLensResult['verdict'] | null {
-  const p = parseLoose<{ worth_reading?: string; why_frontpage?: unknown; tier?: string }>(text)
-  const worth = String(p?.worth_reading ?? '').trim().toLowerCase()
-  if (worth !== 'high' && worth !== 'medium' && worth !== 'low') return null
-  const why = toBi(p?.why_frontpage)
-  if (!why.zh.trim()) return null
-  const rawTier = String(p?.tier ?? '').trim()
-  const tier = rawTier === '10s' || rawTier === '1min' || rawTier === 'deep' ? rawTier : '1min'
-  return {
-    worth_reading: worth,
-    why_frontpage: why,
-    tier,
-  }
+  return normalizeContextVerdict(parseLoose<unknown>(text)).verdict
+}
+
+function parseContextVerdict(text: string): ReturnType<typeof normalizeContextVerdict> {
+  return normalizeContextVerdict(parseLoose<unknown>(text))
 }
 
 // 辯論裁定: run 小導 twice with opposing framings (正方/反方) in parallel, then a
@@ -783,8 +770,9 @@ async function debateVerdict(
   const mergeText = await callAgent(env, env.AGENT_CONTEXT, mergePrompt, 'ctx', emit)
   meter?.add('ctx', mergePrompt.length, mergeText.length)
   // Prefer the adjudicated verdict; else fall back to whichever side parsed.
-  const verdict = parseVerdict(mergeText) ?? pro ?? con
-  if (!verdict) throw new Error('Context debate returned no parseable verdict JSON.')
+  const merged = parseContextVerdict(mergeText)
+  const verdict = merged.verdict ?? pro ?? con
+  if (!verdict) throw new Error(`Context debate returned no parseable verdict JSON: ${merged.reason}.`)
   return verdict
 }
 
@@ -802,9 +790,9 @@ async function runContext(
       const prompt = buildContextPrompt(item, summary, cd, jargon, audience)
       const text = await callAgent(env, env.AGENT_CONTEXT, prompt, 'ctx', emit)
       meter?.add('ctx', prompt.length, text.length)
-      const parsed = parseVerdict(text)
-      if (!parsed) throw new Error('Context returned output that could not be parsed as the required verdict JSON.')
-      verdict = parsed
+      const parsed = parseContextVerdict(text)
+      if (!parsed.verdict) throw new Error(`Context returned invalid verdict output: ${parsed.reason}.`)
+      verdict = parsed.verdict
     }
     emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'real', label: debate ? bi('辯論裁定完成!', 'Debate verdict is in!') : bi('裁定完成!', 'Verdict is in!') })
     emit({ event: 'section', agent: 'ctx', data: verdict })
@@ -1542,7 +1530,7 @@ ${discussion}${jargonLine}`
   return { isHN, subject, block, jargonLine }
 }
 
-const VERDICT_JSON = '只回傳這個 JSON（不要 markdown；字串值裡不要用 " 字元，用 \' 或「」）：\n{"worth_reading":"high","why_frontpage":{"zh":"..."},"tier":"deep"}'
+const VERDICT_JSON = '只回傳這個 JSON（不要 markdown；字串值裡不要用 " 字元，用 \' 或「」）：\n{"worth_reading":"high","why_frontpage":"...","tier":"deep"}'
 
 function buildContextPrompt(
   item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'], jargon: JargonTerm[] = [], audience?: Audience
