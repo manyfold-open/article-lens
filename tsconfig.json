@@ -3,6 +3,9 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    // Modules that tests load directly need explicit .ts specifiers so
+    // `node --experimental-transform-types` can resolve their imports.
+    "allowImportingTsExtensions": true,
     "lib": ["ES2022"],
     "types": ["@cloudflare/workers-types"],
     "strict": true,
