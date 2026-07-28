@@ -187,7 +187,11 @@ export async function runAnalysisRequest(
     markLocalFallback(result, 'MF_API_TOKEN is not configured.')
   }
 
-  const criticalFallbacks = (result.flags.fallback_agents ?? []).filter(agent => CRITICAL_RESULT_AGENTS.has(agent))
+  // A fallback the run's own time budget caused is excluded: a second attempt
+  // gets the same 12 minutes and would exhaust them the same way, so the reader
+  // would wait twice for the same degraded report. It stays uncached either way.
+  const criticalFallbacks = (result.flags.fallback_agents ?? []).filter(agent =>
+    CRITICAL_RESULT_AGENTS.has(agent) && !result.flags.agent_sources?.[agent]?.budget_limited)
   if (env.MF_API_TOKEN && criticalFallbacks.length && !policy.allowCriticalFallback) {
     // Escape to the queue worker so AnalysisJob can schedule the second durable
     // attempt. Non-critical sections may degrade without restarting the run.
