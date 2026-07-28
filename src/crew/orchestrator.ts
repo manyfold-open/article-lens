@@ -4,8 +4,7 @@ import type {
 } from '../schema'
 import { stripHtml } from '../extract'
 import { buildMockResult } from './mock'
-import { callMfAgent, isBudgetExhaustedError } from './mf'
-import { createRunBudget, stageDeadline, type RunBudget, type Stage } from './budget'
+import { callMfAgent } from './mf'
 import { commentsWereSampled, selectComments } from './comments'
 import { normalizeContextVerdict, toBi } from './verdict'
 import {
@@ -26,41 +25,8 @@ const ORCHESTRATION_BUDGET_MS = 12 * 60_000
 // hard budget of 30, leaving 20 for article resolution and other upstream work.
 // The normal SSE path uses roughly one token mint plus one stream per peer.
 const FREE_WORKERS_A2A_SUBREQUEST_BUDGET = 30
+const runDeadlines = new WeakMap<(event: SSEEvent) => void, number>()
 const runRequestBudgets = new WeakMap<(event: SSEEvent) => void, { remaining: number }>()
-
-// Per-run time budget state, keyed by the run's emit function like the request
-// budget above, so the stage does not have to be threaded through every worker.
-interface RunState {
-  budget: RunBudget
-  stage: Stage
-  // Agents whose fallback was caused by the time budget rather than by the
-  // peer. A whole-workflow retry would hit the same wall, so these must not
-  // trigger one.
-  budgetLimited: Set<AgentName>
-}
-const runStates = new WeakMap<(event: SSEEvent) => void, RunState>()
-
-// Run `body` with calls charged to `stage`, then restore the previous stage.
-// 省錢漸進 runs ctx between two halves of stage 1, so this cannot be monotonic.
-async function inStage<T>(
-  emit: (event: SSEEvent) => void,
-  stage: Stage,
-  body: () => Promise<T>,
-): Promise<T> {
-  const state = runStates.get(emit)
-  if (!state) return body()
-  const previous = state.stage
-  state.stage = stage
-  try {
-    return await body()
-  } finally {
-    state.stage = previous
-  }
-}
-
-function noteBudgetLimit(emit: (event: SSEEvent) => void, agent: AgentName, e: unknown): void {
-  if (isBudgetExhaustedError(e)) runStates.get(emit)?.budgetLimited.add(agent)
-}
 
 function callAgent(
   env: Env,
@@ -70,10 +36,9 @@ function callAgent(
   emit: (event: SSEEvent) => void,
   opts: { timeoutMs?: number; attempts?: number } = {},
 ): Promise<string> {
-  const state = runStates.get(emit)
   return callMfAgent(env, peerId, prompt, {
     ...opts,
-    deadlineAt: state && stageDeadline(state.budget, state.stage),
+    deadlineAt: runDeadlines.get(emit),
     requestBudget: runRequestBudgets.get(emit),
     trace: { agent, emit },
   })
@@ -180,18 +145,13 @@ export class CriticalAgentFallbackError extends Error {
   }
 }
 
-// A critical agent's fallback normally stops the run so AnalysisJob can take
-// its second attempt. A fallback caused by the time budget is excluded: the
-// retry would spend another 12 minutes reaching the same wall, so the run
-// finishes degraded (and uncached) instead of making the reader wait twice.
 function assertCriticalAgents(
   fallbacks: Set<AgentName>,
   required: boolean | undefined,
   agents: AgentName[],
-  budgetLimited: Set<AgentName>,
 ): void {
   if (!required) return
-  const failed = agents.filter(agent => fallbacks.has(agent) && !budgetLimited.has(agent))
+  const failed = agents.filter(agent => fallbacks.has(agent))
   if (failed.length) throw new CriticalAgentFallbackError(failed)
 }
 
@@ -250,17 +210,12 @@ export async function orchestrateAnalysis(
   emit: (event: SSEEvent) => void,
   opts: OrchestrateOpts = {}
 ): Promise<HNLensResult> {
+  runDeadlines.set(emit, Date.now() + ORCHESTRATION_BUDGET_MS)
   runRequestBudgets.set(emit, { remaining: FREE_WORKERS_A2A_SUBREQUEST_BUDGET })
   const mock = buildMockResult(item, articleText, itemType)
   const graph = normalizeGraph(opts.graph)
   // 辯論裁定 flag rides on the raw graph (like escalate). Applies wherever 小導 runs.
   const debate = !!opts.graph?.debate
-  const budgetLimited = new Set<AgentName>()
-  runStates.set(emit, {
-    budget: createRunBudget(Date.now(), ORCHESTRATION_BUDGET_MS, { debate }),
-    stage: 'stage1',
-    budgetLimited,
-  })
   // 受眾語氣: reader level shifts tone/depth of sum/jargon/ctx/curator prompts.
   const audience = normAudience(opts.graph?.audience)
   // Effort per agent: from the graph when present, else 'med' (= today).
@@ -380,12 +335,12 @@ export async function orchestrateAnalysis(
       // Phase 1 (cheap): sum + ctx only. ctx runs on the summary alone (empty
       // comment_digest) — good enough for a quick "is it worth reading" call.
       summary = await runSum()
-      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'], budgetLimited)
+      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'])
       const emptyDigest = normalizeDigest({
         overview: bz(''), camps: [], consensus: bz(''), disputes: [], expert_corrections: [], spicy: [],
       })
       verdict = await runCtx(emptyDigest)
-      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['ctx'], budgetLimited)
+      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['ctx'])
 
       // Decision: read a machine-readable worth-reading boolean from the verdict.
       const go = isWorthReading(verdict)
@@ -413,7 +368,7 @@ export async function orchestrateAnalysis(
       summary = stage1.sum
       comment_digest = stage1.comments
       jargon = stage1.jargon
-      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'], budgetLimited)
+      assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'])
 
       // ── Stage 2: ctx — now also fed 小詞's jargon density (dep edge). ──
       verdict = await runCtx(comment_digest, jargon)
@@ -443,14 +398,14 @@ export async function orchestrateAnalysis(
     // weigh jargon density (the 小詞→小導 dependency edge). It's usually already
     // resolved by now, so this rarely adds latency.
     jargon = await jargonP
-    assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'], budgetLimited)
+    assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'])
 
     // ── Stage 2: verdict, now that it can see real content + jargon ──
     verdict = haveShared
       ? await replaySection('ctx', opts.cachedShared!.verdict, emit, agentSources)
       : await runContext(env, item, summary, comment_digest, jargon, mock, emit, fallbackAgents, agentSources, meter, debate, audience)
   }
-  assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['ctx'], budgetLimited)
+  assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['ctx'])
 
   // ── Assemble ────────────────────────────────────────────────────
   const result: HNLensResult = {
@@ -747,17 +702,12 @@ async function runSummary(
     return summary
   } catch (e) {
     fallbackAgents?.add('sum')
-    noteBudgetLimit(emit, 'sum', e)
     const sandboxReason = emitAgentFailure('sum', e, emit)
     if (!quiet) {
       emit({ event: 'status', agent: 'sum', state: 'done', mode: 'fallback', label: bi('摘要用備援內容', 'Summary used fallback content') })
       emit({ event: 'section', agent: 'sum', data: mock.summary })
     }
-    if (agentSources) agentSources.sum = {
-      mode: 'fallback',
-      reason: fallbackReason('sum', e, sandboxReason, bi('改用本地備援摘要', 'falling back to the local backup summary')),
-      budget_limited: isBudgetExhaustedError(e) || undefined,
-    }
+    if (agentSources) agentSources.sum = { mode: 'fallback', reason: fallbackReason('sum', e, sandboxReason, bi('改用本地備援摘要', 'falling back to the local backup summary')) }
     return mock.summary
   } finally {
     if (!quiet) meter?.finish('sum')
@@ -836,11 +786,10 @@ async function runContext(
   try {
     let verdict: HNLensResult['verdict']
     if (debate) {
-      verdict = await inStage(emit, 'ctx', () =>
-        debateVerdict(env, item, summary, cd, jargon, mock, emit, meter, audience))
+      verdict = await debateVerdict(env, item, summary, cd, jargon, mock, emit, meter, audience)
     } else {
       const prompt = buildContextPrompt(item, summary, cd, jargon, audience)
-      const text = await inStage(emit, 'ctx', () => callAgent(env, env.AGENT_CONTEXT, prompt, 'ctx', emit))
+      const text = await callAgent(env, env.AGENT_CONTEXT, prompt, 'ctx', emit)
       meter?.add('ctx', prompt.length, text.length)
       const parsed = parseContextVerdict(text)
       if (!parsed.verdict) throw new Error(`Context returned invalid verdict output: ${parsed.reason}.`)
@@ -858,15 +807,10 @@ async function runContext(
     return verdict
   } catch (e) {
     fallbackAgents?.add('ctx')
-    noteBudgetLimit(emit, 'ctx', e)
     const sandboxReason = emitAgentFailure('ctx', e, emit)
     emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'fallback', label: bi('裁定用備援內容', 'Verdict used fallback content') })
     emit({ event: 'section', agent: 'ctx', data: mock.verdict })
-    if (agentSources) agentSources.ctx = {
-      mode: 'fallback',
-      reason: fallbackReason('ctx', e, sandboxReason, bi('改用本地裁定', 'falling back to the local verdict')),
-      budget_limited: isBudgetExhaustedError(e) || undefined,
-    }
+    if (agentSources) agentSources.ctx = { mode: 'fallback', reason: fallbackReason('ctx', e, sandboxReason, bi('改用本地裁定', 'falling back to the local verdict')) }
     return mock.verdict
   } finally {
     meter?.finish('ctx')
@@ -978,17 +922,12 @@ async function runComments(
     return cd
   } catch (e) {
     fallbackAgents?.add('comments')
-    noteBudgetLimit(emit, 'comments', e)
     const sandboxReason = emitAgentFailure('comments', e, emit)
     if (!quiet) {
       emit({ event: 'status', agent: 'comments', state: 'done', mode: 'fallback', label: bi('留言用備援內容', 'Comments used fallback content') })
       emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
     }
-    if (agentSources) agentSources.comments = {
-      mode: 'fallback',
-      reason: fallbackReason('comments', e, sandboxReason, bi('改用本地留言摘要', 'falling back to the local comment digest')),
-      budget_limited: isBudgetExhaustedError(e) || undefined,
-    }
+    if (agentSources) agentSources.comments = { mode: 'fallback', reason: fallbackReason('comments', e, sandboxReason, bi('改用本地留言摘要', 'falling back to the local comment digest')) }
     return mock.comment_digest
   } finally {
     if (!quiet) meter?.finish('comments')
@@ -1059,8 +998,7 @@ async function curate(
   emit({ event: 'status', agent: 'synth', state: 'running', label: bi('整合中…', 'Synthesizing…') })
   meter?.add('synth', prompt.length, 0)
   try {
-    const text = await inStage(emit, 'synth', () =>
-      callAgent(env, env.AGENT_SYNTHESIZER, prompt, 'synth', emit, { timeoutMs: 240_000, attempts: 2 }))
+    const text = await callAgent(env, env.AGENT_SYNTHESIZER, prompt, 'synth', emit, { timeoutMs: 240_000, attempts: 2 })
     meter?.add('synth', 0, text.length)
     const d = parseLoose<CuratorDecision>(text)
     if (!d) throw new Error('Synthesizer returned output that could not be parsed as the required curation JSON.')
@@ -1069,12 +1007,10 @@ async function curate(
     if (agentSources) agentSources.synth = { mode: 'real', reason: bi('合成實際檢查並修剪各段輸出。', 'Synth actually reviewed and pruned each section’s output.') }
   } catch (e) {
     fallbackAgents?.add('synth')
-    noteBudgetLimit(emit, 'synth', e)
     const sandboxReason = emitAgentFailure('synth', e, emit)
     emit({ event: 'status', agent: 'synth', state: 'done', mode: 'fallback', label: bi('整合略過', 'Synthesis skipped') })
     if (agentSources) agentSources.synth = {
       mode: 'fallback',
-      budget_limited: isBudgetExhaustedError(e) || undefined,
       reason: sandboxReason
         ? bi(
             `合成的 sandbox/runtime 不在線，保留各組原始結果，不再等 QA 修剪。原因：${sandboxReason}`,
@@ -1300,7 +1236,6 @@ async function runJargon(
     return merged
   } catch (e) {
     fallbackAgents?.add('jargon')
-    noteBudgetLimit(emit, 'jargon', e)
     const sandboxReason = emitAgentFailure('jargon', e, emit)
     if (!quiet) {
       emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'fallback', label: bi('術語用備援內容', 'Jargon used fallback content') })
@@ -1308,7 +1243,6 @@ async function runJargon(
     }
     if (agentSources) agentSources.jargon = {
       mode: 'fallback',
-      budget_limited: isBudgetExhaustedError(e) || undefined,
       reason: sandboxReason
         ? bi(
             `小詞的 sandbox/runtime 不在線，為避免整篇卡住，先不顯示術語。原因：${sandboxReason}`,
@@ -1372,11 +1306,6 @@ function emitAgentFailure(agent: AgentName, e: unknown, emit: (event: SSEEvent) 
 function fallbackReason(agent: WorkerAgent, e: unknown, sandboxReason: string | null, fallbackText: BiStr): BiStr {
   const zhName = agentZh(agent)
   const enName = agentEn(agent)
-  if (isBudgetExhaustedError(e))
-    return bi(
-      `這一輪分給 ${zhName} 的時間用完了（後面的角色要留時間），${fallbackText.zh}；整篇不會因此重跑。`,
-      `${enName} ran out of the time this round allotted it (later roles keep a reserve), so ${fallbackText.en}; the whole run is not retried for this.`
-    )
   if (sandboxReason)
     return bi(
       `${zhName} 的 sandbox/runtime 不在線，${fallbackText.zh}。原因：${sandboxReason}`,

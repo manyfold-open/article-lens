@@ -16,21 +16,13 @@ and deployment, see [Operations](./operations.md).
   checks; its prompt is not submitted a second time.
 - All A2A calls share a 30-request budget, preserving 20 of Free Workers' 50
   external subrequests for input and other upstream work.
-- Calls in one orchestration attempt share a 12-minute deadline, but each stage
-  stops early enough to leave the reserves the later stages need, so stage 1
-  cannot starve `ctx` or `synth`. Reserves are floors: an early stage 1 leaves
-  the later stages their full per-call timeout, and debate widens the `ctx`
-  reserve.
+- Calls in one orchestration attempt share a 12-minute deadline.
 - An accepted Task that exceeds its budget is canceled best-effort; the same
   role is not immediately submitted again.
 - A failed voting replica does not downgrade a role if another replica produced
   a real result.
 - `sum` and `ctx` are critical. Their fallback on the first durable attempt
   triggers one whole-workflow retry.
-- Unless the time budget, not the peer, caused it. A budget-limited fallback
-  finishes the run degraded instead of retrying, because the retry would reach
-  the same wall. This is what an over-subscribed graph (debate plus replicas
-  plus high effort) now costs: one degraded role, not a doubled wait.
 - `jargon`, `comments`, and `synth` may degrade without blocking a useful report.
 - Degraded results remain visible but are never cached.
 
