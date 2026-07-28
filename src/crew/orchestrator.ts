@@ -1,11 +1,11 @@
 import type {
-  Env, HNItem, ItemType, SSEEvent, AgentName, HNLensResult,
+  Env, HNItem, HNComment, ItemType, SSEEvent, AgentName, HNLensResult,
   JargonTerm, BiStr, GraphConfig, Effort,
 } from '../schema'
+import { getSubtrees } from '../hn'
 import { stripHtml } from '../extract'
 import { buildMockResult } from './mock'
 import { callMfAgent } from './mf'
-import { commentsWereSampled, selectComments } from './comments'
 import { normalizeContextVerdict, toBi } from './verdict'
 import {
   normalizeGraph,
@@ -218,15 +218,7 @@ export async function orchestrateAnalysis(
   const debate = !!opts.graph?.debate
   // 受眾語氣: reader level shifts tone/depth of sum/jargon/ctx/curator prompts.
   const audience = normAudience(opts.graph?.audience)
-  // Effort per agent: from the graph when present, else 'med' (= today).
-  const eff: Record<EffortAgent, Effort> = graph
-    ? graph.effort
-    : { sum: 'med', jargon: 'med', comments: 'med' }
-  // 小潛's comment budget decides which threads are actually sent, so the
-  // briefing, the sampling flag, and the provenance reason all read the same
-  // selection instead of describing a strategy the prompt never used.
-  const commentTokenBudget = commentParams(eff.comments).rankedBudget
-  const captain = buildCaptainPlan(item, articleText, itemType, opts, commentTokenBudget)
+  const captain = buildCaptainPlan(item, articleText, itemType, opts)
   // Reflect graph.enabled in the emitted plan/briefing so the office shows the
   // right set, but keep no-graph behaviour byte-for-byte identical.
   if (graph) applyGraphToPlan(captain, graph)
@@ -239,6 +231,10 @@ export async function orchestrateAnalysis(
   const skippedAgents = new Set<AgentName>()
   const agentSources: NonNullable<HNLensResult['flags']['agent_sources']> = {}
   const meter = makeMeter(emit)
+  // Effort per agent: from the graph when present, else 'med' (= today).
+  const eff: Record<EffortAgent, Effort> = graph
+    ? graph.effort
+    : { sum: 'med', jargon: 'med', comments: 'med' }
 
   let summary: HNLensResult['summary']
   let comment_digest: HNLensResult['comment_digest']
@@ -421,7 +417,7 @@ export async function orchestrateAnalysis(
     comment_digest,
     flags: {
       low_confidence: !articleText,
-      comments_sampled: commentsWereSampled(item, commentTokenBudget),
+      comments_sampled: commentsWereSampled(item),
       fallback_agents: [...fallbackAgents],
       skipped_agents: [...skippedAgents],
       agent_sources: agentSources,
@@ -468,11 +464,9 @@ function buildCaptainPlan(
   item: HNItem,
   articleText: string,
   itemType: ItemType,
-  opts: OrchestrateOpts,
-  commentTokenBudget: number
+  opts: OrchestrateOpts
 ): CaptainPlan {
   const comments = item.children?.length ?? 0
-  const sampled = commentsWereSampled(item, commentTokenBudget)
   const textLen = (articleText || item.text || '').trim().length
   const title = item.title || ''
   const cachedShared = !!opts.cachedShared
@@ -502,8 +496,8 @@ function buildCaptainPlan(
         ? bi('留言摘要已在快取裡，直接拿來用。', 'The comment digest is already cached — reusing it as-is.')
         : comments >= 3
           ? bi(
-              sampled ? '留言很多，挑高訊號串分析。' : '留言量足夠，請小潛整理派別。',
-              sampled ? 'There are a lot of comments — sampling the highest-signal threads to analyze.' : 'There are enough comments — let Comments sort out the camps.'
+              commentsWereSampled(item) ? '留言很多，挑高訊號串分析。' : '留言量足夠，請小潛整理派別。',
+              commentsWereSampled(item) ? 'There are a lot of comments — sampling the highest-signal threads to analyze.' : 'There are enough comments — let Comments sort out the camps.'
             )
           : bi('留言太少，沒有必要做派別分析。', 'Too few comments to bother with camp analysis.'),
     },
@@ -674,6 +668,11 @@ function isLikelyTechnical(title: string, articleText: string): boolean {
     'open source', 'github', 'framework', 'library', 'deployment', 'kubernetes',
   ]
   return techTerms.some(t => text.includes(t)) || /[a-z][a-z0-9_]*(\(\)|::|\/api|\.js|\.ts|\.py)/i.test(text)
+}
+
+function commentsWereSampled(item: HNItem): boolean {
+  const comments = item.children?.length ?? 0
+  return comments >= 10 && topSubtrees(item, 8).length < comments
 }
 
 // ── 小摘 summary ───────────────────────────────────────────────────
@@ -907,17 +906,11 @@ async function runComments(
       emit({ event: 'status', agent: 'comments', state: 'done', mode: 'real', label: LABELS.comments.done })
       emit({ event: 'section', agent: 'comments', data: cd })
     }
-    if (agentSources) {
-      const selection = selectComments(item, params.rankedBudget)
-      agentSources.comments = {
-        mode: 'real',
-        reason: selection.included < selection.total
-          ? bi(
-              `小潛實際分析 ${selection.threads} 串高訊號留言（${selection.included}/${selection.total} 則）。`,
-              `Comments actually analyzed ${selection.threads} high-signal threads (${selection.included}/${selection.total} comments).`
-            )
-          : bi('小潛實際分析留言。', 'Comments actually analyzed the comments.'),
-      }
+    if (agentSources) agentSources.comments = {
+      mode: 'real',
+      reason: commentsWereSampled(item)
+        ? bi('小潛實際分析高訊號留言串。', 'Comments actually analyzed the highest-signal threads.')
+        : bi('小潛實際分析留言。', 'Comments actually analyzed the comments.'),
     }
     return cd
   } catch (e) {
@@ -1081,18 +1074,15 @@ async function runCommentPipeline(
 
   // Hosted peers have high first-token latency. The old 8–12 call
   // map fan-out could consume most of a Queue invocation before ctx/synth even
-  // started. Select the highest-signal threads locally, then make one grounded
+  // started. Rank and cap the raw comments locally, then make one grounded
   // reduce call; this preserves high-signal coverage with one remote turn.
-  const selection = selectComments(item, params.rankedBudget)
+  const ranked = rankedCommentsText(item.children ?? [], params.rankedBudget)
   if (commentCount >= 10 && !quiet) emit({
     event: 'step',
     agent: 'comments',
-    label: bi(
-      `已挑出 ${selection.threads} 串高訊號留言（${selection.included}/${selection.total} 則），直接聚類分析…`,
-      `Picked ${selection.threads} high-signal threads (${selection.included}/${selection.total} comments); clustering directly…`
-    ),
+    label: bi('已挑出高訊號留言，直接聚類分析…', 'Ranked high-signal comments; clustering directly…'),
   })
-  return singleCommentCall(env, selection.text, item, emit, extraContext, params, meter)
+  return singleCommentCall(env, ranked, item, emit, extraContext, params, meter)
 }
 
 async function singleCommentCall(
@@ -1103,6 +1093,48 @@ async function singleCommentCall(
   const out = await callAgent(env, env.AGENT_COMMENT_REDUCE, prompt, 'comments', emit)
   meter?.add('comments', prompt.length, out.length)
   return out
+}
+
+// Rough token estimate: ~4 chars/token for mixed en, ~1.7 for CJK. Use a
+// conservative blended 2.5 chars/token so we budget by tokens, not raw chars.
+const CHARS_PER_TOKEN = 2.5
+const tokens = (s: string) => Math.ceil(s.length / CHARS_PER_TOKEN)
+
+// Score a top-level comment subtree by signal: depth of discussion it spawned
+// (replies) + its own substance (length), with earlier (higher-ranked by HN)
+// comments favoured via their original position.
+function topSubtrees(item: HNItem, max: number): HNComment[][] {
+  const subtrees = getSubtrees(item)
+  const scored = subtrees.map((sub, idx) => {
+    const own = stripHtml(sub[0]?.text ?? '').length
+    const replies = sub.length - 1
+    // position bonus: earlier top-level comments rank higher on HN
+    const posBonus = Math.max(0, 30 - idx) * 4
+    return { sub, score: own + replies * 60 + posBonus }
+  })
+  scored.sort((a, b) => b.score - a.score)
+  return scored.slice(0, max).map(s => s.sub)
+}
+
+// Flatten the highest-signal comments (by length) within a token budget.
+function rankedCommentsText(comments: HNComment[], budgetTokens: number): string {
+  const flat: { c: HNComment; t: string }[] = []
+  const walk = (c: HNComment) => {
+    const t = stripHtml(c.text ?? '')
+    if (t) flat.push({ c, t })
+    for (const k of c.children ?? []) walk(k)
+  }
+  comments.forEach(walk)
+  flat.sort((a, b) => b.t.length - a.t.length)
+  const lines: string[] = []
+  let used = 0
+  for (const { c, t } of flat) {
+    const line = `[id:${c.id}] ${c.author ?? 'anon'}: ${t.slice(0, 400)}`
+    const tk = tokens(line)
+    if (used + tk > budgetTokens && lines.length) break
+    lines.push(line); used += tk
+  }
+  return lines.join('\n')
 }
 
 // ── Prompt builders (zh-only output) ──────────────────────────────
@@ -1559,17 +1591,17 @@ ${VERDICT_JSON}`
 }
 
 function buildCommentReducePrompt(
-  commentBlocks: string[], item: HNItem, extraContext?: string,
+  subtreeSummaries: string[], item: HNItem, extraContext?: string,
   params: CommentParams = commentParams('med')
 ): string {
-  const summaries = commentBlocks.filter(Boolean).join('\n\n---\n\n').slice(0, params.reduceCap)
+  const summaries = subtreeSummaries.filter(Boolean).join('\n\n---\n\n').slice(0, params.reduceCap)
   // effort's camps directive (empty at 'med' → prompt stays byte-for-byte today's).
   const campsLine = params.campsHint ? `${params.campsHint}\n` : ''
   return `你是 小潛，分析「${item.title}」的 Hacker News 討論。
 ${relayBlock(extraContext)}
 總留言數：${item.children?.length ?? 0}
 
-高訊號留言（按討論串分組，同串的縮排 ↳ 是對上一則的回覆）：
+各串摘要：
 ${summaries}
 
 找出討論的結構：主要派別（majority/vocal-minority/fringe）、共識、主要爭論、對文章的專家糾錯（若有）、最精彩/最辣的一則。

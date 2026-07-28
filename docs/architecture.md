@@ -54,7 +54,6 @@ src/
     health.ts          GET /api/health and on-demand peer checks
   crew/
     orchestrator.ts    application-owned multi-agent DAG
-    comments.ts        high-signal comment thread selection under a token budget
     mf.ts              Manyfold token mint + A2A message/stream client
     mock.ts            offline/failure fallback
     json.ts            tolerant LLM JSON repair
@@ -237,15 +236,6 @@ Comments are ranked and token-capped locally, then sent to the reduce peer in
 one call. The previous 8–12 peer map fan-out paid the hosted runtime startup
 latency repeatedly and could exhaust the Queue invocation before verdict and
 synthesis ran.
-
-`src/crew/comments.ts` owns that local selection. Top-level threads are scored
-by the discussion they spawned, their own substance, and their HN position; the
-budget then buys every selected thread's opening comment before it buys any
-replies, so distinct stances survive truncation and camp analysis does not
-collapse into one loud thread. Replies are taken as a depth-first prefix and
-rendered with `↳` markers, so the reduce peer can see who answers whom. The
-same selection backs the prompt, the `comments_sampled` flag, and the Comments
-provenance reason, so the report cannot claim a coverage it did not use.
 
 ## Analysis graph
 
