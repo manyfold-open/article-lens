@@ -19,7 +19,7 @@ export async function handleDefine(request: Request, env: Env): Promise<Response
   if (!env.MF_API_TOKEN) return jsonResponse(mockDefineTerm(term, context))
 
   try {
-    const prompt = `You are 小詞, a bilingual (Chinese/English) jargon explainer for tech and HN readers.
+    const prompt = `You are 小词, a bilingual (Chinese/English) jargon explainer for tech and HN readers.
 
 Explain this term in plain language for a smart generalist who codes but isn't in this niche:
 

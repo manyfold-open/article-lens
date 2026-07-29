@@ -16,12 +16,12 @@ let workflowRenderTimer = 0;
 let workbenchCollapsed = false;
 
 const AGENT_NAMES = {
-  orch:     { zh: '隊長', en: 'Orchestrator' },
-  sum:      { zh: '小摘', en: 'Summarizer' },
-  jargon:   { zh: '小詞', en: 'Jargon' },
-  comments: { zh: '小潛', en: 'Comments' },
-  ctx:      { zh: '小導', en: 'Context' },
-  synth:    { zh: '合成', en: 'Synthesizer' },
+  orch:     { zh: '队长', en: 'Orchestrator' },
+  sum:      { zh: '小摘', en: 'Summariser' },
+  jargon:   { zh: '小词', en: 'Jargon' },
+  comments: { zh: '小潜', en: 'Comments' },
+  ctx:      { zh: '小导', en: 'Context' },
+  synth:    { zh: '合成', en: 'Synthesiser' },
 };
 const AGENT_COLORS = {
   orch: '#FF6600', sum: '#3B82F6', jargon: '#F59E0B',
@@ -66,6 +66,10 @@ function refreshChrome() {
   syncWorkbench();
   syncEditToggle();
   syncFpToggleLabel();
+  // The glossary's status and count labels are written by JS, so without a
+  // re-render they keep the language they were drawn in and the drawer ends up
+  // mixing both.
+  kbRender();
 }
 
 // ── Phase control ──────────────────────────────────────────────────────────
@@ -95,10 +99,10 @@ function syncWorkbench() {
   const analyzeState = document.getElementById('analyze-panel-state');
   if (analyzeState) {
     analyzeState.textContent = L(runLocked
-      ? { zh: '目前任務執行中', en: 'Current run in progress' }
+      ? { zh: '目前任务执行中', en: 'Current run in progress' }
       : currentPhase === 'results'
         ? { zh: '可直接分析下一篇', en: 'Ready for the next article' }
-        : { zh: '貼上連結或文字開始', en: 'Paste a link or text to begin' });
+        : { zh: '贴上链接或文字开始', en: 'Paste a link or text to begin' });
   }
   root.classList.toggle('collapsed', workbenchCollapsed);
   const collapse = document.getElementById('workbench-collapse');
@@ -106,16 +110,16 @@ function syncWorkbench() {
     collapse.setAttribute('aria-expanded', String(!workbenchCollapsed));
     collapse.textContent = workbenchCollapsed ? '⌃' : '⌄';
     collapse.title = workbenchCollapsed
-      ? L({ zh: '展開分析控制台', en: 'Expand analysis console' })
+      ? L({ zh: '展开分析控制台', en: 'Expand analysis console' })
       : L({ zh: '收起分析控制台', en: 'Collapse analysis console' });
   }
   const context = document.getElementById('workbench-context');
   if (context) {
     context.textContent = L(currentPhase === 'input'
-      ? { zh: '準備開始', en: 'Ready' }
+      ? { zh: '准备开始', en: 'Ready' }
       : currentPhase === 'running'
-        ? { zh: '執行中 · 即時更新', en: 'Live run · updating' }
-        : { zh: '執行完成 · 可查看記錄', en: 'Run complete · inspect the record' });
+        ? { zh: '执行中 · 即时更新', en: 'Live run · updating' }
+        : { zh: '执行完成 · 可查看记录', en: 'Run complete · inspect the record' });
   }
 }
 
@@ -235,10 +239,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Language — switched via the office wall sign (cycles 中 / EN)
   document.getElementById('lang-hit').addEventListener('click', cycleLang);
 
-  // Whiteboard — opens 隊長's briefing report
+  // Whiteboard — opens 队长's briefing report
   document.getElementById('wb-hit').addEventListener('click', () => onAgentClick('orch'));
 
-  // Ask 小詞
+  // Ask 小词
   document.getElementById('ask-btn').addEventListener('click', onAskXici);
   document.getElementById('ask-term').addEventListener('keydown', e => {
     if (e.key === 'Enter') onAskXici();
@@ -269,7 +273,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.preset-btn[data-preset]').forEach(btn => {
     btn.addEventListener('click', () => onPresetClick(btn.dataset.preset));
   });
-  // 受眾語氣 (reader level) — orthogonal to the depth preset; just shifts tone.
+  // 受众语气 (reader level) — orthogonal to the depth preset; just shifts tone.
   document.querySelectorAll('.preset-btn[data-audience]').forEach(btn => {
     btn.addEventListener('click', () => onAudienceClick(btn.dataset.audience || null));
   });
@@ -326,13 +330,13 @@ function syncPresetPicker() {
     if (!text) {
       text = activeBtn
         ? (getLang() === 'zh' ? activeBtn.dataset.descZh : activeBtn.dataset.descEn) || ''
-        : L({ zh: '🛠️ 自訂編排 · 你手動調整過，不符合任何範本', en: "🛠️ Custom arrangement · you've tuned this by hand, no preset matches" });
+        : L({ zh: '🛠️ 自订编排 · 你手动调整过，不符合任何范本', en: "🛠️ Custom arrangement · you've tuned this by hand, no preset matches" });
     }
     caption.textContent = text;
   }
 }
 
-// ── 受眾語氣 (reader level) ─────────────────────────────────────────────────────
+// ── 受众语气 (reader level) ─────────────────────────────────────────────────────
 // Orthogonal to the depth preset: just shifts the tone/depth of the analysis.
 // Persisted in the office (localStorage), so no phase change is forced — it takes
 // effect on the next run.
@@ -341,7 +345,7 @@ function onAudienceClick(level) {
   if (!pa || !pa.setAudience) return;
   pa.setAudience(level);       // null | 'beginner' | 'expert'
   syncAudiencePicker();
-  syncPresetPicker();          // refresh the caption (it carries the 受眾 tag)
+  syncPresetPicker();          // refresh the caption (it carries the 受众 tag)
 }
 
 function syncAudiencePicker() {
@@ -373,7 +377,7 @@ function syncEditToggle() {
   const on = pa.isEditMode();
   btn.classList.toggle('active', on);
   btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-  btn.textContent = on ? L({ zh: '✓ 完成編排', en: '✓ Done arranging' }) : L({ zh: '🛠️ 編排辦公室', en: '🛠️ Arrange office' });
+  btn.textContent = on ? L({ zh: '✓ 完成编排', en: '✓ Done arranging' }) : L({ zh: '🛠️ 编排办公室', en: '🛠️ Arrange office' });
   document.documentElement.dataset.editmode = on ? 'on' : 'off';
 }
 
@@ -382,14 +386,15 @@ function cycleLang() {
   const cur = getLang();
   const next = LANG_CYCLE[(LANG_CYCLE.indexOf(cur) + 1) % LANG_CYCLE.length];
   document.documentElement.dataset.lang = next;
-  document.documentElement.lang = next === 'zh' ? 'zh-TW' : 'en';
+  // The Chinese copy is Simplified, and the English copy is British English.
+  document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en-GB';
   if (window.pixelAgents) window.pixelAgents.setLang(next);
   refreshChrome();
   if (next === 'en') ensureEnglish();   // agents only write zh; fetch English on demand
   else if (currentResult) { renderResults(currentResult); selectAgentSection(selectedAgent); }
 }
 
-const TODAYS_PICKS_LABEL = { zh: '今日精選', en: "Today's Picks" };
+const TODAYS_PICKS_LABEL = { zh: '今日精选', en: "Today's Picks" };
 function syncFpToggleLabel() {
   const fpToggle = document.getElementById('fp-toggle');
   const sec = document.getElementById('frontpage-section');
@@ -432,8 +437,14 @@ async function ensureEnglish() {
       });
       const data = await res.json();
       const en = Array.isArray(data.en) ? data.en : [];
-      need.forEach((zh, i) => transCache.set(zh, en[i] || zh));
-    } catch { need.forEach(zh => transCache.set(zh, zh)); }
+      // Never cache the Chinese as its own translation: that used to make an
+      // English session display Chinese permanently, with no way to retry.
+      // Leaving the entry out keeps the next render asking for it again.
+      need.forEach((zh, i) => {
+        const translated = typeof en[i] === 'string' ? en[i].trim() : '';
+        if (translated && translated !== zh) transCache.set(zh, translated);
+      });
+    } catch { /* leave the cache untouched so the next render retries */ }
   }
   bis.forEach(b => { if (!b.en && transCache.has(b.zh)) b.en = transCache.get(b.zh); });
   if (currentResult) { renderResults(currentResult); selectAgentSection(selectedAgent); }
@@ -442,7 +453,7 @@ async function ensureEnglish() {
 // ── Analyze flow ───────────────────────────────────────────────────────────
 function onAnalyzeClick() {
   const input = document.getElementById('hn-input').value.trim();
-  if (!input) { showError(L({ zh: '貼個 HN 連結、文章網址，或一段文字', en: 'Paste a HN link, an article URL, or some text' })); return; }
+  if (!input) { showError(L({ zh: '贴个 HN 链接、文章网址，或一段文字', en: 'Paste a HN link, an article URL, or some text' })); return; }
   hideError();
   startAnalysis(resolveInput(input));
 }
@@ -476,8 +487,8 @@ function prepareAnalysisUi(input, restoring = false) {
     kind: restoring ? 'restore' : 'request',
     level: 'info',
     message: restoring
-      ? { zh: '正在恢復先前的分析現場', en: 'Restoring the previous analysis' }
-      : { zh: `開始分析 ${input.kind}`, en: `Analysis started · ${input.kind}` },
+      ? { zh: '正在恢复先前的分析现场', en: 'Restoring the previous analysis' }
+      : { zh: `开始分析 ${input.kind}`, en: `Analysis started · ${input.kind}` },
     detail: restoring ? String(input.analysisId || '') : String(input.value || ''),
   });
   Object.keys(agentStatus).forEach(k => delete agentStatus[k]);
@@ -503,7 +514,7 @@ async function startAnalysis(input) {
   prepareAnalysisUi(input);
   const body = {};
   body[input.kind] = input.kind === 'text' ? input.value.slice(0, 8000) : input.value;
-  // Send the user's saved terms so 小詞 skips what they already know.
+  // Send the user's saved terms so 小词 skips what they already know.
   const kb = kbLoad().map(i => String(i.term).replace(/,/g, ' ')).filter(Boolean).slice(0, 80);
   if (kb.length) body.kb = kb;
   // If the user has arranged the office (drag/pods/mode/disable), pass the
@@ -528,7 +539,7 @@ async function startAnalysis(input) {
       agent: 'system',
       kind: 'error',
       level: 'error',
-      message: { zh: '無法建立分析任務', en: 'Could not create the analysis job' },
+      message: { zh: '无法建立分析任务', en: 'Could not create the analysis job' },
       detail: error instanceof Error ? error.message : String(error),
     });
     showError(error instanceof Error ? error.message : String(error));
@@ -579,7 +590,7 @@ async function pollAnalysis(analysisId, restoring) {
       if (response.status === 404) {
         clearAnalysisUrl();
         setPhase('input');
-        showError(L({ zh: '運行記錄已過期，請重新開始分析。', en: 'This run has expired. Start a new analysis.' }));
+        showError(L({ zh: '运行记录已过期，请重新开始分析。', en: 'This run has expired. Start a new analysis.' }));
         return;
       }
       if (!response.ok) throw new Error(`Status request failed (HTTP ${response.status})`);
@@ -606,7 +617,7 @@ async function pollAnalysis(analysisId, restoring) {
         return;
       }
       if (snapshot.phase === 'error') {
-        showError(snapshot.error || L({ zh: 'Workflow 執行失敗', en: 'Workflow failed' }));
+        showError(snapshot.error || L({ zh: 'Workflow 执行失败', en: 'Workflow failed' }));
         return;
       }
       await pollDelay(500);
@@ -620,7 +631,7 @@ async function pollAnalysis(analysisId, restoring) {
         agent: 'system',
         kind: 'reconnect',
         level: 'warn',
-        message: { zh: `${seconds} 秒後重連`, en: `Reconnecting in ${seconds}s` },
+        message: { zh: `${seconds} 秒后重连`, en: `Reconnecting in ${seconds}s` },
         detail: error instanceof Error ? error.message : String(error),
       });
       await pollDelay(seconds * 1000);
@@ -638,7 +649,7 @@ function handleSSEEvent(ev, options = {}) {
         delete sandboxDownReasons[a];
         if (window.pixelAgents && !options.restoring) window.pixelAgents.setAgentState(a, 'idle');
       });
-      // Kick off the office choreography: 隊長 walks over to assign the work.
+      // Kick off the office choreography: 队长 walks over to assign the work.
       if (window.pixelAgents && !options.restoring) window.pixelAgents.startRun();
       break;
     case 'status':
@@ -711,10 +722,10 @@ function handleSSEEvent(ev, options = {}) {
       if (window.pixelAgents?.addUsage) window.pixelAgents.addUsage(ev.agent, ev.tokens);
       break;
     case 'escalate':
-      // 💸 省錢漸進: after running sum+ctx first, the backend decides whether the
+      // 💸 省钱渐进: after running sum+ctx first, the backend decides whether the
       // article is worth reading. 'go' → wake the standby candidates (jargon+comments)
       // from the dining corner into the readers zone; 'stop' → they stay asleep and
-      // the run wraps with just sum+ctx→synth→隊長.
+      // the run wraps with just sum+ctx→synth→队长.
       if (!options.restoring && window.pixelAgents?.escalateDecision) {
         window.pixelAgents.escalateDecision(ev.decision === 'go' ? 'go' : 'stop');
       }
@@ -736,7 +747,7 @@ function handleSSEEvent(ev, options = {}) {
         reportReady = true;
         revealReport();
       } else {
-        armReport();                // …until 隊長 walks to the whiteboard to present
+        armReport();                // …until 队长 walks to the whiteboard to present
       }
       break;
     case 'error':
@@ -745,7 +756,7 @@ function handleSSEEvent(ev, options = {}) {
         const current = agentStatus[ev.agent]?.state;
         if (sandboxDown) {
           sandboxDownAgents.add(ev.agent);
-          sandboxDownReasons[ev.agent] = ev.message ? { zh: ev.message, en: ev.message } : { zh: 'sandbox/runtime 不在線', en: 'sandbox/runtime offline' };
+          sandboxDownReasons[ev.agent] = ev.message ? { zh: ev.message, en: ev.message } : { zh: 'sandbox/runtime 不在线', en: 'sandbox/runtime offline' };
         }
         agentStatus[ev.agent] = {
           ...agentStatus[ev.agent],
@@ -754,7 +765,7 @@ function handleSSEEvent(ev, options = {}) {
           state: 'error',
           label: sandboxDown
             ? { zh: 'sandbox 睡著了 💤', en: 'sandbox asleep 💤' }
-            : { zh: 'Agent 呼叫失敗', en: 'Agent call failed' },
+            : { zh: 'Agent 调用失败', en: 'Agent call failed' },
         };
         const alreadyTraced = (agentTraces[ev.agent] || []).some(entry =>
           entry.phase === 'error' && entry.content === ev.message
@@ -763,8 +774,8 @@ function handleSSEEvent(ev, options = {}) {
           pushAgentTrace(ev.agent, {
             phase: 'error',
             label: sandboxDown
-              ? { zh: '執行環境不可用', en: 'Runtime unavailable' }
-              : { zh: 'Agent 執行錯誤', en: 'Agent execution error' },
+              ? { zh: '执行环境不可用', en: 'Runtime unavailable' }
+              : { zh: 'Agent 执行错误', en: 'Agent execution error' },
             content: ev.message,
             at: ev.at || new Date().toISOString(),
             call_id: 'workflow-error',
@@ -783,7 +794,7 @@ function handleSSEEvent(ev, options = {}) {
         agentStatus.orch = {
           ...agentStatus.orch,
           state: 'error',
-          label: { zh: '編排失敗，已切換備援', en: 'Orchestration failed; using fallback' },
+          label: { zh: '编排失败，已切换备援', en: 'Orchestration failed; using fallback' },
           error: ev.message,
           errorKind: ev.kind,
         };
@@ -818,15 +829,15 @@ function renderWorkflowInspector() {
 }
 
 // The report is filled as soon as the result arrives, but stays hidden until
-// 隊長 walks to the whiteboard to present it (pixel present handler → revealReport).
+// 队长 walks to the whiteboard to present it (pixel present handler → revealReport).
 //
 // Ordering guarantee: the office is the single source of truth for WHEN the
 // report is revealed. The result SSE arrives when the *backend* finishes — which
 // is typically well before the office finishes its choreography (readers deliver
-// → 合成 visibly integrates → hands the report to 隊長 → 隊長 walks to the board).
+// → 合成 visibly integrates → hands the report to 队长 → 队长 walks to the board).
 // Revealing on result arrival (or on a short timer) is exactly the desync we are
 // fixing: it flashes the report while 合成 still shows "整合中". So the ONLY normal
-// reveal trigger is the pixel present handler (revealReport), fired when 隊長
+// reveal trigger is the pixel present handler (revealReport), fired when 队长
 // actually reaches the whiteboard. The timer below is a pure soft-lock backstop —
 // long enough that it can never race a healthy run to completion, so it only ever
 // fires if the office genuinely never reached the present step.
@@ -860,7 +871,7 @@ function recordActivityEvent(ev) {
         kind: 'workflow_plan',
         level: 'info',
         message: {
-          zh: `已建立第 ${ev.attempt}/${ev.max_attempts} 輪執行拓撲`,
+          zh: `已建立第 ${ev.attempt}/${ev.max_attempts} 轮执行拓扑`,
           en: `Execution graph ready for attempt ${ev.attempt}/${ev.max_attempts}`,
         },
         detail: safeActivityJson({
@@ -947,8 +958,8 @@ function recordActivityEvent(ev) {
         kind: isBriefing ? 'briefing' : 'section',
         level: 'success',
         message: isBriefing
-          ? { zh: '任務簡報已建立', en: 'Task briefing created' }
-          : { zh: '結構化結果已就緒', en: 'Structured result ready' },
+          ? { zh: '任务简报已建立', en: 'Task briefing created' }
+          : { zh: '结构化结果已就绪', en: 'Structured result ready' },
         detail: safeActivityJson(isBriefing ? ev.data.briefing : ev.data),
       });
       break;
@@ -960,8 +971,8 @@ function recordActivityEvent(ev) {
         kind: 'usage',
         level: 'info',
         message: ev.total !== undefined
-          ? { zh: `累計約 ${ev.total} tokens`, en: `About ${ev.total} tokens total` }
-          : { zh: `本次約 ${ev.tokens} tokens`, en: `About ${ev.tokens} tokens` },
+          ? { zh: `累计约 ${ev.total} tokens`, en: `About ${ev.total} tokens total` }
+          : { zh: `本次约 ${ev.tokens} tokens`, en: `About ${ev.tokens} tokens` },
       });
       break;
     case 'escalate':
@@ -971,8 +982,8 @@ function recordActivityEvent(ev) {
         kind: 'decision',
         level: ev.decision === 'go' ? 'success' : 'warn',
         message: ev.decision === 'go'
-          ? { zh: '決定升級為完整分析', en: 'Escalating to the full analysis' }
-          : { zh: '決定停止後續昂貴步驟', en: 'Stopping the remaining expensive steps' },
+          ? { zh: '决定升级为完整分析', en: 'Escalating to the full analysis' }
+          : { zh: '决定停止后续昂贵步骤', en: 'Stopping the remaining expensive steps' },
         detail: ev.reason,
       });
       break;
@@ -983,7 +994,7 @@ function recordActivityEvent(ev) {
         kind: 'retry',
         level: 'warn',
         message: {
-          zh: `${ev.delay_seconds} 秒後重跑整個流程（第 ${ev.attempt}/${ev.max_attempts} 輪）`,
+          zh: `${ev.delay_seconds} 秒后重跑整个流程（第 ${ev.attempt}/${ev.max_attempts} 轮）`,
           en: `Retrying the workflow in ${ev.delay_seconds}s (attempt ${ev.attempt}/${ev.max_attempts})`,
         },
         detail: ev.reason,
@@ -996,7 +1007,7 @@ function recordActivityEvent(ev) {
         agent: 'orch',
         kind: 'result',
         level: 'success',
-        message: { zh: '分析完成，最終報告已就緒', en: 'Analysis complete; final report ready' },
+        message: { zh: '分析完成，最终报告已就绪', en: 'Analysis complete; final report ready' },
       });
       break;
     case 'error':
@@ -1008,8 +1019,8 @@ function recordActivityEvent(ev) {
         message: ev.kind === 'sandbox_unavailable'
           ? { zh: 'Agent runtime 不可用', en: 'Agent runtime unavailable' }
           : ev.kind === 'orchestration_error'
-            ? { zh: '編排失敗，切換備援', en: 'Orchestration failed; using fallback' }
-            : { zh: '執行錯誤', en: 'Execution error' },
+            ? { zh: '编排失败，切换备援', en: 'Orchestration failed; using fallback' }
+            : { zh: '执行错误', en: 'Execution error' },
         detail: ev.message,
       });
       break;
@@ -1019,7 +1030,7 @@ function recordActivityEvent(ev) {
         agent: 'system',
         kind: ev.event || 'event',
         level: 'warn',
-        message: { zh: '未識別事件', en: 'Unknown event' },
+        message: { zh: '未识别事件', en: 'Unknown event' },
         detail: safeActivityJson(ev),
       });
   }
@@ -1100,7 +1111,7 @@ function activityMatches(entry) {
 }
 
 function activityAgentLabel(agent) {
-  if (agent === 'system') return L({ zh: '系統', en: 'System' });
+  if (agent === 'system') return L({ zh: '系统', en: 'System' });
   return L(AGENT_NAMES[agent]) || agent;
 }
 
@@ -1118,7 +1129,7 @@ function renderActivityLog() {
   const filtered = activityEntries.filter(activityMatches);
   stream.innerHTML = filtered.length
     ? filtered.map(activityEntryHtml).join('')
-    : `<div class="activity-empty">${esc(L({ zh: '這個篩選條件下還沒有事件。', en: 'No events match this filter yet.' }))}</div>`;
+    : `<div class="activity-empty">${esc(L({ zh: '这个筛选条件下还没有事件。', en: 'No events match this filter yet.' }))}</div>`;
   document.getElementById('activity-panel')?.classList.toggle('has-entries', activityEntries.length > 0);
   const count = document.getElementById('activity-count');
   if (count) count.textContent = activityAgentFilter === 'all' && activityKindFilter === 'all'
@@ -1178,7 +1189,7 @@ function syncActivityPanel() {
   panel.classList.toggle('collapsed', activityCollapsed);
   button.setAttribute('aria-expanded', String(!activityCollapsed));
   button.textContent = activityCollapsed
-    ? L({ zh: '展開', en: 'Expand' })
+    ? L({ zh: '展开', en: 'Expand' })
     : L({ zh: '收起', en: 'Collapse' });
 }
 
@@ -1189,7 +1200,7 @@ function pushAgentTrace(id, entry) {
   const normalized = {
     call_id: entry.call_id || 'workflow',
     phase: entry.phase || 'progress',
-    label: entry.label || { zh: '處理中', en: 'Processing' },
+    label: entry.label || { zh: '处理中', en: 'Processing' },
     at: entry.at || new Date().toISOString(),
     attempt: entry.attempt,
     will_retry: Boolean(entry.will_retry),
@@ -1220,17 +1231,17 @@ function refreshOpenAgentPanel(id) {
 function agentPanelStatus(id) {
   const st = agentStatus[id];
   if (st?.state === 'error') {
-    return `${L({ zh: '失敗', en: 'Failed' })} · ${L(st.label) || st.error || ''} ✕`;
+    return `${L({ zh: '失败', en: 'Failed' })} · ${L(st.label) || st.error || ''} ✕`;
   }
   if (st?.error && st?.state === 'done') {
-    return `${L(st.label) || L({ zh: '已完成', en: 'Done' })} · ${L({ zh: '含錯誤／備援', en: 'with errors/fallback' })} ⚠`;
+    return `${L(st.label) || L({ zh: '已完成', en: 'Done' })} · ${L({ zh: '含错误／备援', en: 'with errors/fallback' })} ⚠`;
   }
   if (st?.label) {
     const suffix = st.state === 'done' ? ' ✓' : st.state === 'running' ? ' …' : '';
     return `${L(st.label)}${suffix}`;
   }
   if (currentResult || agentOutputs[id]) return L({ zh: '已完成 ✓', en: 'Done ✓' });
-  return L({ zh: '等待輸入／事件會自動更新', en: 'Waiting for input · updates appear live' });
+  return L({ zh: '等待输入／事件会自动更新', en: 'Waiting for input · updates appear live' });
 }
 
 function openAgentPanel(id) {
@@ -1258,7 +1269,7 @@ function closeAgentPanel() {
 }
 
 function agentPanelEmpty(message) {
-  return `<p class="muted">${esc(message || L({ zh: '尚未產生結構化結果；這裡會自動更新，不用再點一次。', en: 'No structured result yet. This panel updates automatically.' }))}</p>`;
+  return `<p class="muted">${esc(message || L({ zh: '尚未产生结构化结果；这里会自动更新，不用再点一次。', en: 'No structured result yet. This panel updates automatically.' }))}</p>`;
 }
 
 function agentPanelBody(id) {
@@ -1274,7 +1285,7 @@ function agentTracePanel(id) {
     ? [...entries, {
         call_id: 'status-error',
         phase: 'error',
-        label: { zh: '錯誤原因', en: 'Error reason' },
+        label: { zh: '错误原因', en: 'Error reason' },
         content: error,
         at: new Date().toISOString(),
       }]
@@ -1284,25 +1295,25 @@ function agentTracePanel(id) {
   if (!all.length) {
     const note = assignment
       ? `${L(ASSIGN_ACTION_LABEL[assignment.action]) || assignment.action} · ${L(assignment.reason)}`
-      : L({ zh: '尚未收到這位 Agent 的執行事件；有新事件時會即時出現在這裡。', en: 'No execution events yet. New events will appear here live.' });
+      : L({ zh: '尚未收到这位 Agent 的执行事件；有新事件时会即时出现在这里。', en: 'No execution events yet. New events will appear here live.' });
     content = `<div class="agent-trace-empty">${esc(note)}</div>`;
   } else {
     content = all.map(agentTraceEntry).join('');
   }
   return `<section class="agent-panel-section">
-    <h3>${esc(L({ zh: '輸入 · 執行過程 · 原始輸出', en: 'Input · execution · raw output' }))}</h3>
+    <h3>${esc(L({ zh: '输入 · 执行过程 · 原始输出', en: 'Input · execution · raw output' }))}</h3>
     <div class="agent-trace-list">${content}</div>
   </section>`;
 }
 
 function agentTraceEntry(entry) {
   const phaseLabel = entry.phase === 'error' && entry.will_retry
-    ? { zh: '重試', en: 'Retry' }
+    ? { zh: '重试', en: 'Retry' }
     : ({
-    input: { zh: '輸入', en: 'Input' },
-    progress: { zh: '過程', en: 'Progress' },
-    output: { zh: '輸出', en: 'Output' },
-    error: { zh: '錯誤', en: 'Error' },
+    input: { zh: '输入', en: 'Input' },
+    progress: { zh: '过程', en: 'Progress' },
+    output: { zh: '输出', en: 'Output' },
+    error: { zh: '错误', en: 'Error' },
   }[entry.phase] || { zh: entry.phase, en: entry.phase });
   let time = '';
   try {
@@ -1312,7 +1323,7 @@ function agentTraceEntry(entry) {
   const detail = content
     ? `<details class="agent-trace-detail" ${entry.phase === 'input' || entry.phase === 'output' || entry.phase === 'error' ? 'open' : ''}>
         <summary>${esc(L({
-          zh: `${content.length} 字${entry.truncated ? `（原始 ${entry.original_chars || '?'} 字，畫面已截短）` : ''}`,
+          zh: `${content.length} 字${entry.truncated ? `（原始 ${entry.original_chars || '?'} 字，画面已截短）` : ''}`,
           en: `${content.length} chars${entry.truncated ? ` (trimmed from ${entry.original_chars || '?'})` : ''}`,
         }))}</summary>
         <pre>${esc(content)}</pre>
@@ -1343,7 +1354,7 @@ function agentStructuredResult(id) {
     case 'jargon': {
       const jargon = r?.jargon || agentOutputs.jargon;
       body = (jargon && jargon.length) ? `${trust}<ul>${jargon.map(t =>
-        `<li><strong class="mono">${esc(t.term)}</strong>（${esc(t.zh_term)}）— ${esc(L(t.explain))}</li>`).join('')}</ul>` : `${trust}${agentPanelEmpty()}`;
+        `<li><strong class="mono">${esc(t.term)}</strong><span class="bi-zh">（${esc(t.zh_term)}）</span> — ${esc(L(t.explain))}</li>`).join('')}</ul>` : `${trust}${agentPanelEmpty()}`;
       break;
     }
     case 'comments': {
@@ -1363,7 +1374,7 @@ function agentStructuredResult(id) {
       body = r
         ? ((r.editor_note && (r.editor_note.zh || r.editor_note.en))
             ? `${trust}<p>📋 ${esc(L(r.editor_note))}</p>`
-            : `${trust}<p class="muted">${esc(L({ zh: '已檢查各組輸出；沒有額外編輯註記。', en: 'Reviewed every section; no extra editor note was added.' }))}</p>`)
+            : `${trust}<p class="muted">${esc(L({ zh: '已检查各组输出；没有额外编辑注记。', en: 'Reviewed every section; no extra editor note was added.' }))}</p>`)
         : agentPanelEmpty();
       break;
     case 'orch': {
@@ -1379,13 +1390,13 @@ function agentStructuredResult(id) {
       body = agentPanelEmpty();
   }
   return `<section class="agent-panel-section agent-result-section">
-    <h3>${esc(L({ zh: '結構化結果', en: 'Structured result' }))}</h3>
+    <h3>${esc(L({ zh: '结构化结果', en: 'Structured result' }))}</h3>
     ${body}
   </section>`;
 }
 
-const ASSIGN_ACTION_LABEL = { run: { zh: '開工', en: 'Run' }, skip: { zh: '略過', en: 'Skip' }, reuse: { zh: '快取', en: 'Cache' } };
-const KB_KNOWN_LABEL = { zh: '已會', en: 'Known' };
+const ASSIGN_ACTION_LABEL = { run: { zh: '开工', en: 'Run' }, skip: { zh: '略过', en: 'Skip' }, reuse: { zh: '缓存', en: 'Cache' } };
+const KB_KNOWN_LABEL = { zh: '已会', en: 'Known' };
 const SAVE_LABEL = { zh: '＋ 收藏', en: '+ Save' };
 const SAVED_LABEL = { zh: '✓ 已收藏', en: '✓ Saved' };
 
@@ -1394,9 +1405,9 @@ function agentPanelCaptain(r) {
   const rows = (briefing?.assignments || []).map(a =>
     `<li><strong>${esc(agentLabel(a.agent))}</strong>：${esc(L(ASSIGN_ACTION_LABEL[a.action]) || a.action)} — ${esc(L(a.reason))}</li>`
   ).join('');
-  return `<p class="muted">${esc(L({ zh: '讀題、分派任務給組員，再彙整成果。', en: 'Reads the brief, assigns tasks to the team, then compiles the results.' }))}</p>
+  return `<p class="muted">${esc(L({ zh: '读题、分派任务给组员，再汇整成果。', en: 'Reads the brief, assigns tasks to the team, then compiles the results.' }))}</p>
     ${briefing ? `<ul>${rows}</ul>` : ''}
-    <p>${esc(L({ zh: `術語 ${(r.jargon || []).length} 個 · 留言派別 ${((r.comment_digest || {}).camps || []).length} 組`, en: `${(r.jargon || []).length} terms · ${((r.comment_digest || {}).camps || []).length} camps` }))}</p>`;
+    <p>${esc(L({ zh: `术语 ${(r.jargon || []).length} 个 · 留言派别 ${((r.comment_digest || {}).camps || []).length} 组`, en: `${(r.jargon || []).length} terms · ${((r.comment_digest || {}).camps || []).length} camps` }))}</p>`;
 }
 
 // ── Results rendering ──────────────────────────────────────────────────────
@@ -1408,10 +1419,10 @@ function renderResults(r) {
   renderSummary(r.summary);
   renderCommentDigest(r.comment_digest, r.item_id, r.flags);
   renderContext(r);
-  renderBriefing(r);     // 隊長 (also opened by clicking the whiteboard)
-  renderSynth(r);        // 合成 — distinct from 小導
+  renderBriefing(r);     // 队长 (also opened by clicking the whiteboard)
+  renderSynth(r);        // 合成 — distinct from 小导
   renderMetaBar(r);
-  selectAgentSection('jargon');           // default-open panel = 小詞
+  selectAgentSection('jargon');           // default-open panel = 小词
 }
 
 function clearReportPanels() {
@@ -1432,31 +1443,31 @@ function renderWhiteboardVerdict(r) {
   const tier = L(TIER_LABEL[v.tier]) || v.tier || '';
   board.dataset.worth = v.worth_reading || '';
   board.innerHTML = `
-    <span class="wbv-k">${esc(L({ zh: '隊長裁定', en: "Orchestrator's verdict" }))}</span>
+    <span class="wbv-k">${esc(L({ zh: '队长裁定', en: "Orchestrator's verdict" }))}</span>
     <span class="wbv-main">${esc(worth)}</span>
     <span class="wbv-sub">${esc(tier)}</span>
     <span class="wbv-why">${esc(L(v.why_frontpage))}</span>`;
 }
 
 const SOURCE_BADGE = {
-  hn:      { label: { zh: 'HN 討論', en: 'HN Discussion' }, cls: 'badge-muted' },
+  hn:      { label: { zh: 'HN 讨论', en: 'HN Discussion' }, cls: 'badge-muted' },
   article: { label: { zh: '文章', en: 'Article' },          cls: 'badge-muted' },
-  text:    { label: { zh: '貼上的文字', en: 'Pasted Text' }, cls: 'badge-muted' },
+  text:    { label: { zh: '贴上的文字', en: 'Pasted Text' }, cls: 'badge-muted' },
 };
 const WORTH_LABEL = {
-  high:   { zh: '強烈推薦', en: 'Highly Recommended' },
+  high:   { zh: '强烈推荐', en: 'Highly Recommended' },
   medium: { zh: '值得一看', en: 'Worth Reading' },
-  low:    { zh: '可略過', en: 'Can Skip' },
+  low:    { zh: '可略过', en: 'Can Skip' },
 };
 const TIER_LABEL = {
   '10s': { zh: '10 秒看完', en: '10-second read' },
-  '1min': { zh: '1 分鐘', en: '1-minute read' },
-  deep: { zh: '深讀', en: 'Deep read' },
+  '1min': { zh: '1 分钟', en: '1-minute read' },
+  deep: { zh: '深读', en: 'Deep read' },
 };
 const WEIGHT_LABEL = {
   majority: { zh: '主流', en: 'Majority' },
-  'vocal-minority': { zh: '少數派', en: 'Vocal Minority' },
-  fringe: { zh: '邊緣觀點', en: 'Fringe' },
+  'vocal-minority': { zh: '少数派', en: 'Vocal Minority' },
+  fringe: { zh: '边缘观点', en: 'Fringe' },
 };
 
 // Slim, always-visible verdict bar between the office and the panels.
@@ -1472,24 +1483,24 @@ function renderVerdictBar(v, source, flags) {
     <span class="badge badge-muted">${esc(tl)}</span>
     ${sb ? `<span class="badge ${sb.cls}">${esc(L(sb.label))}</span>` : ''}
     ${flags?.low_confidence ? `<span class="badge badge-amber">${esc(L({ zh: '低信心', en: 'Low confidence' }))}</span>` : ''}
-    ${flags?.comments_sampled ? `<span class="badge badge-muted">${esc(L({ zh: '留言採樣', en: 'Comments sampled' }))}</span>` : ''}
-    ${(flags?.fallback_agents || []).length ? `<span class="badge badge-amber">${esc(L({ zh: '含備援', en: 'Includes fallback' }))}</span>` : ''}
+    ${flags?.comments_sampled ? `<span class="badge badge-muted">${esc(L({ zh: '留言采样', en: 'Comments sampled' }))}</span>` : ''}
+    ${(flags?.fallback_agents || []).length ? `<span class="badge badge-amber">${esc(L({ zh: '含备援', en: 'Includes fallback' }))}</span>` : ''}
     <span class="vb-why">${esc(L(v.why_frontpage))}</span>`;
 }
 
-// 小導 (Context) — should I read this & why. Verdict + why only (no editor note).
+// 小导 (Context) — should I read this & why. Verdict + why only (no editor note).
 function renderContext(r) {
   const v = r.verdict || {};
   document.getElementById('context-content').innerHTML = `
     ${sectionTrustNote('ctx')}
-    <div class="brief-row"><span class="brief-k mono">${esc(L({ zh: '值得讀嗎', en: 'Worth reading?' }))}</span>
+    <div class="brief-row"><span class="brief-k mono">${esc(L({ zh: '值得读吗', en: 'Worth reading?' }))}</span>
       <span class="badge badge-amber">${esc(L(WORTH_LABEL[v.worth_reading]) || v.worth_reading || '')}</span>
       <span class="badge badge-muted">${esc(L(TIER_LABEL[v.tier]) || v.tier || '')}</span></div>
     <p class="verdict-why bi-zh">${esc(v.why_frontpage?.zh || '')}</p>
     <p class="verdict-why bi-en">${esc(v.why_frontpage?.en || '')}</p>`;
 }
 
-// 隊長 (Orchestrator) — the structured briefing shown on the whiteboard.
+// 队长 (Orchestrator) — the structured briefing shown on the whiteboard.
 function renderBriefing(r) {
   const v = r.verdict || {};
   const nJ = (r.jargon || []).length;
@@ -1501,13 +1512,13 @@ function renderBriefing(r) {
   document.getElementById('briefing-content').innerHTML = `
     <p class="brief-title bi-zh">${esc(r.title?.zh || '')}</p>
     <p class="brief-title bi-en">${esc(r.title?.en || '')}</p>
-    <div class="brief-row"><span class="brief-k mono">${esc(L({ zh: '結論', en: 'Verdict' }))}</span>
+    <div class="brief-row"><span class="brief-k mono">${esc(L({ zh: '结论', en: 'Verdict' }))}</span>
       <span class="badge badge-amber">${esc(L(WORTH_LABEL[v.worth_reading]) || v.worth_reading || '')}</span>
       <span class="badge badge-muted">${esc(L(TIER_LABEL[v.tier]) || v.tier || '')}</span></div>
-    <div class="brief-row"><span class="brief-k mono">${esc(L({ zh: '一句話', en: 'TL;DR' }))}</span>
+    <div class="brief-row"><span class="brief-k mono">${esc(L({ zh: '一句话', en: 'TL;DR' }))}</span>
       <span class="brief-v bi-zh">${esc(r.summary?.tldr?.zh || '')}</span>
       <span class="brief-v bi-en">${esc(r.summary?.tldr?.en || '')}</span></div>
-    <div class="brief-row"><span class="brief-k mono">${esc(r.source === 'hn' ? L({ zh: '為何上首頁', en: 'Why on the front page' }) : L({ zh: '為什麼值得讀', en: 'Why worth reading' }))}</span>
+    <div class="brief-row"><span class="brief-k mono">${esc(r.source === 'hn' ? L({ zh: '为何上首页', en: 'Why on the front page' }) : L({ zh: '为什么值得读', en: 'Why worth reading' }))}</span>
       <span class="brief-v bi-zh">${esc(v.why_frontpage?.zh || '')}</span>
       <span class="brief-v bi-en">${esc(v.why_frontpage?.en || '')}</span></div>
     ${briefing ? `<div class="captain-route">
@@ -1516,20 +1527,20 @@ function renderBriefing(r) {
       ${agentStatusTable(assignments, flags.agent_sources || {}, r)}
     </div>` : ''}
     ${trustBadges(flags)}
-    <div class="brief-index mono small muted">${esc(L({ zh: `本次產出：術語 ${nJ} 個 · 留言 ${nC} 派 · 重點 ${nK} 條`, en: `This run: ${nJ} terms · ${nC} camps · ${nK} key points` }))}</div>
-    <p class="muted small">${esc(L({ zh: '點上方各小幫手或目錄列看細節', en: 'Click a teammate or row above for details' }))}</p>`;
+    <div class="brief-index mono small muted">${esc(L({ zh: `本次产出：术语 ${nJ} 个 · 留言 ${nC} 派 · 重点 ${nK} 条`, en: `This run: ${nJ} terms · ${nC} camps · ${nK} key points` }))}</div>
+    <p class="muted small">${esc(L({ zh: '点上方各小帮手或目录列看细节', en: 'Click a teammate or row above for details' }))}</p>`;
 
   document.querySelectorAll('[data-jump-agent]').forEach(btn => {
     btn.addEventListener('click', () => selectAgentSection(btn.dataset.jumpAgent));
   });
 }
 
-const CAPTAIN_ASSIGNS = { zh: '隊長分派', en: "Orchestrator's Assignments" };
+const CAPTAIN_ASSIGNS = { zh: '队长分派', en: "Orchestrator's Assignments" };
 const MODE_LABEL = {
-  real: { zh: '真實分析', en: 'Real analysis' },
-  fallback: { zh: '備援', en: 'Fallback' },
-  skipped: { zh: '略過', en: 'Skipped' },
-  cache: { zh: '快取', en: 'Cache' },
+  real: { zh: '真实分析', en: 'Real analysis' },
+  fallback: { zh: '备援', en: 'Fallback' },
+  skipped: { zh: '略过', en: 'Skipped' },
+  cache: { zh: '缓存', en: 'Cache' },
 };
 
 function briefNavButton(a, source) {
@@ -1545,7 +1556,7 @@ function briefNavButton(a, source) {
 
 function agentStatusTable(assignments, sources, r) {
   const rows = assignments.map(a => statusRow(a.agent, sources[a.agent], a.reason, r)).join('');
-  const synthRow = statusRow('synth', sources.synth, { zh: '整合各組產出並做品管。', en: 'Integrates every teammate’s output and does QA.' }, r);
+  const synthRow = statusRow('synth', sources.synth, { zh: '整合各组产出并做品管。', en: 'Integrates every teammate’s output and does QA.' }, r);
   return `<div class="agent-status-table">
     ${rows}${synthRow}
   </div>`;
@@ -1553,7 +1564,7 @@ function agentStatusTable(assignments, sources, r) {
 
 function statusRow(agent, source, fallbackReason, r) {
   const mode = source?.mode || 'real';
-  const reason = L(source?.reason) || L(fallbackReason) || L({ zh: '等待狀態回報。', en: 'Waiting for status.' });
+  const reason = L(source?.reason) || L(fallbackReason) || L({ zh: '等待状态回报。', en: 'Waiting for status.' });
   return `<button class="agent-status-row ${esc(mode)}" data-jump-agent="${esc(agent)}">
     <span class="agent-status-name">${esc(agentLabel(agent))}</span>
     <span class="agent-status-mode">${esc(L(MODE_LABEL[mode]) || mode)}</span>
@@ -1563,19 +1574,19 @@ function statusRow(agent, source, fallbackReason, r) {
 }
 
 function agentOutputCount(agent, r) {
-  if (agent === 'jargon') return L({ zh: `${(r.jargon || []).length} 詞`, en: `${(r.jargon || []).length} terms` });
+  if (agent === 'jargon') return L({ zh: `${(r.jargon || []).length} 词`, en: `${(r.jargon || []).length} terms` });
   if (agent === 'comments') return L({ zh: `${((r.comment_digest || {}).camps || []).length} 派`, en: `${((r.comment_digest || {}).camps || []).length} camps` });
-  if (agent === 'sum') return L({ zh: `${((r.summary || {}).key_points || []).length} 重點`, en: `${((r.summary || {}).key_points || []).length} points` });
+  if (agent === 'sum') return L({ zh: `${((r.summary || {}).key_points || []).length} 重点`, en: `${((r.summary || {}).key_points || []).length} points` });
   if (agent === 'ctx') return r.verdict?.tier ? (L(TIER_LABEL[r.verdict.tier]) || r.verdict.tier) : L({ zh: '裁定', en: 'Verdict' });
-  if (agent === 'synth') return (r.editor_note?.zh || r.editor_note?.en) ? L({ zh: '有註記', en: 'Has note' }) : L({ zh: '完成', en: 'Done' });
+  if (agent === 'synth') return (r.editor_note?.zh || r.editor_note?.en) ? L({ zh: '有注记', en: 'Has note' }) : L({ zh: '完成', en: 'Done' });
   return '';
 }
 
 function trustBadges(flags) {
   const bits = [];
-  if (flags?.comments_sampled) bits.push(L({ zh: '留言採樣：只看高訊號串', en: 'Comments sampled: high-signal threads only' }));
-  if (flags?.fallback_agents?.length) bits.push(L({ zh: `備援內容：${flags.fallback_agents.map(agentLabel).join('、')}`, en: `Fallback content: ${flags.fallback_agents.map(agentLabel).join(', ')}` }));
-  if (flags?.skipped_agents?.length) bits.push(L({ zh: `隊長略過：${flags.skipped_agents.map(agentLabel).join('、')}`, en: `Orchestrator skipped: ${flags.skipped_agents.map(agentLabel).join(', ')}` }));
+  if (flags?.comments_sampled) bits.push(L({ zh: '留言采样：只看高信号串', en: 'Comments sampled: high-signal threads only' }));
+  if (flags?.fallback_agents?.length) bits.push(L({ zh: `备援内容：${flags.fallback_agents.map(agentLabel).join('、')}`, en: `Fallback content: ${flags.fallback_agents.map(agentLabel).join(', ')}` }));
+  if (flags?.skipped_agents?.length) bits.push(L({ zh: `队长略过：${flags.skipped_agents.map(agentLabel).join('、')}`, en: `Orchestrator skipped: ${flags.skipped_agents.map(agentLabel).join(', ')}` }));
   if (!bits.length) return '';
   return `<div class="trust-notes">${bits.map(b => `<span class="badge badge-muted">${esc(b)}</span>`).join('')}</div>`;
 }
@@ -1589,10 +1600,10 @@ function sectionTrustNote(agent) {
   const source = flags.agent_sources?.[agent] || fallbackSource(agent, flags);
   if (!source) return '';
   const spec = {
-    real: { label: { zh: '真實分析', en: 'Real analysis' }, cls: 'real' },
-    cache: { label: { zh: '使用快取', en: 'Using cache' }, cls: 'cache' },
-    fallback: { label: { zh: '備援內容', en: 'Fallback content' }, cls: 'fallback' },
-    skipped: { label: { zh: '隊長略過', en: 'Orchestrator skipped' }, cls: 'skipped' },
+    real: { label: { zh: '真实分析', en: 'Real analysis' }, cls: 'real' },
+    cache: { label: { zh: '使用缓存', en: 'Using cache' }, cls: 'cache' },
+    fallback: { label: { zh: '备援内容', en: 'Fallback content' }, cls: 'fallback' },
+    skipped: { label: { zh: '队长略过', en: 'Orchestrator skipped' }, cls: 'skipped' },
   }[source.mode] || { label: { zh: source.mode, en: source.mode }, cls: 'cache' };
   return `<div class="source-note ${esc(spec.cls)}">
     <span class="source-note-label">${esc(agentLabel(agent))} · ${esc(L(spec.label))}</span>
@@ -1602,15 +1613,15 @@ function sectionTrustNote(agent) {
 
 function fallbackSource(agent, flags) {
   if ((flags.fallback_agents || []).includes(agent)) {
-    return { mode: 'fallback', reason: { zh: '這段沒有順利取得 agent 回覆，使用備援內容。', en: "Didn't get a reply from the agent, using fallback content." } };
+    return { mode: 'fallback', reason: { zh: '这段没有顺利取得 agent 回复，使用备援内容。', en: "Didn't get a reply from the agent, using fallback content." } };
   }
   if ((flags.skipped_agents || []).includes(agent)) {
-    return { mode: 'skipped', reason: { zh: '隊長判斷這段不用呼叫 agent。', en: 'Orchestrator decided this section didn’t need an agent call.' } };
+    return { mode: 'skipped', reason: { zh: '队长判断这段不用调用 agent。', en: 'Orchestrator decided this section didn’t need an agent call.' } };
   }
   return null;
 }
 
-// 合成 (Synthesizer) — integration & QA. Distinct from 小導: this is the editor's
+// 合成 (Synthesizer) — integration & QA. Distinct from 小导: this is the editor's
 // note on what was pruned/merged, not the verdict.
 function renderSynth(r) {
   const en = r.editor_note || {};
@@ -1619,12 +1630,12 @@ function renderSynth(r) {
   const nK = ((r.summary || {}).key_points || []).length;
   document.getElementById('synth-content').innerHTML = `
     ${sectionTrustNote('synth')}
-    <p class="muted small">${esc(L({ zh: '整合與品管：把四位組員的產出去蕪存菁、修跨段落不一致。', en: 'Integration & QA: prunes noise from the four teammates’ output and fixes cross-section inconsistencies.' }))}</p>
-    <div class="brief-index mono small">${esc(L({ zh: `保留：術語 ${nJ} · 重點 ${nK} · 留言派別 ${nC}`, en: `Kept: ${nJ} terms · ${nK} points · ${nC} camps` }))}</div>
+    <p class="muted small">${esc(L({ zh: '整合与品管：把四位组员的产出去芜存菁、修跨段落不一致。', en: 'Integration & QA: prunes noise from the four teammates’ output and fixes cross-section inconsistencies.' }))}</p>
+    <div class="brief-index mono small">${esc(L({ zh: `保留：术语 ${nJ} · 重点 ${nK} · 留言派别 ${nC}`, en: `Kept: ${nJ} terms · ${nK} points · ${nC} camps` }))}</div>
     ${ (en.zh || en.en) ? `
       <p class="editor-note bi-zh">📋 ${esc(en.zh)}</p>
       <p class="editor-note bi-en">📋 ${esc(en.en)}</p>`
-      : `<p class="muted small">${esc(L({ zh: '（這次沒有額外編輯註記）', en: '(No additional editor notes this time)' }))}</p>`}`;
+      : `<p class="muted small">${esc(L({ zh: '（这次没有额外编辑注记）', en: '(No additional editor notes this time)' }))}</p>`}`;
 }
 
 // Progressive: render one section as soon as its agent finishes, and reveal the
@@ -1710,12 +1721,12 @@ function showAgentTooltip(info, pos) {
 function agentHoverDetail(id) {
   const st = agentStatus[id];
   const source = currentResult?.flags?.agent_sources?.[id];
-  const sourceLabels = { real: { zh: '真實分析', en: 'Real analysis' }, cache: { zh: '使用快取', en: 'Using cache' }, fallback: { zh: '備援內容', en: 'Fallback content' }, skipped: { zh: '隊長略過', en: 'Orchestrator skipped' } };
+  const sourceLabels = { real: { zh: '真实分析', en: 'Real analysis' }, cache: { zh: '使用缓存', en: 'Using cache' }, fallback: { zh: '备援内容', en: 'Fallback content' }, skipped: { zh: '队长略过', en: 'Orchestrator skipped' } };
   if (sandboxDownAgents.has(id)) {
     return {
       state: L({ zh: 'sandbox 睡著了', en: 'sandbox asleep' }),
-      source: source ? (L(sourceLabels[source.mode]) || source.mode) : L({ zh: 'runtime 不在線', en: 'runtime offline' }),
-      reason: L(source?.reason) || L(sandboxDownReasons[id]) || L({ zh: '這位 agent 的執行環境沒有 alive，所以改用備援內容。', en: "This agent's runtime isn't alive, so fallback content was used." }),
+      source: source ? (L(sourceLabels[source.mode]) || source.mode) : L({ zh: 'runtime 不在线', en: 'runtime offline' }),
+      reason: L(source?.reason) || L(sandboxDownReasons[id]) || L({ zh: '这位 agent 的执行环境没有 alive，所以改用备援内容。', en: "This agent's runtime isn't alive, so fallback content was used." }),
     };
   }
   if (source) {
@@ -1727,20 +1738,20 @@ function agentHoverDetail(id) {
   }
   if (st?.label) {
     const state = L({
-      running: { zh: '正在處理', en: 'Processing' }, done: { zh: '已完成', en: 'Done' },
-      error: { zh: '需要備援', en: 'Needs fallback' }, idle: { zh: '待命', en: 'Standby' },
+      running: { zh: '正在处理', en: 'Processing' }, done: { zh: '已完成', en: 'Done' },
+      error: { zh: '需要备援', en: 'Needs fallback' }, idle: { zh: '待命', en: 'Standby' },
     }[st.state]) || st.state;
     return { state: `${state} · ${L(st.label)}`, source: '', reason: '' };
   }
-  if (workflowStage === 'recall') return { state: L({ zh: '回座中', en: 'Returning to seat' }), source: '', reason: L({ zh: '隊長正在集合大家。', en: 'Orchestrator is gathering everyone.' }) };
+  if (workflowStage === 'recall') return { state: L({ zh: '回座中', en: 'Returning to seat' }), source: '', reason: L({ zh: '队长正在集合大家。', en: 'Orchestrator is gathering everyone.' }) };
   if (latestBriefing?.assignments) {
     const a = latestBriefing.assignments.find(x => x.agent === id);
     if (a) {
-      const prep = L({ run: { zh: '準備真實分析', en: 'Preparing real analysis' }, reuse: { zh: '準備拿快取', en: 'Preparing to use cache' }, skip: { zh: '準備略過', en: 'Preparing to skip' } }[a.action]) || a.action;
+      const prep = L({ run: { zh: '准备真实分析', en: 'Preparing real analysis' }, reuse: { zh: '准备拿缓存', en: 'Preparing to use cache' }, skip: { zh: '准备略过', en: 'Preparing to skip' } }[a.action]) || a.action;
       return { state: L({ zh: '已分派', en: 'Assigned' }), source: prep, reason: L(a.reason) };
     }
   }
-  return { state: currentPhase === 'running' ? L({ zh: '等待任務', en: 'Waiting for task' }) : L({ zh: '待命中', en: 'Standby' }), source: '', reason: '' };
+  return { state: currentPhase === 'running' ? L({ zh: '等待任务', en: 'Waiting for task' }) : L({ zh: '待命中', en: 'Standby' }), source: '', reason: '' };
 }
 
 function hideAgentTooltip() {
@@ -1753,14 +1764,14 @@ function difficultyTag(d) {
   const n = Math.max(0, Math.min(5, Math.round(Number(d) || 0)));
   if (!n) return '';
   const cls = n >= 4 ? 'diff-hard' : n >= 3 ? 'diff-mid' : 'diff-easy';
-  return `<span class="jpill-diff ${cls}" title="${esc(L({ zh: `難度 ${n}/5`, en: `difficulty ${n}/5` }))}">${'●'.repeat(n)}${'○'.repeat(5 - n)}</span>`;
+  return `<span class="jpill-diff ${cls}" title="${esc(L({ zh: `难度 ${n}/5`, en: `difficulty ${n}/5` }))}">${'●'.repeat(n)}${'○'.repeat(5 - n)}</span>`;
 }
 
 function renderJargon(terms) {
   const list = document.getElementById('jargon-list');
   const note = currentResult ? sectionTrustNote('jargon') : '';
   if (!terms.length) {
-    list.innerHTML = `${note}<p class="muted">${esc(L({ zh: '沒有找到術語。', en: 'No terms identified.' }))}</p>`;
+    list.innerHTML = `${note}<p class="muted">${esc(L({ zh: '没有找到术语。', en: 'No terms identified.' }))}</p>`;
     return;
   }
   list.innerHTML = note + terms.map((t, i) => {
@@ -1768,7 +1779,7 @@ function renderJargon(terms) {
     return `<div class="jpill${known ? ' known' : ''}" data-index="${i}">
       <div class="jpill-head">
         <span class="jpill-term">${esc(t.term)}</span>
-        <span class="jpill-zh">${esc(t.zh_term || '')}</span>
+        <span class="jpill-zh bi-zh">${esc(t.zh_term || '')}</span>
         ${difficultyTag(t.difficulty)}
         ${known ? `<span class="jpill-tag">${esc(L(KB_KNOWN_LABEL))}</span>` : ''}
         <span class="jpill-caret">▶</span>
@@ -1828,11 +1839,11 @@ function renderCommentDigest(d, itemId, flags) {
   if (!d) return;
   if (flags?.no_discussion) {
     document.getElementById('comments-content').innerHTML =
-      `<p class="muted bi-zh">這篇沒有對應的 HN 討論串，所以只分析了內容本身。</p>
+      `<p class="muted bi-zh">这篇没有对应的 HN 讨论串，所以只分析了内容本身。</p>
        <p class="muted bi-en">Not found on Hacker News — analysed the content alone, no discussion to dig into.</p>`;
     return;
   }
-  const weightLabel = weight => L(WEIGHT_LABEL[weight]) || weight || L({ zh: '觀點', en: 'stance' });
+  const weightLabel = weight => L(WEIGHT_LABEL[weight]) || weight || L({ zh: '观点', en: 'stance' });
   const wc = { majority: 'badge-green', 'vocal-minority': 'badge-amber', fringe: 'badge-muted' };
   const camps = (d.camps || []).filter(c => biText(c?.label) || biText(c?.stance) || c?.quote);
   const disputes = (d.disputes || []).filter(biText);
@@ -1847,13 +1858,13 @@ function renderCommentDigest(d, itemId, flags) {
 
   document.getElementById('comments-content').innerHTML = `
     ${sectionTrustNote('comments')}
-    ${flags?.comments_sampled ? `<p class="trust-line">${esc(L({ zh: '只分析高訊號留言串，沒有逐字看完整留言區。', en: 'Analyzed high-signal threads only, not the full comment section verbatim.' }))}</p>` : ''}
+    ${flags?.comments_sampled ? `<p class="trust-line">${esc(L({ zh: '只分析高信号留言串，没有逐字看完整留言区。', en: 'Analysed high-signal threads only, not the full comment section verbatim.' }))}</p>` : ''}
     <p class="overview bi-zh">${esc(d.overview?.zh || '')}</p>
     <p class="overview bi-en">${esc(d.overview?.en || '')}</p>
-    ${emptyDiscussion ? `<p class="muted">${esc(L({ zh: '小潛沒有抓到明確派別、爭議或可引用留言。', en: "Comments didn't surface clear camps, disputes, or quotable comments." }))}</p>` : ''}
+    ${emptyDiscussion ? `<p class="muted">${esc(L({ zh: '小潜没有抓到明确派别、争议或可引用留言。', en: "Comments didn't surface clear camps, disputes, or quotable comments." }))}</p>` : ''}
 
     ${camps.length ? `<div class="digest-group">
-      <strong class="small mono digest-heading">${esc(L({ zh: '主要派別', en: 'Camps' }))}</strong>
+      <strong class="small mono digest-heading">${esc(L({ zh: '主要派别', en: 'Camps' }))}</strong>
       <div class="camps">
       ${camps.map(c => `<div class="camp-card">
         <div class="camp-header">
@@ -1869,13 +1880,13 @@ function renderCommentDigest(d, itemId, flags) {
     </div>` : ''}
 
     ${biText(d.consensus) ? `<div class="consensus-block">
-      <strong class="small mono">${esc(L({ zh: '共識', en: 'Consensus' }))}</strong>
+      <strong class="small mono">${esc(L({ zh: '共识', en: 'Consensus' }))}</strong>
       <p class="bi-zh">${esc(d.consensus?.zh || '')}</p>
       <p class="bi-en">${esc(d.consensus?.en || '')}</p>
     </div>` : ''}
 
     ${disputes.length ? `<div class="disputes-block">
-      <strong class="small mono">${esc(L({ zh: '爭議點', en: 'Disputes' }))}</strong>
+      <strong class="small mono">${esc(L({ zh: '争议点', en: 'Disputes' }))}</strong>
       <ul class="dispute-list">
         ${disputes.map(x => `<li>
           <span class="bi-zh">${esc(x.zh || '')}</span>
@@ -1885,7 +1896,7 @@ function renderCommentDigest(d, itemId, flags) {
     </div>` : ''}
 
     ${corrections.length ? `<div class="corrections-block">
-      <strong class="small mono red">${esc(L({ zh: '專家糾錯', en: 'Expert Corrections' }))}</strong>
+      <strong class="small mono red">${esc(L({ zh: '专家纠错', en: 'Expert Corrections' }))}</strong>
       ${corrections.map(ec => `<div class="correction-card">
         <p class="bi-zh">${esc(ec.correction?.zh || '')}</p>
         <p class="bi-en">${esc(ec.correction?.en || '')}</p>
@@ -1894,7 +1905,7 @@ function renderCommentDigest(d, itemId, flags) {
     </div>` : ''}
 
     ${spicy.length ? `<div class="spicy-block">
-      <strong class="small mono amber">${esc(L({ zh: '辣評', en: 'Spicy Takes' }))}</strong>
+      <strong class="small mono amber">${esc(L({ zh: '辣评', en: 'Spicy Takes' }))}</strong>
       ${spicy.map(s => `<div class="spicy-card">
         ${s.quote ? `<blockquote>"${esc(s.quote)}"</blockquote>` : ''}
         <p class="bi-zh">${esc(s.zh)}</p>
@@ -1917,14 +1928,14 @@ function renderMetaBar(r) {
     <a href="https://news.ycombinator.com/item?id=${r.item_id}" target="_blank" rel="noopener" class="hn-link mono small">HN ↗</a>`;
 }
 
-// ── Ask 小詞 ───────────────────────────────────────────────────────────────
+// ── Ask 小词 ───────────────────────────────────────────────────────────────
 async function onAskXici() {
   const term = document.getElementById('ask-term').value.trim();
   if (!term) return;
   const btn = document.getElementById('ask-btn');
   btn.disabled = true;
-  btn.textContent = L({ zh: '問中…', en: 'Asking…' });
-  document.getElementById('ask-result').innerHTML = `<div class="loading">${esc(L({ zh: '小詞思考中…', en: 'Jargon is thinking…' }))}</div>`;
+  btn.textContent = L({ zh: '问中…', en: 'Asking…' });
+  document.getElementById('ask-result').innerHTML = `<div class="loading">${esc(L({ zh: '小词思考中…', en: 'Jargon is thinking…' }))}</div>`;
   try {
     const res = await fetch('/api/define', {
       method: 'POST',
@@ -1937,7 +1948,7 @@ async function onAskXici() {
       <div class="term-card ask-result-card">
         <div class="term-header">
           <span class="term-name mono">${esc(d.term)}</span>
-          <span class="term-zh muted">${esc(d.zh_term || '')}</span>
+          <span class="term-zh muted bi-zh">${esc(d.zh_term || '')}</span>
           <button class="save-btn" id="ask-save">${esc(L(SAVE_LABEL))}</button>
         </div>
         <p class="term-explain bi-en">${esc(d.explain?.en || '')}</p>
@@ -1952,7 +1963,7 @@ async function onAskXici() {
     document.getElementById('ask-result').innerHTML = `<p class="error-msg">${esc(e.message)}</p>`;
   } finally {
     btn.disabled = false;
-    btn.textContent = L({ zh: '問', en: 'Ask' });
+    btn.textContent = L({ zh: '问', en: 'Ask' });
   }
 }
 
@@ -1976,16 +1987,19 @@ async function loadFrontPage() {
       });
     });
   } catch {
-    list.innerHTML = `<span class="muted small">${esc(L({ zh: '無法載入', en: 'Could not load' }))}</span>`;
+    list.innerHTML = `<span class="muted small">${esc(L({ zh: '无法加载', en: 'Could not load' }))}</span>`;
   }
 }
 
 // ── Knowledge base (localStorage) ─────────────────────────────────────────
 const KB_KEY = 'hnlens_kb_v1';
+// Shown instead of the Chinese definition when a saved term has no English one
+// (entries saved before def_en existed, or saved before translation landed).
+const KB_NO_EN_DEF = { zh: '这条没有存英文释义。', en: 'No English definition saved for this term.' };
 const KB_STATUS = {
-  new: { label: { zh: '新詞', en: 'New' }, next: 'learning' },
-  learning: { label: { zh: '複習中', en: 'Learning' }, next: 'known' },
-  known: { label: { zh: '已會', en: 'Known' }, next: 'new' },
+  new: { label: { zh: '新词', en: 'New' }, next: 'learning' },
+  learning: { label: { zh: '复习中', en: 'Learning' }, next: 'known' },
+  known: { label: { zh: '已会', en: 'Known' }, next: 'new' },
 };
 
 function kbLoad() {
@@ -2014,7 +2028,10 @@ function normalizeKbItem(item) {
   return {
     term,
     zh: String(item.zh || item.zh_term || term).trim(),
-    def: String(item.def || item.explain?.zh || item.explain?.en || '').trim(),
+    // Keep both languages so the saved glossary can honour the UI language.
+    // Entries saved before `def_en` existed only carry the Chinese definition.
+    def: String(item.def || item.explain?.zh || '').trim(),
+    def_en: String(item.def_en || item.explain?.en || '').trim(),
     status,
     seen_count: Math.max(1, Number(item.seen_count) || 1),
     source_item_id: Number(item.source_item_id || 0) || 0,
@@ -2027,7 +2044,8 @@ function kbAdd(term) {
   const normalized = normalizeKbItem({
     term: term?.term,
     zh: term?.zh_term || term?.zh,
-    def: term?.explain?.zh || term?.explain?.en || term?.def,
+    def: term?.explain?.zh || term?.def,
+    def_en: term?.explain?.en || term?.def_en,
     source_item_id: currentResult?.item_id ?? 0,
   });
   if (!normalized) return;
@@ -2072,11 +2090,11 @@ function kbRender() {
   });
 
   if (!items.length) {
-    list.innerHTML = `<p class="kb-empty muted">${esc(L({ zh: '還沒有收藏。看到想記住的術語時，請小詞放進來。', en: "No saved terms yet. When you see one worth remembering, ask Jargon to add it." }))}</p>`;
+    list.innerHTML = `<p class="kb-empty muted">${esc(L({ zh: '还没有收藏。看到想记住的术语时，请小词放进来。', en: "No saved terms yet. When you see one worth remembering, ask Jargon to add it." }))}</p>`;
     return;
   }
   if (!filtered.length) {
-    list.innerHTML = `<p class="kb-empty muted">${esc(L({ zh: '找不到符合條件的生詞。', en: 'No terms match your filters.' }))}</p>`;
+    list.innerHTML = `<p class="kb-empty muted">${esc(L({ zh: '找不到符合条件的生词。', en: 'No terms match your filters.' }))}</p>`;
     return;
   }
   list.innerHTML = filtered.map(item => {
@@ -2088,15 +2106,18 @@ function kbRender() {
     <div class="kb-item">
       <div class="kb-item-header">
         <span class="term-name mono">${esc(item.term)}</span>
-        <span class="term-zh muted">${esc(item.zh)}</span>
+        <span class="term-zh muted bi-zh">${esc(item.zh)}</span>
         <button class="kb-remove" data-term="${esc(item.term)}" aria-label="Remove ${esc(item.term)}">✕</button>
       </div>
       <div class="kb-meta">
         <button class="kb-status kb-status-${esc(item.status)}" data-term="${esc(item.term)}">${esc(L(status.label))}</button>
-        <span class="kb-seen">${esc(L({ zh: `出現 ${item.seen_count} 次`, en: `Seen ${item.seen_count}×` }))}</span>
+        <span class="kb-seen">${esc(L({ zh: `出现 ${item.seen_count} 次`, en: `Seen ${item.seen_count}×` }))}</span>
         ${source}
       </div>
-      <p class="kb-def small">${esc(item.def)}</p>
+      <p class="kb-def small bi-zh">${esc(item.def || item.def_en || '')}</p>
+      <p class="kb-def small bi-en">${item.def_en
+        ? esc(item.def_en)
+        : `<span class="muted">${esc(L(KB_NO_EN_DEF))}</span>`}</p>
     </div>`;
   }).join('');
 
@@ -2158,7 +2179,7 @@ async function kbImport(event) {
     kbSave(mergeKbItems(kbLoad(), imported));
     kbRender();
   } catch {
-    alert(L({ zh: '匯入失敗：請選擇 HN Lens 匯出的 JSON 檔。', en: 'Import failed: please choose a JSON file exported by HN Lens.' }));
+    alert(L({ zh: '导入失败：请选择 HN Lens 导出的 JSON 档。', en: 'Import failed: please choose a JSON file exported by HN Lens.' }));
   } finally {
     input.value = '';
   }

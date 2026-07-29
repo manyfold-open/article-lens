@@ -562,7 +562,7 @@ async function pollTask(
   )
   onState?.(canceled ? 'canceled-after-timeout' : 'timed-out', id)
   throw new A2AError(
-    `Agent ${peerId} task ${id} did not complete within the bounded stream-recovery budget${canceled ? ' and was canceled' : ''}.`,
+    `Agent ${peerId} task ${id} did not complete within the bounded stream-recovery budget${canceled ? ' and was cancelled' : ''}.`,
     false,
   )
 }
@@ -695,7 +695,7 @@ export async function callMfAgent(
     opts.trace,
     callId,
     'input',
-    bi('送往 Manyfold A2A 的實際輸入', 'Actual input sent through Manyfold A2A'),
+    bi('送往 Manyfold A2A 的实际输入', 'Actual input sent through Manyfold A2A'),
     prompt,
   )
   const body = JSON.stringify({
@@ -725,7 +725,7 @@ export async function callMfAgent(
         opts.trace,
         callId,
         'error',
-        bi('編排時間預算已用完', 'Orchestration time budget exhausted'),
+        bi('编排时间预算已用完', 'Orchestration time budget exhausted'),
         lastErr.message,
         attempt + 1,
         false,
@@ -738,8 +738,8 @@ export async function callMfAgent(
         callId,
         'progress',
         attempt > 0
-          ? bi(`第 ${attempt + 1} 次嘗試：重新連線`, `Attempt ${attempt + 1}: reconnecting`)
-          : bi('取得短效 A2A 憑證', 'Minting a short-lived A2A credential'),
+          ? bi(`第 ${attempt + 1} 次尝试：重新连线`, `Attempt ${attempt + 1}: reconnecting`)
+          : bi('取得短效 A2A 凭证', 'Minting a short-lived A2A credential'),
         undefined,
         attempt + 1,
       )
@@ -747,7 +747,7 @@ export async function callMfAgent(
         opts.trace,
         callId,
         'progress',
-        bi('已開啟串流，等待 Agent 回覆', 'Stream opened; waiting for the agent'),
+        bi('已开启串流，等待 Agent 回复', 'Stream opened; waiting for the agent'),
         undefined,
         attempt + 1,
       )
@@ -759,12 +759,12 @@ export async function callMfAgent(
         opts.deadlineAt,
         (state, id, detail) => {
           const label = state === 'completed'
-            ? bi('Agent 任務已完成', 'Agent task completed')
+            ? bi('Agent 任务已完成', 'Agent task completed')
             : state === 'stream-recovering'
-              ? bi('串流中斷，恢復已接受的任務', 'Stream disconnected; recovering the accepted task')
+              ? bi('串流中断，恢复已接受的任务', 'Stream disconnected; recovering the accepted task')
               : state === 'poll-retrying'
-                ? bi('已接受任務的恢復請求重試中', 'Accepted-task recovery request is retrying')
-                : bi(`Agent 任務狀態：${state}`, `Agent task state: ${state}`)
+                ? bi('已接受任务的恢复请求重试中', 'Accepted-task recovery request is retrying')
+                : bi(`Agent 任务状态：${state}`, `Agent task state: ${state}`)
           emitTrace(
             opts.trace,
             callId,
@@ -780,7 +780,7 @@ export async function callMfAgent(
         opts.trace,
         callId,
         'output',
-        bi('Agent 原始輸出', 'Raw agent output'),
+        bi('Agent 原始输出', 'Raw agent output'),
         output,
         attempt + 1,
       )
@@ -799,8 +799,8 @@ export async function callMfAgent(
         callId,
         'error',
         willRetry
-          ? bi(`第 ${attempt + 1} 次嘗試失敗，將重試`, `Attempt ${attempt + 1} failed; retrying`)
-          : bi('Agent 呼叫失敗', 'Agent call failed'),
+          ? bi(`第 ${attempt + 1} 次尝试失败，将重试`, `Attempt ${attempt + 1} failed; retrying`)
+          : bi('Agent 调用失败', 'Agent call failed'),
         error.message,
         attempt + 1,
         willRetry,
@@ -810,7 +810,7 @@ export async function callMfAgent(
         opts.trace,
         callId,
         'progress',
-        bi(`等待 ${Math.ceil(waitMs / 100) / 10} 秒後重試`, `Retrying in ${Math.ceil(waitMs / 100) / 10}s`),
+        bi(`等待 ${Math.ceil(waitMs / 100) / 10} 秒后重试`, `Retrying in ${Math.ceil(waitMs / 100) / 10}s`),
         undefined,
         attempt + 1,
       )

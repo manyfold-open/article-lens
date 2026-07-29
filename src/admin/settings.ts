@@ -81,7 +81,7 @@ const FIELDS: SettingsField[] = [
   },
   {
     key: 'AGENT_SUMMARIZER',
-    label: 'Summarizer agent',
+    label: 'Summariser agent',
     description: 'Peer used by the article summary stage.',
     required: true,
   },
@@ -93,7 +93,7 @@ const FIELDS: SettingsField[] = [
   },
   {
     key: 'AGENT_SYNTHESIZER',
-    label: 'Synthesizer agent',
+    label: 'Synthesiser agent',
     description: 'Peer used to assemble the final analysis.',
     required: true,
   },

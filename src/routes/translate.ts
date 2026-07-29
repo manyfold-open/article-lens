@@ -27,7 +27,7 @@ export async function handleTranslate(request: Request, env: Env): Promise<Respo
   try {
     const missing = missingIndexes.map(index => chinese[index])
     const numbered = missing.map((value, index) => `${index}: ${value}`).join('\n')
-    const prompt = `Translate each numbered Chinese line into natural, concise English. Keep technical terms. Return ONLY a JSON array of strings in the SAME order and length (no markdown; inside string values never use the " character — use ' instead):
+    const prompt = `Translate each numbered Chinese line into natural, concise British English (use British spelling: analyse, summarise, organise, colour, licence as a noun). Keep technical terms. Return ONLY a JSON array of strings in the SAME order and length (no markdown; inside string values never use the " character — use ' instead):
 ${numbered}
 
 Format: ["english 0","english 1", ...]`
@@ -36,9 +36,13 @@ Format: ["english 0","english 1", ...]`
     if (Array.isArray(parsed) && parsed.length === missing.length) {
       const writes: Promise<void>[] = []
       missingIndexes.forEach((originalIndex, missingIndex) => {
-        const translated = typeof parsed[missingIndex] === 'string' && parsed[missingIndex].trim()
-          ? parsed[missingIndex]
-          : chinese[originalIndex]
+        const candidate = parsed[missingIndex]
+        const translated = typeof candidate === 'string' ? candidate.trim() : ''
+        // A missing or echoed line is not a translation. Caching the Chinese
+        // under its own key used to serve it as English for seven days, so an
+        // English session had no way to recover. Leave the key unwritten and
+        // let the next request try again.
+        if (!translated || translated === chinese[originalIndex]) return
         english[originalIndex] = translated
         writes.push(cachePut(env, keyFor(chinese[originalIndex]), translated))
       })

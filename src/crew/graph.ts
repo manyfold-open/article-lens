@@ -73,13 +73,13 @@ export function normalizeGraph(config: GraphConfig | null | undefined): Normaliz
 }
 
 const LABELS: Record<WorkflowNodeId, BiStr> = {
-  input: bi('輸入', 'Input'),
-  sum: bi('小摘', 'Summarizer'),
-  jargon: bi('小詞', 'Jargon'),
-  comments: bi('小潛', 'Comments'),
-  ctx: bi('小導', 'Context'),
-  synth: bi('合成', 'Synthesizer'),
-  report: bi('報告', 'Report'),
+  input: bi('输入', 'Input'),
+  sum: bi('小摘', 'Summariser'),
+  jargon: bi('小词', 'Jargon'),
+  comments: bi('小潜', 'Comments'),
+  ctx: bi('小导', 'Context'),
+  synth: bi('合成', 'Synthesiser'),
+  report: bi('报告', 'Report'),
 }
 
 export function buildWorkflowPlan(
@@ -128,8 +128,8 @@ export function buildWorkflowPlan(
   if (config?.escalate) {
     addEdge('input', 'sum', 'dependency')
     addEdge('sum', 'ctx', 'dependency')
-    addEdge('ctx', 'jargon', 'conditional', bi('升級 go/stop', 'Escalate go/stop'))
-    addEdge('ctx', 'comments', 'conditional', bi('升級 go/stop', 'Escalate go/stop'))
+    addEdge('ctx', 'jargon', 'conditional', bi('升级 go/stop', 'Escalate go/stop'))
+    addEdge('ctx', 'comments', 'conditional', bi('升级 go/stop', 'Escalate go/stop'))
   } else {
     const grouped = new Set<Stage1Agent>()
     for (const group of graph?.groups ?? []) {

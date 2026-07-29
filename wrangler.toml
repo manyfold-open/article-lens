@@ -35,7 +35,7 @@ max_concurrency = 2
 [vars]
 MF_API_URL = "https://api.manyfold.ai/api"
 MF_AGENT_ID = "agt_agp2f7i4zj44pj2niaiv2aryoy"
-SPEC_VERSION = "13"
+SPEC_VERSION = "14"
 AGENT_SUMMARIZER = "agt_agp2f7ggfv7lxpheoveiawvk6q"
 AGENT_CONTEXT = "agt_agp2f7i7bry43ju3omvwtnngie"
 AGENT_SYNTHESIZER = "agt_agp2f7jbwvyp5gkigkqxggzuay"
