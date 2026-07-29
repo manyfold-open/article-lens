@@ -74,15 +74,15 @@
   function stateLabel(value) {
     return ({
       pending: tr('等待', 'Pending'),
-      running: tr('執行中', 'Running'),
+      running: tr('执行中', 'Running'),
       success: tr('成功', 'Success'),
-      cache: tr('快取', 'Cache'),
-      skipped: tr('略過', 'Skipped'),
-      fallback: tr('備援', 'Fallback'),
-      retrying: tr('重試中', 'Retrying'),
-      error: tr('失敗', 'Error'),
-      queued: tr('排隊中', 'Queued'),
-      retry_wait: tr('等待重試', 'Retry wait'),
+      cache: tr('缓存', 'Cache'),
+      skipped: tr('略过', 'Skipped'),
+      fallback: tr('备援', 'Fallback'),
+      retrying: tr('重试中', 'Retrying'),
+      error: tr('失败', 'Error'),
+      queued: tr('排队中', 'Queued'),
+      retry_wait: tr('等待重试', 'Retry wait'),
       done: tr('完成', 'Done'),
     })[value] || value || tr('等待', 'Pending');
   }
@@ -114,12 +114,12 @@
     if (status) {
       status.className = `workflow-overall status-${esc(state.phase || 'queued')}`;
       status.textContent = state.reconnecting
-        ? tr('重連中…', 'Reconnecting…')
+        ? tr('重连中…', 'Reconnecting…')
         : stateLabel(state.phase);
     }
     const attemptEl = root.querySelector('[data-workflow-attempt]');
     if (attemptEl) attemptEl.textContent = tr(
-      `第 ${state.activeAttempt || 0}/${state.maxAttempts || 1} 輪`,
+      `第 ${state.activeAttempt || 0}/${state.maxAttempts || 1} 轮`,
       `Attempt ${state.activeAttempt || 0}/${state.maxAttempts || 1}`,
     );
     const durationEl = root.querySelector('[data-workflow-duration]');
@@ -127,17 +127,18 @@
       ? duration(attempt.startedAt, attempt.endedAt)
       : '—';
     const tokenEl = root.querySelector('[data-workflow-tokens]');
-    if (tokenEl) tokenEl.textContent = `${attempt?.usage?.total || 0} tokens`;
+    const tokenTotal = attempt?.usage?.total || 0;
+    if (tokenEl) tokenEl.textContent = tr(`${tokenTotal} 个 token`, `${tokenTotal} tokens`);
     const collapseButton = root.querySelector('[data-workflow-collapse]');
     if (collapseButton) {
-      collapseButton.textContent = collapsed ? tr('展開', 'Expand') : tr('收起', 'Collapse');
+      collapseButton.textContent = collapsed ? tr('展开', 'Expand') : tr('收起', 'Collapse');
       collapseButton.setAttribute('aria-expanded', String(!collapsed));
     }
     const errorBanner = root.querySelector('[data-workflow-error]');
     if (errorBanner) {
       const reason = state.error || attempt?.error || '';
       errorBanner.hidden = collapsed || !reason;
-      errorBanner.textContent = reason ? `${state.phase === 'error' ? tr('失敗原因', 'Failure reason') : tr('重試原因', 'Retry reason')}: ${reason}` : '';
+      errorBanner.textContent = reason ? `${state.phase === 'error' ? tr('失败原因', 'Failure reason') : tr('重试原因', 'Retry reason')}: ${reason}` : '';
     }
     root.querySelectorAll('[data-workflow-tab]').forEach(button => {
       const selected = button.dataset.workflowTab === activeTab;
@@ -157,7 +158,7 @@
   function graphHtml(state, attempt) {
     const plan = attempt?.plan;
     if (!plan) {
-      return `<div class="workflow-empty">${esc(tr('等待後端送出真實執行拓撲…', 'Waiting for the backend execution graph…'))}</div>`;
+      return `<div class="workflow-empty">${esc(tr('等待后端送出真实执行拓扑…', 'Waiting for the backend execution graph…'))}</div>`;
     }
     const positions = graphPositions(plan);
     const marker = `<defs>
@@ -195,7 +196,7 @@
         <title>${esc(summary)}</title>
         <path d="${esc(d)}" marker-end="url(#wf-arrow)"></path>
         ${edge.kind !== 'dependency'
-          ? `<text x="${labelX}" y="${labelY}">${esc(edge.kind === 'relay' ? tr('接力', 'relay') : (attempt.escalateDecision?.decision || tr('條件', 'condition')))}</text>`
+          ? `<text x="${labelX}" y="${labelY}">${esc(edge.kind === 'relay' ? tr('接力', 'relay') : (attempt.escalateDecision?.decision || tr('条件', 'condition')))}</text>`
           : ''}
       </g>`;
     }).join('');
@@ -206,12 +207,12 @@
       const metadata = [
         config.effort ? config.effort : '',
         config.replicas > 1 ? `×${config.replicas}` : '',
-        config.debate ? tr('辯論', 'debate') : '',
+        config.debate ? tr('辩论', 'debate') : '',
       ].filter(Boolean).join(' · ');
       const metrics = [
         duration(node.startedAt, node.endedAt),
         node.tokens ? `${node.tokens}t` : '',
-        calls ? tr(`${calls} 次呼叫`, `${calls} call${calls === 1 ? '' : 's'}`) : '',
+        calls ? tr(`${calls} 次调用`, `${calls} call${calls === 1 ? '' : 's'}`) : '',
       ].filter(Boolean).join(' · ');
       const clickable = config.kind === 'agent';
       return `<button type="button"
@@ -231,7 +232,7 @@
       return `<li>${esc(`${localize(from?.label) || edge.from} → ${localize(to?.label) || edge.to} (${edge.kind})`)}</li>`;
     }).join('');
     return `<div class="workflow-graph-canvas">
-      <svg class="workflow-edges" width="1088" height="390" viewBox="0 0 1088 390" role="img" aria-label="${esc(tr('Agent 工作流依賴圖', 'Agent workflow dependency graph'))}">
+      <svg class="workflow-edges" width="1088" height="390" viewBox="0 0 1088 390" role="img" aria-label="${esc(tr('Agent 工作流依赖图', 'Agent workflow dependency graph'))}">
         ${marker}${edgeSvg}
       </svg>
       ${nodeHtml}
@@ -242,7 +243,7 @@
   function timelineHtml(state) {
     const attempts = Object.keys(state.attempts).map(Number).sort((a, b) => a - b);
     if (!attempts.length) {
-      return `<div class="workflow-empty">${esc(tr('等待執行事件…', 'Waiting for execution events…'))}</div>`;
+      return `<div class="workflow-empty">${esc(tr('等待执行事件…', 'Waiting for execution events…'))}</div>`;
     }
     return attempts.map(number => {
       const attempt = state.attempts[number];
@@ -286,14 +287,14 @@
           <span class="workflow-timeline-track">
             <span class="workflow-timeline-bar state-${esc(call.state)}" style="left:${left.toFixed(2)}%;width:${Math.min(100 - left, width).toFixed(2)}%"></span>
             ${segments}
-            ${retries ? `<span class="workflow-timeline-badge retry">${esc(tr(`重試 ${retries}`, `${retries} retry`))}</span>` : ''}
-            ${errors ? `<span class="workflow-timeline-badge error">${esc(tr('錯誤', 'error'))}</span>` : ''}
+            ${retries ? `<span class="workflow-timeline-badge retry">${esc(tr(`重试 ${retries}`, `${retries} retry`))}</span>` : ''}
+            ${errors ? `<span class="workflow-timeline-badge error">${esc(tr('错误', 'error'))}</span>` : ''}
           </span>
         </button>`;
-      }).join('') : `<div class="workflow-empty small">${esc(tr('本輪尚未開始 A2A 呼叫', 'No A2A calls in this attempt yet'))}</div>`;
+      }).join('') : `<div class="workflow-empty small">${esc(tr('本轮尚未开始 A2A 调用', 'No A2A calls in this attempt yet'))}</div>`;
       return `<section class="workflow-attempt">
         <header>
-          <strong>${esc(tr(`第 ${number} 輪`, `Attempt ${number}`))}</strong>
+          <strong>${esc(tr(`第 ${number} 轮`, `Attempt ${number}`))}</strong>
           <span class="state-${esc(attempt.state)}">${esc(stateLabel(attempt.state))}</span>
           <time>${esc(duration(attempt.startedAt, attempt.endedAt) || '—')}</time>
           ${attempt.error ? `<span class="workflow-attempt-error" title="${esc(attempt.error)}">${esc(attempt.error)}</span>` : ''}

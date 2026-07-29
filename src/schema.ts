@@ -14,7 +14,7 @@ export interface JargonTerm {
   explain: BiStr
   seen_in: SeenIn
   appeared_as?: string
-  // Selection signals (set by 小詞): whether the term belongs to the article's
+  // Selection signals (set by 小词): whether the term belongs to the article's
   // technical domain, how hard it is (1-5), and whether not knowing it blocks
   // comprehension. Used to rank + filter which terms are worth recording.
   on_topic?: boolean
@@ -72,7 +72,7 @@ export interface HNLensResult {
     route: BiStr
     assignments: { agent: AgentName; action: 'run' | 'skip' | 'reuse'; reason: BiStr }[]
   }
-  // Optional editor's note from the 統整/Synthesizer curation pass.
+  // Optional editor's note from the 统整/Synthesizer curation pass.
   editor_note?: BiStr
   // Where the input came from: an HN thread, a bare article URL, or pasted text.
   source?: 'hn' | 'article' | 'text'
@@ -108,21 +108,21 @@ export interface GraphConfig {
   // v1 legacy skip map (kept working; superseded by `nodes` when both present).
   enabled?: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx', boolean>>
   groups?: { members: string[]; mode: 'parallel' | 'relay' }[]
-  // Conditional "escalate" mode (省錢漸進): when true, run a cheap phase first
+  // Conditional "escalate" mode (省钱渐进): when true, run a cheap phase first
   // (only sum + ctx verdict). If the verdict says the item is worth reading,
   // escalate ("go") and run jargon + comments + synth; otherwise stop and skip
   // jargon + comments. Falsy/absent → today's full flow, byte-for-byte.
   escalate?: boolean
-  // "Debate" verdict (辯論裁定): when true, 小導 runs TWICE with opposing framings
+  // "Debate" verdict (辩论裁定): when true, 小导 runs TWICE with opposing framings
   // (正方 argues worth-reading / 反方 argues skippable) and a third adjudication
   // pass merges them into one balanced verdict. This is the one spot where
   // multi-agent genuinely changes the OUTPUT (opposing prompts, not identical
   // runs). Falsy/absent → single ctx call (= today). Costs ~3× ctx tokens.
   debate?: boolean
-  // Reader level (受眾語氣): shifts the tone/depth of 小摘/小詞/小導/統整.
+  // Reader level (受众语气): shifts the tone/depth of 小摘/小词/小导/统整.
   // 'beginner' → plainer, more analogies, explain more terms, higher accessibility
   // bar; 'expert' → terser, skip basics, only advanced jargon. Absent → today's
-  // default ("會寫程式但非此領域專家", byte-for-byte). Same tokens, different prompt.
+  // default ("会写程序但非此领域专家", byte-for-byte). Same tokens, different prompt.
   audience?: 'beginner' | 'expert'
 }
 

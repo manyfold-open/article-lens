@@ -7,7 +7,7 @@
  *   2. A* pathfind  — characters route through corridors, avoiding furniture.
  *   3. Character FSM — idle → walking → assigning → working → reporting → returning.
  *   4. Task sim      — real SSE task-state drives one closed loop:
- *        Leader walks to 小詞, assigns, returns; 小詞 works; on done walks to the
+ *        Leader walks to 小词, assigns, returns; 小词 works; on done walks to the
  *        Leader, reports, returns to its seat. Hybrid pacing: movement runs on
  *        the sim clock, "working" ends on the real `done` event but never before
  *        MIN_WORK frames, so cached (~260ms) and live (~5-12s) both play fully.
@@ -66,12 +66,12 @@
 
   // ─── Roles + stations (seat tile; desk = seat+below; approach = beside) ──────
   const ROLE = {
-    orch:     { name:{ zh:'隊長', en:'Orchestrator' }, shirt:'#FF6600', hair:'#3F3F46', acc:'lead',    role:{ zh:'分派任務、最後帶你看報告', en:'Assigns tasks, walks you through the report at the end' } },
-    sum:      { name:{ zh:'小摘', en:'Summarizer' },   shirt:'#3B82F6', hair:'#5B3A29', acc:'doc',     role:{ zh:'抓文章重點與 TL;DR', en:'Extracts key points & TL;DR' } },
-    jargon:   { name:{ zh:'小詞', en:'Jargon' },       shirt:'#F59E0B', hair:'#6B4423', acc:'bulb',    role:{ zh:'挑出術語，白話解釋', en:'Picks out jargon, explains it plainly' }, glasses:true },
-    comments: { name:{ zh:'小潛', en:'Comments' },     shirt:'#14B8A6', hair:'#1F2937', acc:'phones',  role:{ zh:'潛入留言，整理派系', en:'Dives into comments, sorts the factions' } },
-    ctx:      { name:{ zh:'小導', en:'Context' },      shirt:'#8B5CF6', hair:'#7C2D12', acc:'stamp',   role:{ zh:'幫你判斷這篇該略讀、速讀還是深讀', en:'Helps you decide: skim, skip, or dive deep' } },
-    synth:    { name:{ zh:'合成', en:'Synthesizer' },  shirt:'#EC4899', hair:'#4B5563', acc:'printer', role:{ zh:'校稿整合，刪掉雜訊', en:'Proofreads & integrates, cuts the noise' } },
+    orch:     { name:{ zh:'队长', en:'Orchestrator' }, shirt:'#FF6600', hair:'#3F3F46', acc:'lead',    role:{ zh:'分派任务、最后带你看报告', en:'Assigns tasks, walks you through the report at the end' } },
+    sum:      { name:{ zh:'小摘', en:'Summariser' },   shirt:'#3B82F6', hair:'#5B3A29', acc:'doc',     role:{ zh:'抓文章重点与 TL;DR', en:'Extracts key points & TL;DR' } },
+    jargon:   { name:{ zh:'小词', en:'Jargon' },       shirt:'#F59E0B', hair:'#6B4423', acc:'bulb',    role:{ zh:'挑出术语，白话解释', en:'Picks out jargon, explains it plainly' }, glasses:true },
+    comments: { name:{ zh:'小潜', en:'Comments' },     shirt:'#14B8A6', hair:'#1F2937', acc:'phones',  role:{ zh:'潜入留言，整理派系', en:'Dives into comments, sorts the factions' } },
+    ctx:      { name:{ zh:'小导', en:'Context' },      shirt:'#8B5CF6', hair:'#7C2D12', acc:'stamp',   role:{ zh:'帮你判断这篇该略读、速读还是深读', en:'Helps you decide: skim, skip, or dive deep' } },
+    synth:    { name:{ zh:'合成', en:'Synthesiser' },  shirt:'#EC4899', hair:'#4B5563', acc:'printer', role:{ zh:'校稿整合，删掉杂讯', en:'Proofreads & integrates, cuts the noise' } },
   };
   const STATIONS = [
     { id:'orch',     seat:[3,3],  approach:[4,3]  },
@@ -79,7 +79,7 @@
     { id:'jargon',   seat:[12,3], approach:[13,3] },
     { id:'comments', seat:[8,7],  approach:[9,7]  },
     { id:'ctx',      seat:[12,7], approach:[13,7] },
-    { id:'synth',    seat:[3,7],  approach:[4,7]  },   // directly below 隊長
+    { id:'synth',    seat:[3,7],  approach:[4,7]  },   // directly below 队长
   ];
   const deskOf = s => [s.seat[0], s.seat[1] + 1];
 
@@ -90,7 +90,7 @@
   // logical-px worker centre (tile*TILE + 8). These are tuned to sit in the open
   // floor (rows 3–7) and dodge the wall furniture / dining corner on the right.
   //
-  //   [休息區 rest]  [讀者區 readers]  [裁定 ctx]  [校對 synth]  [白板 board]
+  //   [休息区 rest]  [读者区 readers]  [裁定 ctx]  [校对 synth]  [白板 board]
   //     cols 1–3        cols 5–9        col 11       col 14        col 17
   //
   // Scope note: FIRST BATCH only — parallel (separate desks), group (shared
@@ -100,12 +100,12 @@
     rest:    { cols: [1, 3],   row: 9  },   // sofa area; benched agents sleep here
     readers: { cols: [5, 9],   row: 5  },   // stage-1: sum / jargon / comments
     ctx:     { col: 11,        row: 5  },   // 裁定 verdict desk
-    synth:   { col: 14,        row: 5  },   // 校對 QA desk
-    board:   { col: 12,        row: 2  },   // whiteboard (to the right of 隊長)
-    orchseat:{ col: 9,         row: 2  },   // 隊長 overseer spot, center-top
+    synth:   { col: 14,        row: 5  },   // 校对 QA desk
+    board:   { col: 12,        row: 2  },   // whiteboard (to the right of 队长)
+    orchseat:{ col: 9,         row: 2  },   // 队长 overseer spot, center-top
   };
   // Rest-area slots for benched/disabled agents. The rest area IS the bottom-right
-  // dining corner now (no separate 休息區). The first two slots are the two
+  // dining corner now (no separate 休息区). The first two slots are the two
   // 按摩椅 (massage chairs) — a resting agent naps in a chair; extra slots spread
   // nearby so multiple benched agents don't stack. Chosen to dodge the coffee
   // counter [18,8]/cooler [18,9], sofa [14-16,9], table [16,10], plushie/dog/cat
@@ -124,11 +124,11 @@
     [16,10],                              // coffee table
     [1,10],[6,10],[18,3],[11,10],         // plants
     [18,8],[18,9],                        // dining corner: coffee counter + water cooler
-    [12,2],                               // whiteboard easel (beside 隊長)
+    [12,2],                               // whiteboard easel (beside 队长)
   ];
-  const WB_TILE = [12, 2];                // whiteboard easel sits to 隊長's right
-  const WB_APPROACH = [11, 2];            // 隊長 stands beside it to present
-  const SHELF_APPROACH = [2, 3];          // 隊長 stands here to look up the wordbook
+  const WB_TILE = [12, 2];                // whiteboard easel sits to 队长's right
+  const WB_APPROACH = [11, 2];            // 队长 stands beside it to present
+  const SHELF_APPROACH = [2, 3];          // 队长 stands here to look up the wordbook
 
   // ─── Walkable grid ──────────────────────────────────────────────────────────
   const walkable = [];
@@ -186,7 +186,7 @@
   // office behaves byte-for-byte as today.
   const EDITABLE = ['sum', 'jargon', 'comments', 'ctx']; // spec-editable workers (bench/graphConfig source)
   // Which agents the user can freely DRAG in edit mode. This is a SUPERSET of
-  // EDITABLE: orch (隊長) and synth (合成) are also draggable, but purely for
+  // EDITABLE: orch (队长) and synth (合成) are also draggable, but purely for
   // COSMETIC placement — moving them is layout-only and never touches
   // getGraphConfig()/the spec/enabled/hasCustomLayout()'s graph decision (they're
   // infra, not spec nodes). Their positions still persist in localStorage so the
@@ -221,8 +221,8 @@
     replicas: Object.create(null),// id → 2 | 3 (default 1; only stored when >1)
     escalate: false,              // 💸 thrifty: run sum+ctx first, escalate to jargon+comments only if worth it
     escalateCandidates: ['jargon', 'comments'],   // the "on standby" workers in escalate mode
-    debate: false,                // 🥊 辯論裁定: 小導 runs 正方/反方 then adjudicates (~3× ctx cost)
-    audience: null,               // 受眾語氣: null=預設(中階) | 'beginner'=新手 | 'expert'=老手 (orthogonal to presets)
+    debate: false,                // 🥊 辩论裁定: 小导 runs 正方/反方 then adjudicates (~3× ctx cost)
+    audience: null,               // 受众语气: null=默认(中阶) | 'beginner'=新手 | 'expert'=老手 (orthogonal to presets)
     badges: [],                   // per-frame clickable mode badges {x,y,w,h,key}
     effortBadges: [],             // per-frame clickable effort badges {x,y,w,h,id}
     replicaBadges: [],            // per-frame clickable replica badges {x,y,w,h,id}
@@ -267,7 +267,7 @@
       // vote ×N: running an agent N times costs ~N× its per-run tokens.
       total += TOKEN_COST[id][effortOf(id)] * replicasOf(id);
     }
-    // ctx: effort n/a. 🥊 辯論裁定 runs it ~3× (正方 + 反方 + 首席裁判合議).
+    // ctx: effort n/a. 🥊 辩论裁定 runs it ~3× (正方 + 反方 + 首席裁判合议).
     if (!editMode.bench.ctx) total += TOKEN_COST.ctx.med * (editMode.debate ? 3 : 1);
     total += TOKEN_COST.synth.med;                          // synth: always on
     return total;
@@ -281,7 +281,7 @@
   // (positions of spec-node workers / bench / modes / effort / replicas /
   // escalate). Infra agents (orch/synth) may carry drag-position overrides in
   // editMode.layout too, but those are cosmetic-only and MUST NOT count here —
-  // otherwise merely nudging 隊長/合成 would flip getGraphConfig() non-null and
+  // otherwise merely nudging 队长/合成 would flip getGraphConfig() non-null and
   // start emitting &graph. So we only look at EDITABLE layout overrides.
   function hasCustomLayout() {
     return EDITABLE.some(id => !!editMode.layout[id])
@@ -291,7 +291,7 @@
       || REPLICA_NODES.some(id => replicasOf(id) > 1)       // vote ×N counts
       || editMode.escalate                                  // 💸 thrifty escalate mode counts
       || editMode.debate                                    // 🥊 debate verdict counts
-      || !!editMode.audience;                               // 受眾語氣 (新手/老手) counts
+      || !!editMode.audience;                               // 受众语气 (新手/老手) counts
   }
   // Latched per-run so the choreography stays consistent for the whole run even
   // if state changes mid-run; set in startRun(). customRunActive() gates the
@@ -505,7 +505,7 @@
     p.state = 'visit'; p.bubble = p.kind === 'cat' ? LZ({ zh:'喵？', en:'Meow?' }) : 'pika!';
     walkTo(p, target.station.approach, () => {
       faceToward(p, target.station.seat);
-      const visitMsg = p.kind === 'cat' ? LZ({ zh:'等等～', en:'Hold on~' }) : LZ({ zh:'有靈感', en:'Got inspired' });
+      const visitMsg = p.kind === 'cat' ? LZ({ zh:'等等～', en:'Hold on~' }) : LZ({ zh:'有灵感', en:'Got inspired' });
       if (!target.bubble) target.bubble = visitMsg;
       p.timer = 75;
       p.onTimer = () => {
@@ -528,19 +528,19 @@
   }
 
   // ─── The workflow, staged to mirror the real pipeline ──────────────────────
-  //   小摘/小詞/小潛  ──► 合成 (collects, reviews) ──► 隊長 (final)
-  //   小導           ─────────────────────────────► 隊長 (direct)
-  // A single 合成 desk and a single 隊長 desk each serialize their visitors so
+  //   小摘/小词/小潜  ──► 合成 (collects, reviews) ──► 队长 (final)
+  //   小导           ─────────────────────────────► 队长 (direct)
+  // A single 合成 desk and a single 队长 desk each serialize their visitors so
   // nobody piles up.  Backend runs all workers in parallel; the sim paces it.
   const ALL_WORKERS = ['sum', 'jargon', 'comments', 'ctx'];
   const TO_SYNTH = ['sum', 'jargon', 'comments'];   // these hand off to 合成
   const SYNTH_REVIEW = 130;                          // min frames 合成 spends curating
   const ASSIGNMENTS = {
-    sum:      { order:{ zh:'小摘抓重點', en:'Summarizer, hit the highlights' }, ack:{ zh:'收到！', en:'Got it!' },      card:{ zh:'摘要中', en:'Summarizing' } },
-    jargon:   { order:{ zh:'小詞找難詞', en:'Jargon, find the tricky terms' },  ack:{ zh:'收到！', en:'Got it!' },      card:{ zh:'找術語', en:'Finding terms' } },
-    comments: { order:{ zh:'小潛看留言', en:'Comments, dive into the thread' }, ack:{ zh:'我去潛水', en:'Diving in' },   card:{ zh:'留言中', en:'Reading comments' } },
-    ctx:      { order:{ zh:'小導判讀',   en:'Context, make the call' },        ack:{ zh:'交給我', en:'Leave it to me' }, card:{ zh:'判讀中', en:'Assessing' } },
-    synth:    { order:{ zh:'合成校稿',   en:'Synthesizer, proofread' },        ack:{ zh:'收到稿', en:'Got the draft' },  card:{ zh:'整合中', en:'Integrating' } },
+    sum:      { order:{ zh:'小摘抓重点', en:'Summariser, hit the highlights' }, ack:{ zh:'收到！', en:'Got it!' },      card:{ zh:'摘要中', en:'Summarising' } },
+    jargon:   { order:{ zh:'小词找难词', en:'Jargon, find the tricky terms' },  ack:{ zh:'收到！', en:'Got it!' },      card:{ zh:'找术语', en:'Finding terms' } },
+    comments: { order:{ zh:'小潜看留言', en:'Comments, dive into the thread' }, ack:{ zh:'我去潜水', en:'Diving in' },   card:{ zh:'留言中', en:'Reading comments' } },
+    ctx:      { order:{ zh:'小导判读',   en:'Context, make the call' },        ack:{ zh:'交给我', en:'Leave it to me' }, card:{ zh:'判读中', en:'Assessing' } },
+    synth:    { order:{ zh:'合成校稿',   en:'Synthesiser, proofread' },        ack:{ zh:'收到稿', en:'Got the draft' },  card:{ zh:'整合中', en:'Integrating' } },
   };
 
 	  function startRun() {
@@ -567,7 +567,7 @@
 	    sim.kbOpen = null;
 	    sim.synthQueue = []; sim.synthBusy = false; sim.handed = 0;
 	    sim.leaderQueue = []; sim.leaderBusy = false;
-	    sim.handoff = false; sim.handoffStart = 0;   // synth→隊長 report hand-off phase
+	    sim.handoff = false; sim.handoffStart = 0;   // synth→队长 report hand-off phase
 	    sim.delivering = false; sim.delivered = false; sim.deliverTarget = null;  // opening task-delivery tour phase
 	    sim.collecting = false;                      // collector integration phase not yet begun
 	    // Relay pods: each becomes a conveyor line — the doc is carried person→
@@ -608,7 +608,7 @@
 	  // app.js. 'go' → wake the standby candidates: they get up from the dining
 	  // corner and WALK into their reader slots, then work + deliver normally.
 	  // 'stop' → they stay asleep; the run wraps up with just the already-working
-	  // agents (sum+ctx→synth→隊長→whiteboard). Robust to being called never / twice /
+	  // agents (sum+ctx→synth→队长→whiteboard). Robust to being called never / twice /
 	  // after the run has moved on: no-ops safely and never leaves anyone stuck.
 	  function escalateDecision(decision) {
 	    if (reducedMotion) { escalateDecisionReduced(decision); return; }
@@ -631,7 +631,7 @@
 	      if (sim.escalateStandby) sim.escalateStandby.delete(id);   // now a real carrier
 		      e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
 		      e._queuedDeliver = false; e._returningToDesk = false; e.ambKind = null; e.carryDoc = false;
-	      e.asleep = false; e.bubble = LZ({ zh:'值得讀，開工！', en:"Worth a read, let's go!" });
+	      e.asleep = false; e.bubble = LZ({ zh:'值得读，开工！', en:"Worth a read, let's go!" });
 	      e.state = 'delivering';   // transient "moving" state so nothing else grabs it
 	      const t = targetPos(id);  // its computed reader slot (all-enabled escalate spec)
 	      walkXY(e, t.x, t.y, () => {
@@ -682,14 +682,14 @@
 	    sim.customView = true;   // keep traveling desks/pods/docs rendered through the finale
 	    const L = chars.orch;
 	    sim.delivering = false; sim.delivered = false;
-	    // 隊長 WALKS from its current spot to the overseer slot, then hands the task
+	    // 队长 WALKS from its current spot to the overseer slot, then hands the task
 	    // out to the active readers (a brisk opening-delivery tour) before settling
 	    // as overseer. The delivery is purely the leader's route — readers already
 	    // start working on arrival at their slots (below), so the leader never gates
 	    // them behind reality (SSE running arriving first just means the hand-off is
 	    // a quick catch-up gesture). No teleport.
 	    { const t = targetPos('orch');
-	      L.bubble = LZ({ zh:'各組就位，開工！', en:"Everyone's in position, let's go!" });
+	      L.bubble = LZ({ zh:'各组就位，开工！', en:"Everyone's in position, let's go!" });
 	      walkIntoRun(L, t.x, t.y, () => {
 	        L.state = 'idle'; L.facing = 'down';
 	        L.timer = 90; L.onTimer = () => { if (sim.active && !sim.delivering) L.bubble = ''; };
@@ -731,7 +731,7 @@
 	        });
 	      }
 	    });
-	    // 合成 also WALKS to its computed 校對 desk, then idles there (no teleport).
+	    // 合成 also WALKS to its computed 校对 desk, then idles there (no teleport).
 	    const S = chars.synth;
 	    S._queuedDeliver = false; S._returningToDesk = false;
 	    { const t = targetPos('synth');
@@ -744,17 +744,17 @@
 	    }
 	  }
 
-	  // ─── Opening delivery: 隊長 hands the task to the active readers ─────────────
-	  // Bubbles 隊長 says as it hands over the task (📋) at the start of a run.
+	  // ─── Opening delivery: 队长 hands the task to the active readers ─────────────
+	  // Bubbles 队长 says as it hands over the task (📋) at the start of a run.
 	  const DELIVER_ORDERS = [
-	    { zh:'這篇交給你', en:'This one is yours' },
-	    { zh:'開始囉', en:"Here we go" },
-	    { zh:'麻煩你了', en:'Over to you' },
+	    { zh:'这篇交给你', en:'This one is yours' },
+	    { zh:'开始啰', en:"Here we go" },
+	    { zh:'麻烦你了', en:'Over to you' },
 	    { zh:'就靠你了', en:"Counting on you" },
 	  ];
-	  const DELIVER_HOLD = 22;   // frames 隊長 pauses at each reader for the hand-off beat
+	  const DELIVER_HOLD = 22;   // frames 队长 pauses at each reader for the hand-off beat
 
-	  // Which agents 隊長 delivers to, once per group: the FIRST member (podOrder) of
+	  // Which agents 队长 delivers to, once per group: the FIRST member (podOrder) of
 	  // each active reader pod, plus every active solo reader, plus ctx when active.
 	  // Skips benched + escalate-standby workers. Robust to 1–3 readers, relay pods
 	  // (delivers to the first member), quick-scan/escalate (only the active ones).
@@ -778,7 +778,7 @@
 	    return targets.filter(id => id !== 'orch' && chars[id]);
 	  }
 
-	  // Kick off the brisk hand-off tour: 隊長 carries a 📋 to each delivery target,
+	  // Kick off the brisk hand-off tour: 队长 carries a 📋 to each delivery target,
 	  // pauses for a beat with a bubble (which reads as "kicking off" that reader),
 	  // then returns to its overseer spot. This NEVER changes reader work state —
 	  // readers already start on arrival / SSE — so it can't hold anyone behind
@@ -790,7 +790,7 @@
 	    sim.delivering = true;
 	    deliverTaskStep(targets, 0);
 	  }
-	  // Return 隊長 to its overseer slot and settle it as the room's overseer.
+	  // Return 队长 to its overseer slot and settle it as the room's overseer.
 	  function endTaskDelivery() {
 	    const L = chars.orch;
 	    sim.delivering = false; sim.delivered = true; sim.deliverTarget = null;
@@ -801,21 +801,21 @@
 	    walkXY(L, t.x, t.y, () => {
 	      // Don't stomp the finale if it began while we were walking back.
 	      if (sim.handoff || sim.presented) return;
-	      L.state = 'idle'; L.facing = 'down'; L.bubble = LZ({ zh:'各組開工，我盯著', en:"Everyone's working, I've got eyes on it" });
+	      L.state = 'idle'; L.facing = 'down'; L.bubble = LZ({ zh:'各组开工，我盯著', en:"Everyone's working, I've got eyes on it" });
 	      L.timer = 70; L.onTimer = () => { if (sim.active && !sim.delivering) L.bubble = ''; };
 	    }, 'task');
 	  }
 	  function deliverTaskStep(targets, i) {
 	    const L = chars.orch;
 	    // Abort cleanly if the run moved on (finished fast / entered the finale) — the
-	    // finale (beginHandoff/startPresentInPlace) takes over 隊長 from here.
+	    // finale (beginHandoff/startPresentInPlace) takes over 队长 from here.
 	    if (!sim.active || sim.handoff || sim.presented) { sim.delivering = false; L.carryDoc = false; return; }
 	    if (i >= targets.length) { endTaskDelivery(); return; }
 	    const w = chars[targets[i]];
 	    // Target vanished / benched mid-tour (e.g. spec churn): skip to the next.
 	    if (!w || editMode.bench[targets[i]] || isStandby(targets[i])) { deliverTaskStep(targets, i + 1); return; }
-	    sim.deliverTarget = targets[i];   // lights the 隊長→this-reader flow connector
-	    L.carryDoc = true;   // 隊長 carries the 📋 task on its route
+	    sim.deliverTarget = targets[i];   // lights the 队长→this-reader flow connector
+	    L.carryDoc = true;   // 队长 carries the 📋 task on its route
 	    L.bubble = '';
 	    const spot = handoffSpotFor(w);
 	    L.state = 'delivering';
@@ -854,7 +854,7 @@
 	    sim.handoff = false; sim.handoffStart = 0; sim.collecting = false;
 	    selected = null;
 	    const L = chars.orch;
-	    L.bubble = LZ({ zh:'各組就位，準備開工！', en:"Everyone's in position, get ready!" });
+	    L.bubble = LZ({ zh:'各组就位，准备开工！', en:"Everyone's in position, get ready!" });
 	    // Clear per-agent leftovers, then walk to the computed layout.
 	    Object.values(chars).forEach(e => {
 		      e.timer = 0; e.onTimer = null; e._queuedDeliver = false; e._returningToDesk = false;
@@ -873,14 +873,14 @@
     const L = chars.orch;
     if (i >= ALL_WORKERS.length) {                   // done assigning → become receiver
       L.state = 'returning';
-      L.bubble = LZ({ zh:'各組開工', en:'Everyone, get to work' });
+      L.bubble = LZ({ zh:'各组开工', en:'Everyone, get to work' });
       walkTo(L, L.station.approach, () => slideTo(L, L.station.seat, () => {
         L.state = 'idle'; L.facing = 'down'; L.bubble = ''; tryLeader();
       }));
       return;
     }
     const w = chars[ALL_WORKERS[i]];
-    const task = ASSIGNMENTS[w.id] || { order:{ zh:'交給你！', en:'This one is yours!' }, ack:{ zh:'收到！', en:'Got it!' }, card:{ zh:'處理中', en:'Working' } };
+    const task = ASSIGNMENTS[w.id] || { order:{ zh:'交给你！', en:'This one is yours!' }, ack:{ zh:'收到！', en:'Got it!' }, card:{ zh:'处理中', en:'Working' } };
     L.state = 'walking_to_employee';
     walkTo(L, w.station.approach, () => {
       faceToward(L, w.station.seat);
@@ -910,7 +910,7 @@
     }));
   }
 
-	  // Stage 1: 小摘/小詞/小潛 hand their drafts to 合成 (serialized at its desk).
+	  // Stage 1: 小摘/小词/小潜 hand their drafts to 合成 (serialized at its desk).
 	  function trySynth() {
 	    if (sim.synthBusy || !sim.synthQueue.length) return;
 	    const S = chars.synth;
@@ -937,7 +937,7 @@
 	    if (e._returningToDesk) return;
 	    e._returningToDesk = true;
 	    e.path = null; e.onArrive = null; e.timer = 0; e.onTimer = null;
-	    e.bubble = e.id === 'synth' ? LZ({ zh:'先回電腦前', en:'Back to my desk first' }) : '';
+	    e.bubble = e.id === 'synth' ? LZ({ zh:'先回电脑前', en:'Back to my desk first' }) : '';
 	    e.state = 'recall';
 	    const done = () => {
 	      e._returningToDesk = false;
@@ -949,14 +949,14 @@
 	    else walkTo(e, e.station.approach, sit);
 	  }
 
-  // Stage 2: 隊長 receives 小導's direct report and 合成's final draft (serialized).
+  // Stage 2: 队长 receives 小导's direct report and 合成's final draft (serialized).
   function tryLeader() {
     const L = chars.orch;
     if (sim.leaderBusy || L.state !== 'idle' || !sim.leaderQueue.length) return;
     const job = sim.leaderQueue.shift();
     sim.leaderBusy = true;
     const w = chars[job];
-    const say = job === 'synth' ? LZ({ zh:'最終稿！', en:'Final draft!' }) : (w._report || LZ({ zh:'完成！', en:'Done!' }));
+    const say = job === 'synth' ? LZ({ zh:'最终稿！', en:'Final draft!' }) : (w._report || LZ({ zh:'完成！', en:'Done!' }));
     deliver(w, L, say, '✓', () => {
       sim.leaderBusy = false; maybeFinish(); tryLeader();
     });
@@ -968,7 +968,7 @@
     }
   }
 
-  // Everyone's done → 隊長 walks to the whiteboard to present, then the report
+  // Everyone's done → 队长 walks to the whiteboard to present, then the report
   // expands (the app reveals it via the present handler).
   function startPresent() {
     const L = chars.orch;
@@ -976,7 +976,7 @@
     const spot = centreOf(WB_APPROACH[0], WB_APPROACH[1]);
     walkXY(L, spot.x, spot.y, () => {
       L.tile = WB_APPROACH.slice();
-      faceToward(L, WB_TILE); L.carryDoc = false; L.state = 'presenting'; L.bubble = LZ({ zh:'📊 來看報告！', en:'📊 Come see the report!' });
+      faceToward(L, WB_TILE); L.carryDoc = false; L.state = 'presenting'; L.bubble = LZ({ zh:'📊 来看报告！', en:'📊 Come see the report!' });
       sim.boardActive = true;
       if (presentHandler) presentHandler();
       L.timer = 120; L.onTimer = () => settleAfterReport();
@@ -1033,7 +1033,7 @@
     L.bubble = '';
     walkTo(L, SHELF_APPROACH, () => {
       faceToward(L, [2, 2]);
-      L.state = 'kb_search'; L.bubble = LZ({ zh:'找單詞本…', en:'Looking up the wordbook…' }); L.timer = 85;
+      L.state = 'kb_search'; L.bubble = LZ({ zh:'找单词本…', en:'Looking up the wordbook…' }); L.timer = 85;
       L.onTimer = () => {
         L.bubble = LZ({ zh:'找到了', en:'Found it' });
         if (sim.kbOpen) sim.kbOpen();
@@ -1052,8 +1052,8 @@
   // ─── Ambient office life (game-NPC idle behaviour) ──────────────────────────
   const ambLocks = { kitchen: false, snack: false, cooler: false };
   const CHATS = [
-    { zh:'🙂 歇會', en:'🙂 Break' }, '🥱', '💤 zzz', '🎧',
-    { zh:'摸個魚', en:'Slacking off' }, '🤔', '☕?',
+    { zh:'🙂 歇会', en:'🙂 Break' }, '🥱', '💤 zzz', '🎧',
+    { zh:'摸个鱼', en:'Slacking off' }, '🤔', '☕?',
   ];
 
   // The agent's "home" tile = its current computed layout slot (drag override or
@@ -1081,7 +1081,7 @@
     // that same slot (homeTileOf). Only runs when nothing is being analysed.
     if (e.walkTarget || relayoutActive) return;                 // mid-reshuffle: don't interfere
     if (sim.active || e.asleep || e.state !== 'idle' || moving(e)) return;
-    if (e.id === 'orch' && sim.kbOpen) return;                  // 隊長 busy fetching the wordbook
+    if (e.id === 'orch' && sim.kbOpen) return;                  // 队长 busy fetching the wordbook
     if (e.idleTimer == null) e.idleTimer = AMB_MIN + Math.floor(Math.random() * AMB_RAND);
     if (--e.idleTimer > 0) return;
     startAmbient(e);
@@ -1134,11 +1134,11 @@
       const w = chars[id];
       if (w.state === 'working' && !moving(w) && taskState[id] === 'done' && (tick - w.workStart) >= MIN_WORK) {
         w.state = 'waiting';
-        if (id === 'ctx') { sim.leaderQueue.push('ctx'); tryLeader(); }   // 小導 → 隊長 direct
+        if (id === 'ctx') { sim.leaderQueue.push('ctx'); tryLeader(); }   // 小导 → 队长 direct
         else { sim.synthQueue.push(id); trySynth(); }                     // others → 合成
       }
     }
-	    // 合成 finishes curating → walks the final draft to 隊長.
+	    // 合成 finishes curating → walks the final draft to 队长.
 	    const S = chars.synth;
 	    if (S.state === 'reviewing' && isSeated(S) && (tick - S.workStart) >= SYNTH_REVIEW && !S._queuedDeliver) {
 	      S._queuedDeliver = true; S.state = 'waiting';
@@ -1149,7 +1149,7 @@
     petTick();
   }
 
-  // Who produces the final report to hand to 隊長. Normally 合成; if 合成 is
+  // Who produces the final report to hand to 队长. Normally 合成; if 合成 is
   // disabled we fall back to the last active downstream stage (裁定, else the
   // right-most enabled reader), so the hand-off is robust to a benched synth.
   function lastProducerId() {
@@ -1183,8 +1183,8 @@
   }
   // Draft/handover bubbles readers say when they set a doc down at 合成.
   const DELIVER_SAYS = [
-    { zh:'交給你了', en:'Here you go' },
-    { zh:'這是我的部分', en:'This is my part' },
+    { zh:'交给你了', en:'Here you go' },
+    { zh:'这是我的部分', en:'This is my part' },
     { zh:'我的稿子', en:'My draft' },
     { zh:'整理好了', en:'All sorted' },
   ];
@@ -1194,10 +1194,10 @@
   // or a fallback producer if 合成 is benched), hands it over, and walks back to
   // its slot → done. Deliveries are SERIALIZED so carriers don't pile up. When
   // every enabled worker has delivered, the collector integrates, then walks the
-  // final report to 隊長, who walks to the whiteboard and presents.
+  // final report to 队长, who walks to the whiteboard and presents.
   function updateCustomRun() {
     // The collector everyone delivers to. If 合成 is benched, deliveries route to
-    // the fallback producer instead (which itself later carries to 隊長).
+    // the fallback producer instead (which itself later carries to 队长).
     const synthOn = !editMode.bench.synth;
     const collectorId = synthOn ? 'synth' : lastProducerId();
     const carriers = ALL_WORKERS.filter(id => id !== collectorId);   // exclude the collector itself
@@ -1235,7 +1235,7 @@
 
     const S = chars[collectorId];
     // Does the collector do REAL SSE-driven work of its own? synth always does;
-    // a reader/ctx fallback does; 隊長 as a last-resort producer does not.
+    // a reader/ctx fallback does; 队长 as a last-resort producer does not.
     const collectorSSE = ALL_WORKERS.includes(collectorId) || collectorId === 'synth';
     // The collector's real work has STARTED per SSE (running/typing/reading/done).
     const collectorStarted = collectorSSE
@@ -1247,7 +1247,7 @@
     // ── Start integrating: track REAL progress, don't wait on the delivery
     // animation. 合成 enters 整合中 the moment its SSE status arrives (running or
     // even already-done if we were behind); a non-SSE fallback producer (no synth,
-    // collector is 隊長-only) has no status of its own, so it falls back to
+    // collector is 队长-only) has no status of its own, so it falls back to
     // starting once the cosmetic deliveries have landed. Either way, once started
     // it plays a visible integrate beat before it may finish.
     const canStart = collectorStarted || (!collectorSSE && allDelivered);
@@ -1256,7 +1256,7 @@
       sim.collecting = true;
       S.state = 'reviewing'; S.workStart = tick;
       S.asleep = false;
-      S.bubble = (collectorId === 'synth' && synthOn) ? LZ(ASSIGNMENTS.synth.card) : LZ({ zh:'彙整中', en:'Consolidating' });
+      S.bubble = (collectorId === 'synth' && synthOn) ? LZ(ASSIGNMENTS.synth.card) : LZ({ zh:'汇整中', en:'Consolidating' });
       if (collectorId === 'synth' && synthOn && taskState.synth !== 'done') taskState.synth = 'typing';
     }
 
@@ -1272,7 +1272,7 @@
       beginHandoff(collectorId);
     }
   }
-  const HANDOFF_MIN = 26;   // min frames 隊長 holds the report before presenting
+  const HANDOFF_MIN = 26;   // min frames 队长 holds the report before presenting
 
   // Serialized reader→collector delivery: one carrier walks its draft to the
   // collector at a time, pauses (bubble), then walks back to its slot → done.
@@ -1307,9 +1307,9 @@
 
   // Bubbles a relay member says as it hands the growing doc to the next person.
   const RELAY_PASS_SAYS = [
-    { zh:'接著換你', en:'Your turn next' },
-    { zh:'換你了', en:'Your turn' },
-    { zh:'傳給你', en:'Passing to you' },
+    { zh:'接著换你', en:'Your turn next' },
+    { zh:'换你了', en:'Your turn' },
+    { zh:'传给你', en:'Passing to you' },
     { zh:'交棒', en:'Passing the baton' },
   ];
 
@@ -1430,13 +1430,13 @@
   }
 
   // Report hand-off: the collector (producer) carries the integrated report to
-  // 隊長, hands it over ("報告好了"), then 隊長 walks to the whiteboard to present.
+  // 队长, hands it over ("报告好了"), then 队长 walks to the whiteboard to present.
   function beginHandoff(producerId) {
     // Keep sim.active TRUE through the hand-off so updateCustomRun keeps ticking
-    // and can advance; it flips false when 隊長 starts presenting.
+    // and can advance; it flips false when 队长 starts presenting.
     sim.handoff = true; sim.handoffStart = tick;
     const L = chars.orch;
-    // The finale owns 隊長 now: cancel any in-flight opening-delivery walk/timer so
+    // The finale owns 队长 now: cancel any in-flight opening-delivery walk/timer so
     // its callbacks can't fight the hand-off (its own guards also bail on sim.handoff).
     sim.delivering = false; sim.delivered = true;
     L.walkXY = null; L.path = null; L.onArrive = null; L.timer = 0; L.onTimer = null;
@@ -1444,8 +1444,8 @@
     const producer = producerId || lastProducerId();
     const F = chars[producer];
     if (!F || producer === 'orch') {
-      // Producer IS 隊長 (nothing enabled downstream) → 隊長 already holds it.
-      L.bubble = LZ({ zh:'拿到報告了', en:'Got the report' });
+      // Producer IS 队长 (nothing enabled downstream) → 队长 already holds it.
+      L.bubble = LZ({ zh:'拿到报告了', en:'Got the report' });
       L.timer = HANDOFF_MIN;
       L.onTimer = () => { if (!sim.presented) { sim.presented = true; startPresentInPlace(); } };
       return;
@@ -1456,7 +1456,7 @@
     walkXY(F, spot.x, spot.y, () => {
       faceToward(F, L.tile);
       F.state = 'reporting';   // stand + talk during the hand-over beat
-      F.bubble = LZ({ zh:'報告好了', en:'Report is ready' }); L.bubble = LZ({ zh:'拿到報告了', en:'Got the report' });
+      F.bubble = LZ({ zh:'报告好了', en:'Report is ready' }); L.bubble = LZ({ zh:'拿到报告了', en:'Got the report' });
       F.timer = REPORT;
       F.onTimer = () => {
         F.bubble = '';
@@ -1468,7 +1468,7 @@
     }, 'task');
   }
 
-  // Finale: 隊長 walks over to the whiteboard, presents (triggering the report
+  // Finale: 队长 walks over to the whiteboard, presents (triggering the report
   // reveal), then returns to its overseer spot and settles everyone. Walking to
   // the board keeps the "boss presents the report" beat and anchors the board as
   // the pipeline's output. The synth→board doc lands just before this.
@@ -1478,7 +1478,7 @@
       e.statusText = ''; e._report = ''; e._queuedDeliver = false; e.walkXY = null; e.carryDoc = false;
     });
     L.bubble = ''; L.state = 'returning';
-    // Walk 隊長 back to its overseer slot (free-floating target, via the layout lerp).
+    // Walk 队长 back to its overseer slot (free-floating target, via the layout lerp).
     L.walkTarget = { x: targetPos('orch').x, y: targetPos('orch').y, benched: false };
     relayoutActive = true;
     ALL_WORKERS.concat('synth').forEach(id => { if (!editMode.bench[id]) delete taskState[id]; });
@@ -1488,11 +1488,11 @@
   function startPresentInPlace() {
     const L = chars.orch;
     sim.active = false;   // hand-off complete → run logic ends; the present finale begins
-    // The hand-off is done; clear the producer's "交給隊長" bubble (legacy guard —
+    // The hand-off is done; clear the producer's "交给队长" bubble (legacy guard —
     // no current code path sets this bubble text, but kept for safety).
-    const handoffMsg = LZ({ zh:'報告交給隊長', en:'Report handed to the Orchestrator' });
+    const handoffMsg = LZ({ zh:'报告交给队长', en:'Report handed to the Orchestrator' });
     Object.values(chars).forEach(e => { if (e.id !== 'orch' && e.bubble === handoffMsg) e.bubble = ''; });
-    // Walk 隊長 to the whiteboard easel, face it, then present.
+    // Walk 队长 to the whiteboard easel, face it, then present.
     L.state = 'walking_to_employee'; L.bubble = ''; L.carryDoc = true;
     L.walkTarget = null;
     const spot = centreOf(WB_APPROACH[0], WB_APPROACH[1]);
@@ -1500,7 +1500,7 @@
       L.tile = WB_APPROACH.slice();
       faceToward(L, WB_TILE);
       L.carryDoc = false;
-      L.state = 'presenting'; L.bubble = LZ({ zh:'📊 來看報告！', en:'📊 Come see the report!' });
+      L.state = 'presenting'; L.bubble = LZ({ zh:'📊 来看报告！', en:'📊 Come see the report!' });
       sim.boardActive = true;
       if (presentHandler) presentHandler();
       L.timer = 120; L.onTimer = present_settle;
@@ -1563,7 +1563,7 @@
     // workstation (drawDeskSprite travels with the worker), so fixed chairs at the
     // old STATIONS seats were orphaned clutter once the layout became spec-driven.
   }
-  // Wall sign that switches the language (雙語 / 中 / EN), next to the HN LENS sign.
+  // Wall sign that switches the language (双语 / 中 / EN), next to the HN LENS sign.
   function drawLangSign() {
     const x=T(10), y=4, w=14, hh=11;
     rect(x-1,y-1,w+2,hh+2,'#5A4A38');
@@ -1698,7 +1698,7 @@
     rect(x+3,y+2,2,6,'#4D7C0F'); rect(x,y+3,4,3,'#65A30D'); rect(x+5,y+2,4,3,'#84CC16'); rect(x+2,y,4,3,'#A3E635');
   }
   // Two massage chairs (按摩椅) in the bottom-right dining corner — this is the
-  // rest area now (the old bottom-left 休息區 is gone). Benched/disabled agents
+  // rest area now (the old bottom-left 休息区 is gone). Benched/disabled agents
   // walk here and nap in a chair (setAsleep/drawAsleep 💤). Drawn as permanent
   // dining-corner furniture so the corner always reads as a lounge.
   function drawMassageChair(col, row){
@@ -1712,10 +1712,10 @@
   }
   function drawMassageChairs(){
     MASSAGE_CHAIRS.forEach(([col, row]) => drawMassageChair(col, row));
-    // Small "休息區" label above the chairs so the corner reads as the rest area.
+    // Small "休息区" label above the chairs so the corner reads as the rest area.
     c.save(); c.fillStyle = rgba('#1C1917', 0.35);
     c.font = `${9}px system-ui, sans-serif`; c.textAlign = 'left'; c.textBaseline = 'top';
-    c.fillText(LZ({ zh:'休息區', en:'Rest area' }), px(T(MASSAGE_CHAIRS[0][0])+2), px(T(MASSAGE_CHAIRS[0][1])-3)); c.restore();
+    c.fillText(LZ({ zh:'休息区', en:'Rest area' }), px(T(MASSAGE_CHAIRS[0][0])+2), px(T(MASSAGE_CHAIRS[0][1])-3)); c.restore();
   }
   function drawSofa(){ const sx=T(14),sy=T(9)+1,sw=T(3);
     rect(sx,sy,sw,4,SOFA); rect(sx,sy,sw,1,SOFAHI); rect(sx,sy+4,sw,3,SOFAHI);
@@ -1815,7 +1815,7 @@
     const curl = Math.floor(tick/18)%2;
     rect(x-1,y+2,2,1,'#4B5563'); rect(x-2,y+1-curl,1,2,'#4B5563');
   }
-  // Whiteboard easel — blank until 隊長 presents, then it fills with a "report".
+  // Whiteboard easel — blank until 队长 presents, then it fills with a "report".
   function drawWhiteboard(){
     const x=T(WB_TILE[0]), y=T(WB_TILE[1]);
     rect(x+3,y+12,2,3,WOODLO); rect(x+11,y+12,2,3,WOODLO);   // easel legs
@@ -2082,7 +2082,7 @@
     c.save();
     c.font = `${fs}px system-ui, sans-serif`;
     // Talk bubbles stay short (1 line); live status wraps to up to 2 lines so
-    // longer step text ("通讀全文 2 段…", "聚類派別分析中…") is readable. Character
+    // longer step text ("通读全文 2 段…", "聚类派别分析中…") is readable. Character
     // budgets are per-language: English needs ~3x the characters Chinese does to
     // say the same thing, so a Chinese-calibrated budget clips English mid-word.
     const shortMax = langMode === 'en' ? 26 : 8;
@@ -2149,7 +2149,7 @@
     // under the characters (subtler than edit mode) so teaming stays readable in
     // the idle office as well as during a run.
     if (!editMode.on && layoutView()) drawRunPods();
-    // The one meaningful dependency edge (小詞→小導), under the sprites.
+    // The one meaningful dependency edge (小词→小导), under the sprites.
     if (SHOW_DEP_EDGE && !editMode.on && layoutView()) drawDepEdge();
     const sprites = [];
     // Shared big tables for grouped reader pods (drawn as floor furniture, y-sorted).
@@ -2192,12 +2192,12 @@
     if (fly) drawFlyingBook();
     if (customRunView()) drawRunDocs();    // documents are now carried by people; runDocs stays empty (kept as a no-op)
     if (editMode.on) drawEditOverlay();    // badges, greyed benched workers, hint
-    if (editMode.debate && !editMode.bench.ctx) drawDebateCue();   // 🥊 floating tag on 小導
+    if (editMode.debate && !editMode.bench.ctx) drawDebateCue();   // 🥊 floating tag on 小导
     drawTokenMeter();                      // live estimate / actual token readout
   }
 
-  // ─── 🥊 辯論裁定 cue ─────────────────────────────────────────────────────────
-  // A small floating tag above 小導 when debate mode is on, so the office shows
+  // ─── 🥊 辩论裁定 cue ─────────────────────────────────────────────────────────
+  // A small floating tag above 小导 when debate mode is on, so the office shows
   // the verdict is adjudicated (正方 vs 反方), not a single call. Purely a label —
   // no extra sprites/animation (keeps the room calm, per the flow-line removal).
   function drawDebateCue() {
@@ -2220,9 +2220,9 @@
     } catch (_) { /* never break the render loop */ }
   }
 
-  // ─── 小詞 → 小導 dependency edge ─────────────────────────────────────────────
-  // The single meaningful semantic dependency in the workflow: 小導 (verdict)
-  // reads 小詞's jargon density to gauge reading accessibility. Unlike the old
+  // ─── 小词 → 小导 dependency edge ─────────────────────────────────────────────
+  // The single meaningful semantic dependency in the workflow: 小导 (verdict)
+  // reads 小词's jargon density to gauge reading accessibility. Unlike the old
   // doc-flow connectors (removed for noise), this is ONE static, dotted
   // "reference" line — no animation, no per-leg fan-out — drawn only when both
   // agents are active, so it reads as a data dependency, not document traffic.
@@ -2233,7 +2233,7 @@
       if (!a || !b) return;
       let ax = px(a.x), ay = px(a.y), bx = px(b.x), by = px(b.y);
       // Trim both ends so the line runs desk-to-desk and the arrowhead clears
-      // 小導's sprite (drawn on top of this line).
+      // 小导's sprite (drawn on top of this line).
       const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
       const ux = dx / len, uy = dy / len, pad = SCALE * 10;
       ax += ux * pad; ay += uy * pad; bx -= ux * pad; by -= uy * pad;
@@ -2244,7 +2244,7 @@
       c.setLineDash([SCALE * 1.5, SCALE * 2.5]);
       c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke();
       c.setLineDash([]);
-      // Small arrowhead at the 小導 end to show direction (小詞 → 小導).
+      // Small arrowhead at the 小导 end to show direction (小词 → 小导).
       const ang = Math.atan2(by - ay, bx - ax), head = SCALE * 3;
       c.fillStyle = rgba('#14B8A6', 0.3);
       c.beginPath();
@@ -2363,7 +2363,7 @@
   // Rest-corner drop-zone highlight + translucent pod rects, drawn before
   // characters so they read clearly underneath them.
   function drawEditUnderlay() {
-    // Subtle highlight around the two massage chairs — the "拖到這裡 = 停用 / 休息區"
+    // Subtle highlight around the two massage chairs — the "拖到这里 = 停用 / 休息区"
     // drop-zone. A soft wash + dashed outline so it reads as a target, and a
     // hint label just above the chairs.
     c.save();
@@ -2375,7 +2375,7 @@
     c.fillStyle = rgba('#1C1917', 0.55);
     c.font = `${9}px system-ui, sans-serif`;
     c.textAlign = 'center'; c.textBaseline = 'bottom';
-    c.fillText(LZ({ zh:'休息區 · 拖到這裡=停用', en:'Rest area · drag here to disable' }), px(REST_ZONE.x + REST_ZONE.w / 2), px(REST_ZONE.y - 1));
+    c.fillText(LZ({ zh:'休息区 · 拖到这里=停用', en:'Rest area · drag here to disable' }), px(REST_ZONE.x + REST_ZONE.w / 2), px(REST_ZONE.y - 1));
     c.restore();
     // Pod rects (only multi-member pods get a visible cluster box).
     computePods().forEach(pod => {
@@ -2488,7 +2488,7 @@
     c.font = `${10}px system-ui, sans-serif`;
     c.textAlign = 'center'; c.textBaseline = 'top';
     c.fillText(LZ({
-      zh: '編輯模式：拖角色=單獨移動（拖開=脫離群組）、拖 平行/接力 標籤=整組移動、點標籤=切換模式、拖到休息區=停用',
+      zh: '编辑模式：拖角色=单独移动（拖开=脱离群组）、拖 平行/接力 标签=整组移动、点标签=切换模式、拖到休息区=停用',
       en: 'Edit mode: drag a person = move alone (drag out = leave group); drag the Parallel/Relay badge = move whole group; click badge = toggle mode; drag to rest area = disable',
     }), px(LOGICAL_W / 2), px(WALL * TILE + 2));
     c.restore();
@@ -2496,12 +2496,12 @@
 
   // ─── Token meter ────────────────────────────────────────────────────────────
   // A small readout + bar in the office's top-right corner. Shows the live
-  // estimate ("預估 ~28k") while tuning, and the actual accumulated total
-  // ("實際 31k") during/after a run. The bar length is relative to a soft cap.
-  const METER_CAP = 45000;   // ~深度精讀 upper bound; bar saturates here
+  // estimate ("预估 ~28k") while tuning, and the actual accumulated total
+  // ("实际 31k") during/after a run. The bar length is relative to a soft cap.
+  const METER_CAP = 45000;   // ~深度精读 upper bound; bar saturates here
   const SHOW_TOKEN_METER = false;    // hidden from users for now — flip to re-enable
   const SHOW_AUDIENCE_TAG = false;   // matches the hidden Audience picker in index.html
-  const SHOW_DEP_EDGE = false;       // 小詞→小導 dependency line — hidden from users for now
+  const SHOW_DEP_EDGE = false;       // 小词→小导 dependency line — hidden from users for now
   function drawTokenMeter() {
     if (!SHOW_TOKEN_METER) return;
     const est = estimateTokens();
@@ -2509,9 +2509,9 @@
     const val = isActual ? meter.actual : est;
     // 💸 escalate estimate shows the cheap floor with a "↑" — final cost depends on
     // the runtime go/stop decision, so it can only grow from here.
-    const estWord = LZ({ zh:'預估', en:'Est.' });
+    const estWord = LZ({ zh:'预估', en:'Est.' });
     const estLabel = editMode.escalate ? estWord + ' ' + fmtK(val) + '↑' : estWord + ' ' + fmtK(val);
-    const label = isActual ? LZ({ zh:'實際', en:'Actual' }) + ' ' + fmtKPlain(val) : estLabel;
+    const label = isActual ? LZ({ zh:'实际', en:'Actual' }) + ' ' + fmtKPlain(val) : estLabel;
     const w = 58, h = 20;
     const x = LOGICAL_W - w - 4, y = WALL * TILE + 3;
     c.save();
@@ -2666,7 +2666,7 @@
   }
 
   // Build the graphConfig (v2: nodes with enabled+effort). Returns null when the
-  // spec equals the 標準 default — all enabled, all effort "med", the three
+  // spec equals the 标准 default — all enabled, all effort "med", the three
   // stage-1 workers in a single parallel group — so default runs send no &graph
   // and behave byte-for-byte as today.
   function getGraphConfig() {
@@ -2710,9 +2710,9 @@
     // 💸 thrifty: run sum+ctx first, then EITHER run jargon+comments (worth it) or
     // skip them. jargon+comments are runtime "candidates"; the backend decides.
     if (editMode.escalate) cfg.escalate = true;
-    // 🥊 辯論裁定: 小導 argues 正方/反方 then adjudicates into one balanced verdict.
+    // 🥊 辩论裁定: 小导 argues 正方/反方 then adjudicates into one balanced verdict.
     if (editMode.debate) cfg.debate = true;
-    // 受眾語氣: reader level shifts tone/depth (orthogonal to depth presets).
+    // 受众语气: reader level shifts tone/depth (orthogonal to depth presets).
     if (editMode.audience === 'beginner' || editMode.audience === 'expert') cfg.audience = editMode.audience;
     // Attach groups only when a non-default pod arrangement exists (a real
     // multi-member pod that isn't just the default single-parallel group).
@@ -2726,23 +2726,23 @@
   // office state (bench disabled nodes, set effort badges), clears pods + drag
   // overrides, then RE-LAYOUTS: the office auto-arranges into the preset's
   // pipeline (agents walk to their new spec-derived slots; disabled ones head to
-  // the sofa to sleep). '標準' = all enabled/med (getGraphConfig() === null) and
+  // the sofa to sleep). '标准' = all enabled/med (getGraphConfig() === null) and
   // renders as the clean readers‖ → ctx → synth → whiteboard pipeline.
   const PRESETS = {
-    quick: {   // ⚡ 快速掃描: sum(low)+ctx; jargon+comments off; synth on
+    quick: {   // ⚡ 快速扫描: sum(low)+ctx; jargon+comments off; synth on
       sum: { enabled: true, effort: 'low' }, jargon: { enabled: false },
       comments: { enabled: false }, ctx: { enabled: true }, synth: { enabled: true },
     },
-    standard: {  // 📄 標準: all enabled, all med (the default)
+    standard: {  // 📄 标准: all enabled, all med (the default)
       sum: { enabled: true, effort: 'med' }, jargon: { enabled: true, effort: 'med' },
       comments: { enabled: true, effort: 'med' }, ctx: { enabled: true }, synth: { enabled: true },
     },
-    jargon: {   // 🎯 術語特訓: jargon(high, ×2 vote)+ctx; sum(low); comments off
+    jargon: {   // 🎯 术语特训: jargon(high, ×2 vote)+ctx; sum(low); comments off
       sum: { enabled: true, effort: 'low' },
       jargon: { enabled: true, effort: 'high', replicas: 2 },
       comments: { enabled: false }, ctx: { enabled: true }, synth: { enabled: true },
     },
-    deep: {   // 🔬 深度精讀: all enabled, all high
+    deep: {   // 🔬 深度精读: all enabled, all high
       sum: { enabled: true, effort: 'high' }, jargon: { enabled: true, effort: 'high' },
       comments: { enabled: true, effort: 'high' }, ctx: { enabled: true }, synth: { enabled: true },
     },
@@ -2752,13 +2752,13 @@
       comments: { enabled: true, effort: 'med', replicas: 2 },
       ctx: { enabled: true }, synth: { enabled: true },
     },
-    thrifty: {   // 💸 省錢漸進: sum+ctx run first; jargon+comments are runtime
+    thrifty: {   // 💸 省钱渐进: sum+ctx run first; jargon+comments are runtime
       // "candidates" — the backend escalates to them only if worth reading.
       escalate: true,
       sum: { enabled: true, effort: 'med' }, jargon: { enabled: true, effort: 'med' },
       comments: { enabled: true, effort: 'med' }, ctx: { enabled: true }, synth: { enabled: true },
     },
-    debate: {   // 🥊 辯論裁定: full readers, but 小導 argues 正方/反方 then adjudicates.
+    debate: {   // 🥊 辩论裁定: full readers, but 小导 argues 正方/反方 then adjudicates.
       debate: true,
       sum: { enabled: true, effort: 'med' }, jargon: { enabled: true, effort: 'med' },
       comments: { enabled: true, effort: 'med' }, ctx: { enabled: true }, synth: { enabled: true },
@@ -2802,13 +2802,13 @@
   // null for a free-tuned arrangement. Shared by the picker highlight and the
   // workflow-summary prefix so both stay in agreement.
   function matchActivePreset() {
-    // 受眾語氣 is orthogonal to the depth preset — blank it while deciding which
-    // preset the DEPTH spec matches, then restore, so e.g. 標準+新手 still reads 標準.
+    // 受众语气 is orthogonal to the depth preset — blank it while deciding which
+    // preset the DEPTH spec matches, then restore, so e.g. 标准+新手 still reads 标准.
     const savedAud = editMode.audience;
     editMode.audience = null;
     let cfg;
     try { cfg = getGraphConfig(); } finally { editMode.audience = savedAud; }
-    if (cfg === null) return 'standard';   // 標準 default
+    if (cfg === null) return 'standard';   // 标准 default
     if (cfg.groups) return null;           // custom pods → no clean preset match
     const bench = id => !!editMode.bench[id];
     const eff = id => effortOf(id);
@@ -2837,15 +2837,15 @@
   const SUMMARY_NAME = { sum: ROLE.sum.name, jargon: ROLE.jargon.name, comments: ROLE.comments.name, ctx: ROLE.ctx.name, synth: ROLE.synth.name };
   const EFFORT_LABEL = { low: { zh:'低', en:'Low' }, med: { zh:'中', en:'Med' }, high: { zh:'高', en:'High' } };
   const PRESET_LABEL = {
-    quick:    { zh:'⚡ 快速掃描', en:'⚡ Quick scan' },
-    standard: { zh:'📄 標準',    en:'📄 Standard' },
-    jargon:   { zh:'🎯 術語特訓', en:'🎯 Jargon focus' },
+    quick:    { zh:'⚡ 快速扫描', en:'⚡ Quick scan' },
+    standard: { zh:'📄 标准',    en:'📄 Standard' },
+    jargon:   { zh:'🎯 术语特训', en:'🎯 Jargon focus' },
     reliable: { zh:'🛡️ 可靠',    en:'🛡️ Reliable' },
-    deep:     { zh:'🔬 深度精讀', en:'🔬 Deep read' },
-    thrifty:  { zh:'💸 省錢漸進', en:'💸 Thrifty ramp' },
-    debate:   { zh:'🥊 辯論裁定', en:'🥊 Debate verdict' },
+    deep:     { zh:'🔬 深度精读', en:'🔬 Deep read' },
+    thrifty:  { zh:'💸 省钱渐进', en:'💸 Thrifty ramp' },
+    debate:   { zh:'🥊 辩论裁定', en:'🥊 Debate verdict' },
   };
-  // "小詞(高×2)" — worker name + effort (低/中/高) + optional ×N vote tag.
+  // "小词(高×2)" — worker name + effort (低/中/高) + optional ×N vote tag.
   function workerToken(id) {
     let s = LZ(SUMMARY_NAME[id]) || id;
     const eff = LZ(EFFORT_LABEL[effortOf(id)]);
@@ -2857,16 +2857,16 @@
   function getWorkflowSummary() {
     try {
       const preset = matchActivePreset();
-      const prefix = preset ? LZ(PRESET_LABEL[preset]) : LZ({ zh:'🛠️ 自訂', en:'🛠️ Custom' });
+      const prefix = preset ? LZ(PRESET_LABEL[preset]) : LZ({ zh:'🛠️ 自订', en:'🛠️ Custom' });
       const enabledReaders = STAGE1.filter(id => !editMode.bench[id]);
       const disabled = STAGE1.filter(id => editMode.bench[id]);
       const estK = fmtK(estimateTokens());   // e.g. "~28k"
-      const estWord = LZ({ zh:'預估', en:'Est.' });
+      const estWord = LZ({ zh:'预估', en:'Est.' });
       const estTag = SHOW_TOKEN_METER ? ` · ${estWord} ${estK}` : '';
-      // 受眾語氣 tag (orthogonal to preset), appended to every caption form.
+      // 受众语气 tag (orthogonal to preset), appended to every caption form.
       // Audience picker is hidden from users for now, so never surface this tag.
-      const audTag = !SHOW_AUDIENCE_TAG ? '' : editMode.audience === 'beginner' ? LZ({ zh:' · 受眾:新手', en:' · Audience: Beginner' })
-        : editMode.audience === 'expert' ? LZ({ zh:' · 受眾:老手', en:' · Audience: Expert' }) : '';
+      const audTag = !SHOW_AUDIENCE_TAG ? '' : editMode.audience === 'beginner' ? LZ({ zh:' · 受众:新手', en:' · Audience: Beginner' })
+        : editMode.audience === 'expert' ? LZ({ zh:' · 受众:老手', en:' · Audience: Expert' }) : '';
 
       // 💸 escalate mode reads as a two-phase chain: cheap first, then +candidates.
       if (editMode.escalate) {
@@ -2876,7 +2876,7 @@
         const first = enabledReaders.filter(id => !editMode.escalateCandidates.includes(id))
           .map(id => LZ(SUMMARY_NAME[id]) || id);
         const firstStr = first.length ? first.join('·') : LZ(ROLE.sum.name);
-        const candStr = cand.length ? cand.join('·') : LZ({ zh:'其餘讀者', en:'the rest' });
+        const candStr = cand.length ? cand.join('·') : LZ({ zh:'其余读者', en:'the rest' });
         return LZ({
           zh: `${prefix} 先 ${firstStr}→${LZ(ROLE.ctx.name)}，值得才 +${candStr}${estTag}${audTag}`,
           en: `${prefix} ${firstStr} first → ${LZ(ROLE.ctx.name)}, +${candStr} only if worth it${estTag}${audTag}`,
@@ -2900,10 +2900,10 @@
       // the parallel list so nothing is dropped.
       const loose = enabledReaders.filter(id => !grouped.has(id)).map(workerToken);
       const stageParts = podStrs.concat(loose);
-      let chain = stageParts.length ? stageParts.join(' ∥ ') : LZ({ zh:'（無讀者）', en:'(no readers)' });
+      let chain = stageParts.length ? stageParts.join(' ∥ ') : LZ({ zh:'（无读者）', en:'(no readers)' });
 
       if (!editMode.bench.ctx) chain += editMode.debate
-        ? ' → ' + LZ(ROLE.ctx.name) + LZ({ zh:'⚖️(正方∥反方→合議)', en:'⚖️(pro∥con→verdict)' })
+        ? ' → ' + LZ(ROLE.ctx.name) + LZ({ zh:'⚖️(正方∥反方→合议)', en:'⚖️(pro∥con→verdict)' })
         : ' → ' + LZ(ROLE.ctx.name);
       if (!editMode.bench.synth) chain += ' → ' + LZ(ROLE.synth.name);
 
@@ -2957,7 +2957,7 @@
     const tables = [];
     const readerDesks = Object.create(null);
 
-    // 隊長 overseer spot (center-top). It walks to the board to present later.
+    // 队长 overseer spot (center-top). It walks to the board to present later.
     pos.orch = centreOf(ZONE.orchseat.col, ZONE.orchseat.row);
 
     // Disabled agents → rest slots (sofa), assigned in a stable order.
@@ -3140,7 +3140,7 @@
         mode: g.mode === 'relay' ? 'relay' : 'parallel',
       })).filter(g => g.members.length >= 2);
       const data = { v: 2, layout, bench: Object.keys(editMode.bench), podModes: editMode.podModes, groups, effort, replicas };
-      // 受眾語氣 is a stable preference (unlike session-only escalate/debate), so
+      // 受众语气 is a stable preference (unlike session-only escalate/debate), so
       // persist it — the office reopens with the reader level you last chose.
       if (editMode.audience === 'beginner' || editMode.audience === 'expert') data.audience = editMode.audience;
       localStorage.setItem(GRAPH_LS_KEY, JSON.stringify(data));
@@ -3410,8 +3410,8 @@
     getGraphConfig() { return getGraphConfig(); },
     // ─── Presets + effort + token meter ───────────────────────────────────────
     applyPreset(name) { applyPreset(name); },
-    // ─── 受眾語氣 (reader level) ────────────────────────────────────────────────
-    // Orthogonal to presets: 'beginner' | 'expert' | null(=預設). Persisted.
+    // ─── 受众语气 (reader level) ────────────────────────────────────────────────
+    // Orthogonal to presets: 'beginner' | 'expert' | null(=默认). Persisted.
     getAudience() { return editMode.audience || null; },
     setAudience(level) {
       editMode.audience = (level === 'beginner' || level === 'expert') ? level : null;
