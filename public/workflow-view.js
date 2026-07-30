@@ -175,8 +175,7 @@
       const summary = `${localize(plan.nodes.find(node => node.id === edge.from)?.label) || edge.from} → ${localize(plan.nodes.find(node => node.id === edge.to)?.label) || edge.to} · ${edge.kind}${decision}`;
       const labelX = (x1 + x2) / 2;
       const labelY = (y1 + y2) / 2 - 7;
-      return `<g class="workflow-edge edge-${esc(edge.kind)}">
-        <title>${esc(summary)}</title>
+      return `<g class="workflow-edge edge-${esc(edge.kind)}" data-tip="${esc(summary)}">
         <path d="${esc(d)}" marker-end="url(#wf-arrow)"></path>
         ${edge.kind !== 'dependency'
           ? `<text x="${labelX}" y="${labelY}">${esc(edge.kind === 'relay' ? tr('接力', 'relay') : (attempt.escalateDecision?.decision || tr('条件', 'condition')))}</text>`
@@ -257,7 +256,7 @@
           const segmentState = terminal ? 'error' : retry ? 'retrying' : output ? 'success' : 'running';
           return `<span class="workflow-timeline-segment state-${segmentState}"
             style="left:${segmentLeft.toFixed(2)}%;width:${Math.min(100 - segmentLeft, segmentWidth).toFixed(2)}%"
-            title="${esc(`A2A attempt ${transportAttempt} · ${stateLabel(segmentState)}`)}">
+            data-tip="${esc(`A2A attempt ${transportAttempt} · ${stateLabel(segmentState)}`)}">
             <span>A2A ${transportAttempt}</span>
           </span>`;
         }).join('');
@@ -280,7 +279,7 @@
           <strong>${esc(tr(`第 ${number} 轮`, `Attempt ${number}`))}</strong>
           <span class="state-${esc(attempt.state)}">${esc(stateLabel(attempt.state))}</span>
           <time>${esc(duration(attempt.startedAt, attempt.endedAt) || '—')}</time>
-          ${attempt.error ? `<span class="workflow-attempt-error" title="${esc(attempt.error)}">${esc(attempt.error)}</span>` : ''}
+          ${attempt.error ? `<span class="workflow-attempt-error" data-tip="${esc(attempt.error)}">${esc(attempt.error)}</span>` : ''}
         </header>
         <div class="workflow-timeline-rows">${rows}</div>
       </section>`;

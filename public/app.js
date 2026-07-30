@@ -66,9 +66,13 @@ function firstFilled(...values) {
 function syncI18nAttrs() {
   const lang = getLang();
   document.querySelectorAll('[data-zh-ph]').forEach(el => { el.placeholder = lang === 'zh' ? el.dataset.zhPh : el.dataset.enPh; });
-  document.querySelectorAll('[data-zh-title]').forEach(el => { el.title = lang === 'zh' ? el.dataset.zhTitle : el.dataset.enTitle; });
+  // Hints live in data-tip, which controls.js draws; `title` would hand the
+  // rendering back to the OS.
+  document.querySelectorAll('[data-zh-tip]').forEach(el => { el.setAttribute('data-tip', lang === 'zh' ? el.dataset.zhTip : el.dataset.enTip); });
   document.querySelectorAll('[data-zh-aria]').forEach(el => { el.setAttribute('aria-label', lang === 'zh' ? el.dataset.zhAria : el.dataset.enAria); });
-  document.querySelectorAll('option[data-zh]').forEach(el => { el.textContent = lang === 'zh' ? el.dataset.zh : el.dataset.en; });
+  document.querySelectorAll('option[data-zh], [role="option"][data-zh]').forEach(el => { el.textContent = lang === 'zh' ? el.dataset.zh : el.dataset.en; });
+  // Option text just changed, so each closed listbox has to repaint its label.
+  window.UiControls?.refresh();
 }
 // Re-render UI chrome that isn't tied to an analysis result (workflow strip,
 // edit-toggle button, front-page toggle, static attrs) when the language flips.
@@ -146,7 +150,7 @@ function syncWorkbench() {
   if (collapse) {
     collapse.setAttribute('aria-expanded', String(!workbenchCollapsed));
     collapse.textContent = workbenchCollapsed ? '⌃' : '⌄';
-    collapse.title = workbenchCollapsed
+    collapse.dataset.tip = workbenchCollapsed
       ? L({ zh: '展开分析控制台', en: 'Expand analysis console' })
       : L({ zh: '收起分析控制台', en: 'Collapse analysis console' });
   }
@@ -1921,7 +1925,7 @@ function difficultyTag(d) {
   const n = Math.max(0, Math.min(5, Math.round(Number(d) || 0)));
   if (!n) return '';
   const cls = n >= 4 ? 'diff-hard' : n >= 3 ? 'diff-mid' : 'diff-easy';
-  return `<span class="jpill-diff ${cls}" title="${esc(L({ zh: `难度 ${n}/5`, en: `difficulty ${n}/5` }))}">${'●'.repeat(n)}${'○'.repeat(5 - n)}</span>`;
+  return `<span class="jpill-diff ${cls}" data-tip="${esc(L({ zh: `难度 ${n}/5`, en: `difficulty ${n}/5` }))}">${'●'.repeat(n)}${'○'.repeat(5 - n)}</span>`;
 }
 
 function renderJargon(terms) {
@@ -2336,10 +2340,22 @@ async function kbImport(event) {
     kbSave(mergeKbItems(kbLoad(), imported));
     kbRender();
   } catch {
-    alert(L({ zh: '导入失败：请选择 HN Lens 导出的 JSON 档。', en: 'Import failed: please choose a JSON file exported by HN Lens.' }));
+    kbNotice(L({ zh: '导入失败：请选择 HN Lens 导出的 JSON 档。', en: 'Import failed: please choose a JSON file exported by HN Lens.' }));
   } finally {
     input.value = '';
   }
+}
+
+// In-drawer notice. This used to be alert(), an OS dialog that steals focus and
+// looks nothing like the rest of the page.
+let kbNoticeTimer = 0;
+function kbNotice(message) {
+  const el = document.getElementById('kb-notice');
+  if (!el) return;
+  el.textContent = message;
+  el.hidden = false;
+  clearTimeout(kbNoticeTimer);
+  kbNoticeTimer = setTimeout(() => { el.hidden = true; }, 6000);
 }
 
 function mergeKbItems(existingItems, importedItems) {

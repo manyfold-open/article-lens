@@ -8,7 +8,7 @@
     "test": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --test tests/*.test.js",
     "test:coverage": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-include='public/workflow-model.js' --test tests/*.test.js",
     "check:repo": "node scripts/validate-repository.mjs",
-    "check:browser": "node --check public/access.js && node --check public/app.js && node --check public/pixel.js && node --check public/settings.js && node --check public/workflow-model.js && node --check public/workflow-view.js",
+    "check:browser": "node --check public/access.js && node --check public/app.js && node --check public/controls.js && node --check public/pixel.js && node --check public/settings.js && node --check public/workflow-model.js && node --check public/workflow-view.js",
     "check:scripts": "bash -n scripts/smoke-production.sh",
     "check": "npm run typecheck && npm test && npm run check:repo && npm run check:browser && npm run check:scripts",
     "check:worker": "wrangler deploy --dry-run --config wrangler.toml",

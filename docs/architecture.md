@@ -65,6 +65,7 @@ src/
 public/
   index.html           main UI and styling
   app.js               analysis polling, results, Activity, KB, translation
+  controls.js          page-drawn listbox, switch, and tooltip
   pixel.js             pixel-office simulation and graph editor
   workflow-model.js    replay-safe client workflow reducer
   workflow-view.js     DAG and timeline renderer
@@ -235,6 +236,29 @@ card the reveal opens, so it has to stay scannable and leave the other five card
 something to show. Every card also carries its agent's job in one line and its
 uniform colour down the left edge, because the office only reveals a role on
 hover and neither a phone nor a demo audience can hover.
+
+The Workbench presents one view at a time through a single row of tabs: Graph,
+Timeline, Assignments, Activity. Analyse is not one of them, because it is the
+input needed before there is anything to inspect, so it stays open below the
+chosen view. `WorkflowInspector` renders the first three inside one panel and is
+told which to show through `setTab`; it does not own tabs or a collapse control.
+
+## No OS-drawn controls
+
+Nothing on the page may hand its rendering to the operating system. A native
+`<select>` has its open list drawn by the OS, a native checkbox its tick, `title`
+its tooltip, and `alert()` its dialog: none of them can be styled, none follow the
+page's language toggle, and `title` never appears on a touch screen at all. Beside
+a pixel office they read as someone else's software.
+
+`public/controls.js` supplies the replacements: a listbox, a switch, and one
+page-drawn tooltip fed by `data-tip`. Both controls keep the native contract on
+purpose — a `value` or `checked` property and a bubbling `change` event — so call
+sites read them exactly as they read the elements they replace. Colours come from
+`--ui-control-*` variables declared on `:root`, which each surrounding context
+overrides; declaring them on the control itself would beat the context's value.
+Disclosure triangles, scrollbars, text selection, and Chrome's autofill wash are
+overridden in `index.html` for the same reason.
 
 `flags.curation` records what 合成's pass cut, per section, measured off the arrays
 rather than inferred from the curator's keep-indices. 合成's card reports the cut
