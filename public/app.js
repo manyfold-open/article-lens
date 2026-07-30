@@ -1525,7 +1525,12 @@ const SOURCE_BADGE = {
   text:    { label: { zh: '贴上的文字', en: 'Pasted Text' }, cls: 'badge-muted' },
 };
 const WORTH_LABEL = {
-  high:   { zh: '强烈推荐', en: 'Highly Recommended' },
+  // The whiteboard card is a fixed slice of the office (10.5%, about 73px of
+  // content), and its longest *word* has to fit that on its own: a word wider
+  // than the card cannot wrap out of trouble and gets chopped by the card's
+  // overflow. `Recommended` alone needed 108px. Keep every English label here to
+  // short words.
+  high:   { zh: '强烈推荐', en: 'Top Pick' },
   medium: { zh: '值得一看', en: 'Worth Reading' },
   low:    { zh: '可略过', en: 'Can Skip' },
 };

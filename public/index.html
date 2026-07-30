@@ -538,15 +538,26 @@
       line-height: 1.15;
       font-weight: 900;
       margin: 1px 0;
+      /* Labels are kept short enough to fit (see WORTH_LABEL), so this never
+         fires today. It is here so a future long word breaks visibly instead of
+         being silently chopped by the card's overflow, which reads as a
+         different word rather than as a layout problem. */
+      overflow-wrap: anywhere;
     }
     .whiteboard-verdict[data-worth=high] .wbv-main { color: var(--green); }
     .whiteboard-verdict[data-worth=medium] .wbv-main { color: #B45309; }
     .whiteboard-verdict[data-worth=low] .wbv-main { color: var(--red); }
+    /* Two lines is deliberate: the full reason is on 小导's card and in the verdict
+       bar, so this is a teaser. A max-height cut the sentence dead with nothing to
+       show more was coming, which read as broken rather than as abridged. Clamping
+       to the same two lines ends them in an ellipsis instead. */
     .wbv-why {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
       color: var(--muted);
       margin-top: 2px;
-      max-height: 22px;
-      overflow: hidden;
     }
 
     /* Structured briefing/context rows (队长 / 小导) */
