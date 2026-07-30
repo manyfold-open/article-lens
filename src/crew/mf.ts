@@ -63,6 +63,10 @@ class A2AError extends Error {
     readonly retryable: boolean,
     readonly refreshCredential = false,
     readonly retryAfterMs?: number,
+    // True when this run's time budget, not the peer, ended the call: either no
+    // attempt could start, or the attempt window was shortened by the deadline.
+    // Retrying the whole workflow cannot fix that, so callers degrade instead.
+    readonly budgetExhausted = false,
   ) {
     super(message)
     this.name = 'A2AError'
@@ -78,6 +82,10 @@ function consumeRequestBudget(budget: A2ASubrequestBudget | undefined, operation
     )
   }
   budget.remaining -= 1
+}
+
+export function isBudgetExhaustedError(error: unknown): boolean {
+  return error instanceof A2AError && error.budgetExhausted
 }
 
 function clippedContent(content: string): Pick<Extract<SSEEvent, { event: 'agent_trace' }>, 'content' | 'truncated' | 'original_chars'> {
@@ -607,7 +615,11 @@ async function executeAttempt(
     const credential = await getPeerToken(env, peerId, requestBudget)
     const remaining = deadline - Date.now()
     if (remaining <= 0) {
-      throw new A2AError(`Agent ${peerId} exhausted the orchestration time budget before submission.`, true)
+      // The deadline, not the peer, ended this call before it was submitted.
+      throw new A2AError(
+        `Agent ${peerId} exhausted the orchestration time budget before submission.`,
+        true, false, undefined, true,
+      )
     }
     consumeRequestBudget(requestBudget, `opening a stream to ${peerId}`)
     const ctrl = new AbortController()
@@ -720,7 +732,10 @@ export async function callMfAgent(
   for (let attempt = 0; attempt < attempts; attempt++) {
     const remainingBudget = (opts.deadlineAt ?? Number.POSITIVE_INFINITY) - Date.now()
     if (remainingBudget < MIN_ATTEMPT_BUDGET_MS) {
-      lastErr = new A2AError(`Agent ${peerId} was stopped because the orchestration time budget was exhausted.`, true)
+      lastErr = new A2AError(
+        `Agent ${peerId} was stopped because this stage's time budget was exhausted.`,
+        true, false, undefined, true,
+      )
       emitTrace(
         opts.trace,
         callId,
@@ -732,6 +747,10 @@ export async function callMfAgent(
       )
       break
     }
+    // When the deadline is tighter than the configured timeout, a failure in
+    // that shortened window is the budget's doing, not the peer's verdict.
+    const attemptBudget = Math.min(timeoutMs, remainingBudget)
+    const clampedByDeadline = remainingBudget < timeoutMs
     try {
       emitTrace(
         opts.trace,
@@ -755,7 +774,7 @@ export async function callMfAgent(
         env,
         peerId,
         body,
-        Math.min(timeoutMs, remainingBudget),
+        attemptBudget,
         opts.deadlineAt,
         (state, id, detail) => {
           const label = state === 'completed'
@@ -786,7 +805,13 @@ export async function callMfAgent(
       )
       return output
     } catch (e) {
-      const error = normalizeCallError(e)
+      let error = normalizeCallError(e)
+      if (clampedByDeadline && error.retryable && !error.budgetExhausted) {
+        error = new A2AError(
+          `Agent ${peerId} ran out of this stage's time budget: ${error.message}`,
+          true, error.refreshCredential, error.retryAfterMs, true,
+        )
+      }
       lastErr = error
       if (error.refreshCredential) forgetPeerToken(env, peerId)
       const waitMs = retryDelay(error, attempt + 1)

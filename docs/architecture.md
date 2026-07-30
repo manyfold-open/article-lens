@@ -88,6 +88,13 @@ first; English is requested lazily through `/api/translate`.
 - The orchestrator gives all A2A calls in one attempt a shared 12-minute
   deadline. This leaves time for input resolution, durable event/result writes,
   and runtime jitter before the Queue invocation reaches its hard limit.
+- Stages do not share that deadline equally. `src/crew/budget.ts` reserves time
+  for the stages that still have to run: stage 1 stops at the deadline minus the
+  verdict and synthesis reserves, the verdict stops at the deadline minus the
+  synthesis reserve, and synthesis owns the remainder. Reserves are floors, not
+  allocations, so when stage 1 finishes early the later stages still get their
+  full per-call timeout. 辯論裁定 widens the verdict reserve, because it needs a
+  second sequential round.
 - Durable state and the alarm are written before Queue publication. A temporary
   Queue error therefore does not lose an accepted analysis.
 - Events have monotonically increasing cursors. The object retains at most 400
@@ -102,7 +109,12 @@ Manyfold recovery is layered:
    restarting an otherwise useful run;
 3. on the first job attempt, a fallback from a critical agent (`sum` or `ctx`)
    stops downstream work and schedules the second durable attempt;
-4. the final attempt may finish with explicit fallback sources, but degraded
+4. except when that fallback was caused by the time budget rather than by the
+   peer. Those calls are reported as `budget_limited` in `agent_sources`, and
+   they do not schedule a retry: a second attempt gets the same 12 minutes and
+   would exhaust them the same way, making the reader wait twice for the same
+   degraded report;
+5. the final attempt may finish with explicit fallback sources, but degraded
    output is never written to the seven-day result cache.
 
 The Durable Object currently stores events and the compact final result in one

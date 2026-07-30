@@ -66,7 +66,14 @@ export interface HNLensResult {
     no_discussion?: boolean
     fallback_agents?: AgentName[]
     skipped_agents?: AgentName[]
-    agent_sources?: Partial<Record<AgentName, { mode: 'real' | 'cache' | 'fallback' | 'skipped'; reason: BiStr }>>
+    // `budget_limited` marks a fallback the run's own time budget caused, not
+    // the peer. Those do not escalate to a whole-workflow retry, because the
+    // retry would reach the same wall.
+    agent_sources?: Partial<Record<AgentName, {
+      mode: 'real' | 'cache' | 'fallback' | 'skipped'
+      reason: BiStr
+      budget_limited?: boolean
+    }>>
   }
   briefing?: {
     route: BiStr
