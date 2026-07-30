@@ -69,6 +69,199 @@
       outline-offset: 2px;
     }
 
+    /* ── Page-owned controls (see controls.js) ───────────────────────────── */
+    /* A native <select> lets the OS draw its open list and a native checkbox lets
+       the OS draw its tick, so neither can be styled or translated. Both are
+       rebuilt from buttons. Colours come from these variables, which each context
+       (dark console, light drawer) overrides; the defaults are the light theme.
+       They live on :root, not on .ui-select — a variable declared on the control
+       itself would beat the value inherited from the context around it. */
+    :root {
+      --ui-control-border: var(--border);
+      --ui-control-bg: var(--card);
+      --ui-control-ink: var(--ink);
+      --ui-control-muted: var(--muted);
+      --ui-control-hover: var(--accent);
+      --ui-control-focus: var(--accent);
+      --ui-control-menu: var(--card);
+      --ui-control-active-bg: var(--bg);
+      --ui-control-on: var(--accent);
+    }
+    .ui-select { position: relative; display: inline-block; }
+    .ui-select-button,
+    .ui-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      height: 28px;
+      padding: 0 8px;
+      border: 1px solid var(--ui-control-border);
+      border-radius: 6px;
+      background: var(--ui-control-bg);
+      color: var(--ui-control-ink);
+      font: inherit;
+      cursor: pointer;
+    }
+    .ui-select-button:hover,
+    .ui-switch:hover { border-color: var(--ui-control-hover); }
+    .ui-select-button:focus-visible,
+    .ui-switch:focus-visible,
+    .ui-select-list [role=option]:focus-visible {
+      outline: 2px solid var(--ui-control-focus);
+      outline-offset: 1px;
+    }
+    .ui-select-value {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: left;
+    }
+    /* Drawn, not a glyph: an arrow character would change shape with the font. */
+    .ui-select-caret {
+      flex: none;
+      width: 7px;
+      height: 7px;
+      margin-left: 2px;
+      border-right: 1.5px solid var(--ui-control-muted);
+      border-bottom: 1.5px solid var(--ui-control-muted);
+      transform: translateY(-2px) rotate(45deg);
+    }
+    .ui-select.open .ui-select-caret { transform: translateY(1px) rotate(225deg); }
+    .ui-select-list {
+      position: absolute;
+      z-index: 30;
+      top: calc(100% + 4px);
+      right: 0;
+      min-width: 100%;
+      max-height: 248px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 4px;
+      border: 1px solid var(--ui-control-border);
+      border-radius: 8px;
+      background: var(--ui-control-menu);
+      box-shadow: 0 10px 24px rgba(15, 23, 42, .28);
+    }
+    .ui-select-list [role=option] {
+      display: block;
+      width: 100%;
+      padding: 6px 8px;
+      border: 0;
+      border-radius: 5px;
+      background: none;
+      color: var(--ui-control-ink);
+      font: inherit;
+      text-align: left;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .ui-select-list [role=option]:hover { background: var(--ui-control-active-bg); }
+    .ui-select-list [role=option].selected {
+      background: var(--ui-control-active-bg);
+      font-weight: 800;
+    }
+    .ui-switch { width: auto; user-select: none; }
+    .ui-switch-box {
+      flex: none;
+      position: relative;
+      width: 13px;
+      height: 13px;
+      border: 1px solid var(--ui-control-muted);
+      border-radius: 3px;
+    }
+    .ui-switch.on .ui-switch-box {
+      border-color: var(--ui-control-on);
+      background: var(--ui-control-on);
+    }
+    /* The tick is two borders rotated, so it scales with the box and needs no font. */
+    .ui-switch.on .ui-switch-box::after {
+      content: '';
+      position: absolute;
+      left: 3px;
+      top: 0;
+      width: 4px;
+      height: 7px;
+      border-right: 2px solid var(--ui-control-menu);
+      border-bottom: 2px solid var(--ui-control-menu);
+      transform: rotate(45deg);
+    }
+
+    /* Disclosure triangles are drawn by the browser and differ per platform, so
+       every <details> here hides the native marker and draws its own caret. */
+    details > summary {
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::before {
+      content: '';
+      flex: none;
+      width: 5px;
+      height: 5px;
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+      opacity: .75;
+      transform: rotate(-45deg);
+      transition: transform .12s ease;
+    }
+    details[open] > summary::before { transform: rotate(45deg); }
+
+    /* The page's own tooltip, in place of `title`. Fixed-position and pointer
+       transparent, so it never blocks the control it describes. */
+    .ui-tip {
+      position: fixed;
+      left: 0;
+      top: 0;
+      /* Above every overlay on the page, including the glossary drawer at 210,
+         which has hint targets of its own. */
+      z-index: 300;
+      max-width: 260px;
+      padding: 6px 9px;
+      border: 1px solid rgba(36, 31, 27, .16);
+      border-radius: 6px;
+      background: rgba(28, 25, 23, .94);
+      color: #F7F4F0;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, .22);
+      font: 500 11.5px/1.45 var(--body);
+      pointer-events: none;
+    }
+
+    /* ── Scrollbars ──────────────────────────────────────────────────────── */
+    /* Thin and themed everywhere, instead of the platform's default bar. */
+    * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      border: 2px solid transparent;
+      border-radius: 999px;
+      background: var(--border);
+      background-clip: content-box;
+    }
+    ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); background-clip: content-box; }
+    ::-webkit-scrollbar-corner { background: transparent; }
+    /* The console and the agent drawer are dark, so their thumbs need to be too. */
+    .activity-stream::-webkit-scrollbar-thumb,
+    .workflow-view::-webkit-scrollbar-thumb {
+      background-color: #3A4A65;
+      background-clip: content-box;
+    }
+
+    /* ── Text selection and autofill ─────────────────────────────────────── */
+    ::selection { background: rgba(255, 102, 0, .22); color: var(--ink); }
+    /* Chrome paints autofilled fields yellow and ignores `background`; a long
+       inset shadow in the field's own colour is the only way to override it. */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus {
+      -webkit-text-fill-color: var(--ink);
+      box-shadow: 0 0 0 40px var(--card) inset;
+    }
+
     /* ── Typography Utilities ────────────────────────────────────────────── */
     .muted   { color: var(--muted); }
     .small   { font-size: 12px; }
@@ -806,35 +999,6 @@
     .workflow-overall.status-error::before { background: #EF4444; }
     .workflow-overall.status-queued::before { background: #F59E0B; }
     .workflow-inspector-spacer { flex: 1; }
-    .workflow-tabs {
-      display: inline-flex;
-      padding: 2px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--bg);
-    }
-    .workflow-tab,
-    .workflow-collapse {
-      border: 0;
-      border-radius: 6px;
-      background: transparent;
-      color: var(--muted);
-      font: 700 11px/1 var(--mono);
-      cursor: pointer;
-    }
-    .workflow-tab { height: 26px; padding: 0 10px; }
-    .workflow-tab.active {
-      color: var(--ink);
-      background: var(--card);
-      box-shadow: 0 1px 3px rgba(15,23,42,.12);
-    }
-    .workflow-collapse {
-      height: 28px;
-      padding: 0 9px;
-      border: 1px solid var(--border);
-    }
-    .workflow-tab:focus-visible,
-    .workflow-collapse:focus-visible,
     .workflow-node:focus-visible,
     .workflow-timeline-row:focus-visible {
       outline: 3px solid rgba(59,130,246,.35);
@@ -1117,7 +1281,6 @@
       flex-wrap: wrap;
       gap: 6px;
     }
-    .activity-select,
     .activity-button {
       height: 28px;
       border: 1px solid #34435B;
@@ -1126,53 +1289,49 @@
       color: #CEDAE8;
       font: 600 10px/1 var(--mono);
     }
+    /* The listbox carries no border or background of its own: .ui-select-button
+       draws the control and the dark palette below supplies the colour. */
     .activity-select {
       max-width: 132px;
-      padding: 0 24px 0 8px;
+      font: 600 10px/1 var(--mono);
     }
     .activity-button {
       padding: 0 9px;
       cursor: pointer;
     }
-    .activity-select:hover,
     .activity-button:hover { border-color: #64748B; }
-    .activity-select:focus-visible,
-    .activity-button:focus-visible,
-    .activity-autoscroll:focus-within {
+    .activity-button:focus-visible {
       outline: 2px solid #60A5FA;
       outline-offset: 1px;
     }
-    .activity-autoscroll {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      height: 28px;
-      padding: 0 7px;
-      border: 1px solid #34435B;
-      border-radius: 6px;
-      color: #AFC4DD;
-      font: 600 10px/1 var(--mono);
-      cursor: pointer;
-      user-select: none;
-    }
-    .activity-autoscroll input {
-      width: 13px;
-      height: 13px;
-      margin: 0;
-      accent-color: #22C55E;
+    .activity-autoscroll { font: 600 10px/1 var(--mono); }
+    /* The activity console is dark, so both controls take the dark palette. */
+    .activity-toolbar {
+      --ui-control-border: #34435B;
+      --ui-control-bg: #172236;
+      --ui-control-ink: #CEDAE8;
+      --ui-control-muted: #AFC4DD;
+      --ui-control-hover: #64748B;
+      --ui-control-focus: #60A5FA;
+      --ui-control-menu: #101A2B;
+      --ui-control-active-bg: #1E2C45;
+      --ui-control-on: #22C55E;
     }
     .activity-stream {
       max-height: 320px;
       overflow: auto;
       overscroll-behavior: contain;
-      scrollbar-color: #3A4A65 #111827;
+      scrollbar-color: #3A4A65 transparent;
       font: 11px/1.5 var(--mono);
     }
     .activity-panel.collapsed .activity-stream { display: none; }
     .activity-panel.collapsed .activity-toolbar { border-bottom: 0; }
     .activity-entry {
       display: grid;
-      grid-template-columns: 74px 112px 78px minmax(0, 1fr);
+      /* Each row is its own grid, so the tag column has to stay a fixed width or
+         the message column starts at a different x on every row. 86px fits the
+         longest tag; .activity-kind clips anything longer than that. */
+      grid-template-columns: 74px 112px 86px minmax(0, 1fr);
       align-items: start;
       gap: 9px;
       min-height: 39px;
@@ -1241,23 +1400,37 @@
       font: 700 10px/1 var(--mono);
       white-space: nowrap;
     }
-    .workbench-summary {
+    .workbench-tabs {
+      display: inline-flex;
+      gap: 2px;
+      margin-left: auto;
+      padding: 2px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+    }
+    .workbench-tab {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      margin-left: auto;
+      height: 26px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
       color: var(--muted);
       font: 800 10px/1 var(--mono);
+      cursor: pointer;
     }
-    .workbench-summary-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      min-height: 26px;
-      padding: 0 8px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      background: var(--bg);
+    .workbench-tab:hover { color: var(--ink); }
+    .workbench-tab.active {
+      color: var(--ink);
+      background: var(--card);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, .12);
+    }
+    .workbench-tab:focus-visible {
+      outline: 3px solid rgba(59, 130, 246, .35);
+      outline-offset: 2px;
     }
     .workbench-collapse {
       height: 29px;
@@ -1317,10 +1490,7 @@
       min-height: 44px;
       padding-left: 14px;
     }
-    .workbench .workflow-collapse,
-    .workbench #activity-collapse {
-      display: none;
-    }
+    .workbench #activity-collapse { display: none; }
     .workbench .workflow-view {
       max-height: min(390px, 48vh);
     }
@@ -1441,7 +1611,12 @@
     }
     .activity-kind {
       display: inline-block;
-      max-width: max-content;
+      max-width: 100%;
+      /* A tag longer than its column clips inside the pill. Without this the text
+         escaped the rounded border and ran into the message column. */
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       padding: 2px 6px;
       border: 1px solid #34435B;
       border-radius: 999px;
@@ -2251,15 +2426,25 @@
       gap: 8px;
       margin-top: 10px;
     }
-    .kb-sort {
-      height: 32px;
-      border: 1px solid var(--border);
+    .kb-notice {
+      margin: 8px 0 0;
+      padding: 7px 9px;
+      border: 1px solid #FCA5A5;
       border-radius: 8px;
-      padding: 0 8px;
-      background: #fff;
-      color: var(--ink);
+      background: #FEF2F2;
+      color: #B91C1C;
       font-size: 12px;
+      line-height: 1.5;
+    }
+    .kb-sort {
       min-width: 116px;
+      font-size: 12px;
+      --ui-control-bg: #fff;
+      --ui-control-menu: #fff;
+    }
+    .kb-sort .ui-select-button {
+      height: 32px;
+      border-radius: 8px;
     }
     .kb-actions {
       display: flex;
@@ -2494,7 +2679,8 @@
       .kb-header { padding: 14px 16px; }
       .kb-tools { padding: 10px 12px 12px; }
       .kb-list { padding: 12px; }
-      .kb-sort { min-height: 36px; font-size: 16px; }
+      .kb-sort .ui-select-button { min-height: 36px; }
+      .kb-sort { font-size: 15px; }
 
       .section-title {
         flex-wrap: wrap;
@@ -2516,13 +2702,24 @@
       }
       .workbench-head {
         min-height: 44px;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 7px;
         padding: 6px 9px;
       }
       .workbench-heading { padding-left: 3px; }
       .workbench-context { display: none; }
-      .workbench-summary { display: none; }
+      /* The tabs pick the console view, so they stay reachable on a phone and
+         take their own full-width row instead of squeezing into the header. */
+      .workbench-tabs {
+        order: 3;
+        width: 100%;
+        margin-left: 0;
+        justify-content: space-between;
+      }
+      .workbench-tab {
+        min-height: 34px;
+        padding: 0 8px;
+      }
       .workbench-collapse {
         width: 36px;
         height: 36px;
@@ -2574,14 +2771,6 @@
       [data-workflow-duration] { display: none; }
       [data-workflow-tokens] { grid-column: 2 / -1; justify-self: end; }
       .workflow-inspector-spacer { display: none; }
-      .workflow-tabs {
-        grid-column: 1 / -1;
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        width: 100%;
-        margin-left: 0;
-      }
-      .workflow-tab { min-height: 36px; }
       .workflow-view {
         scrollbar-width: thin;
         -webkit-overflow-scrolling: touch;
@@ -2654,10 +2843,10 @@
         width: 100%;
         height: 38px;
       }
+      .activity-select .ui-select-button { height: 38px; }
       .activity-select {
         max-width: none;
-        padding-inline: 10px 28px;
-        font-size: 16px;
+        font-size: 15px;
       }
       .activity-button { font-size: 11px; }
       .activity-autoscroll { justify-content: center; }
@@ -2720,8 +2909,8 @@
 <header class="topbar">
   <div class="topbar-left">
     <a class="logo" href="/">HN Lens <span class="accent">📰</span></a>
-    <button id="access-lock" class="access-lock" type="button" title="Lock Article Lens"
-      data-zh-title="锁定 Article Lens" data-en-title="Lock Article Lens"
+    <button id="access-lock" class="access-lock" type="button" data-tip="Lock Article Lens"
+      data-zh-tip="锁定 Article Lens" data-en-tip="Lock Article Lens"
       aria-label="Lock Article Lens" data-zh-aria="锁定 Article Lens" data-en-aria="Lock Article Lens">🔒</button>
   </div>
   <div class="topbar-right">
@@ -2731,67 +2920,67 @@
         <button class="preset-btn" data-preset="quick" type="button"
           data-desc-zh="只跑摘要＋判读，最快最省 · 先看值不值得读"
           data-desc-en="Summary + verdict only, fastest &amp; cheapest · see if it's worth reading first"
-          title="Quick Scan: summary(low)+verdict only, saves tokens"
-          data-zh-title="⚡ 快速扫描：只跑摘要(低)+判读，省 token"
-          data-en-title="Quick Scan: summary(low)+verdict only, saves tokens"><span class="bi-zh">⚡ 快速扫描</span><span class="bi-en">⚡ Quick Scan</span></button>
+          data-tip="Quick Scan: summary(low)+verdict only, saves tokens"
+          data-zh-tip="⚡ 快速扫描：只跑摘要(低)+判读，省 token"
+          data-en-tip="Quick Scan: summary(low)+verdict only, saves tokens"><span class="bi-zh">⚡ 快速扫描</span><span class="bi-en">⚡ Quick Scan</span></button>
         <button class="preset-btn active" data-preset="standard" type="button"
           data-desc-zh="全员并行 · 完整报告（摘要／术语／留言／判读）"
           data-desc-en="Everyone runs in parallel · full report (summary / jargon / comments / verdict)"
-          title="Standard: everyone at medium effort, full report (default)"
-          data-zh-title="📄 标准：全员中档，完整报告（默认）"
-          data-en-title="Standard: everyone at medium effort, full report (default)"><span class="bi-zh">📄 标准</span><span class="bi-en">📄 Standard</span></button>
+          data-tip="Standard: everyone at medium effort, full report (default)"
+          data-zh-tip="📄 标准：全员中档，完整报告（默认）"
+          data-en-tip="Standard: everyone at medium effort, full report (default)"><span class="bi-zh">📄 标准</span><span class="bi-en">📄 Standard</span></button>
         <button class="preset-btn" data-preset="jargon" type="button"
           data-desc-zh="术语火力全开＋跑两份不漏、关掉留言 · 专攻看懂术语"
           data-desc-en="Jargon at full power, run twice for coverage, comments off · focused on understanding terms"
-          title="Jargon Drill: jargon(high, 2x vote)+verdict, summary(low), comments off"
-          data-zh-title="🎯 术语特训：术语(高，跑2次投票)+判读，摘要(低)，关掉留言"
-          data-en-title="Jargon Drill: jargon(high, 2x vote)+verdict, summary(low), comments off"><span class="bi-zh">🎯 术语特训</span><span class="bi-en">🎯 Jargon Drill</span></button>
+          data-tip="Jargon Drill: jargon(high, 2x vote)+verdict, summary(low), comments off"
+          data-zh-tip="🎯 术语特训：术语(高，跑2次投票)+判读，摘要(低)，关掉留言"
+          data-en-tip="Jargon Drill: jargon(high, 2x vote)+verdict, summary(low), comments off"><span class="bi-zh">🎯 术语特训</span><span class="bi-en">🎯 Jargon Drill</span></button>
         <button class="preset-btn" data-preset="reliable" type="button"
           data-desc-zh="每位读者跑两份投票合并 · 尽量不漏（约 2× token）"
           data-desc-en="Every reader runs twice and votes to merge · aims for full coverage (~2x tokens)"
-          title="Reliable: everyone at medium effort, runs twice and merges, most stable (~2x tokens)"
-          data-zh-title="🛡️ 可靠：全员中档、各跑2次再合并，最稳定（约2倍 token）"
-          data-en-title="Reliable: everyone at medium effort, runs twice and merges, most stable (~2x tokens)"><span class="bi-zh">🛡️ 可靠</span><span class="bi-en">🛡️ Reliable</span></button>
+          data-tip="Reliable: everyone at medium effort, runs twice and merges, most stable (~2x tokens)"
+          data-zh-tip="🛡️ 可靠：全员中档、各跑2次再合并，最稳定（约2倍 token）"
+          data-en-tip="Reliable: everyone at medium effort, runs twice and merges, most stable (~2x tokens)"><span class="bi-zh">🛡️ 可靠</span><span class="bi-en">🛡️ Reliable</span></button>
         <button class="preset-btn" data-preset="deep" type="button"
           data-desc-zh="全员高强度 · 最完整周全（较慢较贵）"
           data-desc-en="Everyone at high intensity · most thorough (slower &amp; pricier)"
-          title="Deep Read: everyone at high effort, most complete"
-          data-zh-title="🔬 深度精读：全员高档，最完整"
-          data-en-title="Deep Read: everyone at high effort, most complete"><span class="bi-zh">🔬 深度精读</span><span class="bi-en">🔬 Deep Read</span></button>
+          data-tip="Deep Read: everyone at high effort, most complete"
+          data-zh-tip="🔬 深度精读：全员高档，最完整"
+          data-en-tip="Deep Read: everyone at high effort, most complete"><span class="bi-zh">🔬 深度精读</span><span class="bi-en">🔬 Deep Read</span></button>
         <button class="preset-btn" data-preset="thrifty" type="button"
           data-desc-zh="先摘要＋判读，值得读才叫醒术语＋留言 · 最省 token"
           data-desc-en="Summary + verdict first, wakes jargon + comments only if worth reading · cheapest on tokens"
-          data-zh-title="💸 省钱渐进：先跑摘要+判读，值得读才叫醒术语+留言（待命中），最省 token"
-          data-en-title="Thrifty Progressive: run summary+verdict first, wake jargon+comments only if worth it (on standby), cheapest on tokens"
-          title="Thrifty Progressive: run summary+verdict first, wake jargon+comments only if worth it (on standby), cheapest on tokens"><span class="bi-zh">💸 省钱渐进</span><span class="bi-en">💸 Thrifty Progressive</span></button>
+          data-zh-tip="💸 省钱渐进：先跑摘要+判读，值得读才叫醒术语+留言（待命中），最省 token"
+          data-en-tip="Thrifty Progressive: run summary+verdict first, wake jargon+comments only if worth it (on standby), cheapest on tokens"
+          data-tip="Thrifty Progressive: run summary+verdict first, wake jargon+comments only if worth it (on standby), cheapest on tokens"><span class="bi-zh">💸 省钱渐进</span><span class="bi-en">💸 Thrifty Progressive</span></button>
         <button class="preset-btn" data-preset="debate" type="button"
           data-desc-zh="小导分正方／反方辩论后合议 · 判读更平衡（约 3× 判读 token）"
           data-desc-en="Context argues both sides then settles on a verdict · more balanced (~3× verdict tokens)"
-          data-zh-title="🥊 辩论裁定：小导跑正方(主张值得读)+反方(主张可略过)，再由首席裁判合议出平衡裁定"
-          data-en-title="Debate Verdict: Context argues pro (worth reading) + con (can skip), then a head judge settles a balanced verdict"
-          title="Debate Verdict: Context argues pro (worth reading) + con (can skip), then a head judge settles a balanced verdict"><span class="bi-zh">🥊 辩论裁定</span><span class="bi-en">🥊 Debate Verdict</span></button>
+          data-zh-tip="🥊 辩论裁定：小导跑正方(主张值得读)+反方(主张可略过)，再由首席裁判合议出平衡裁定"
+          data-en-tip="Debate Verdict: Context argues pro (worth reading) + con (can skip), then a head judge settles a balanced verdict"
+          data-tip="Debate Verdict: Context argues pro (worth reading) + con (can skip), then a head judge settles a balanced verdict"><span class="bi-zh">🥊 辩论裁定</span><span class="bi-en">🥊 Debate Verdict</span></button>
       </div>
       <div id="audience-picker" class="preset-picker audience-picker" role="group" aria-label="Reader level" data-zh-aria="受众语气" data-en-aria="Reader level" style="display:none"><!-- hidden from users for now -->
         <span class="audience-label"><span class="bi-zh">受众</span><span class="bi-en">Audience</span></span>
         <button class="preset-btn" data-audience="beginner" type="button"
-          data-zh-title="🐣 新手：更白话、少术语、多解释、多比喻"
-          data-en-title="🐣 Beginner: plainer language, fewer jargon terms, more explanations and analogies"
-          title="🐣 Beginner: plainer language, fewer jargon terms, more explanations and analogies"><span class="bi-zh">🐣 新手</span><span class="bi-en">🐣 Beginner</span></button>
+          data-zh-tip="🐣 新手：更白话、少术语、多解释、多比喻"
+          data-en-tip="🐣 Beginner: plainer language, fewer jargon terms, more explanations and analogies"
+          data-tip="🐣 Beginner: plainer language, fewer jargon terms, more explanations and analogies"><span class="bi-zh">🐣 新手</span><span class="bi-en">🐣 Beginner</span></button>
         <button class="preset-btn active" data-audience="" type="button"
-          data-zh-title="🙂 默认：会写程序但非此领域的专家（默认语气）"
-          data-en-title="🙂 Default: a developer who isn't a specialist in this field (default tone)"
-          title="🙂 Default: a developer who isn't a specialist in this field (default tone)"><span class="bi-zh">🙂 默认</span><span class="bi-en">🙂 Default</span></button>
+          data-zh-tip="🙂 默认：会写程序但非此领域的专家（默认语气）"
+          data-en-tip="🙂 Default: a developer who isn't a specialist in this field (default tone)"
+          data-tip="🙂 Default: a developer who isn't a specialist in this field (default tone)"><span class="bi-zh">🙂 默认</span><span class="bi-en">🙂 Default</span></button>
         <button class="preset-btn" data-audience="expert" type="button"
-          data-zh-title="🧠 老手：假设懂基础、更精简、只收进阶术语"
-          data-en-title="🧠 Expert: assumes the basics, terser, only surfaces advanced terms"
-          title="🧠 Expert: assumes the basics, terser, only surfaces advanced terms"><span class="bi-zh">🧠 老手</span><span class="bi-en">🧠 Expert</span></button>
+          data-zh-tip="🧠 老手：假设懂基础、更精简、只收进阶术语"
+          data-en-tip="🧠 Expert: assumes the basics, terser, only surfaces advanced terms"
+          data-tip="🧠 Expert: assumes the basics, terser, only surfaces advanced terms"><span class="bi-zh">🧠 老手</span><span class="bi-en">🧠 Expert</span></button>
       </div>
       <div id="preset-caption" class="preset-caption" aria-live="polite"></div>
     </div>
     <button id="edit-toggle" class="edit-toggle" type="button" aria-pressed="false" style="display:none"
-      title="Arrange the office: drag teammates into groups, set collaboration mode, disable"
-      data-zh-title="编排办公室：拖曳小帮手分组、设定协作模式、停用 / Arrange the office"
-      data-en-title="Arrange the office: drag teammates into groups, set collaboration mode, disable">🛠️ 编排办公室</button>
+      data-tip="Arrange the office: drag teammates into groups, set collaboration mode, disable"
+      data-zh-tip="编排办公室：拖曳小帮手分组、设定协作模式、停用 / Arrange the office"
+      data-en-tip="Arrange the office: drag teammates into groups, set collaboration mode, disable">🛠️ 编排办公室</button>
   </div>
 </header>
 
@@ -2803,20 +2992,21 @@
   <div id="pixel-stage"></div>
   <div id="whiteboard-verdict" class="whiteboard-verdict" data-worth=""></div>
   <div id="office-hits">
-    <button id="kb-hit" class="office-hit" title="📚 Knowledge base"
-      data-zh-title="📚 知识库" data-en-title="📚 Knowledge base"
+    <button id="kb-hit" class="office-hit" data-tip="📚 Knowledge base"
+      data-zh-tip="📚 知识库" data-en-tip="📚 Knowledge base"
       aria-label="Open knowledge base" data-zh-aria="打开生词本" data-en-aria="Open knowledge base"
       data-zh-aria="开启知识库" data-en-aria="Open knowledge base"></button>
-    <button id="lang-hit" class="office-hit" title="Switch language (中/EN)"
-      data-zh-title="切换语言（中/EN）" data-en-title="Switch language (中/EN)"
+    <button id="lang-hit" class="office-hit" data-tip="Switch language (中/EN)"
+      data-zh-tip="切换语言（中/EN）" data-en-tip="Switch language (中/EN)"
       aria-label="Switch language (中/EN)" data-zh-aria="切换语言（中／EN）" data-en-aria="Switch language (中/EN)"
       data-zh-aria="切换语言（中/EN）" data-en-aria="Switch language (中/EN)"></button>
-    <button id="wb-hit" class="office-hit" title="📋 Briefing"
-      data-zh-title="📋 报告总览" data-en-title="📋 Briefing"
+    <button id="wb-hit" class="office-hit" data-tip="📋 Briefing"
+      data-zh-tip="📋 报告总览" data-en-tip="📋 Briefing"
       aria-label="Open the briefing" data-zh-aria="打开任务简报" data-en-aria="Open the briefing"
       data-zh-aria="看队长的报告总览" data-en-aria="Open the briefing"></button>
   </div>
   <div id="agent-tooltip" class="agent-tooltip" hidden></div>
+
   <!-- Edit-mode legend: only visible while arranging the office (data-editmode=on).
        Non-interactive; explains the drag / bench / effort / vote / mode affordances. -->
   <aside id="edit-legend" aria-hidden="true">
@@ -2839,17 +3029,20 @@
       <span class="bi-en">Analysis console</span>
     </span>
     <span id="workbench-context" class="workbench-context">Ready</span>
-    <div class="workbench-summary" aria-label="Open panels" data-zh-aria="打开面板" data-en-aria="Open panels">
-      <span class="workbench-summary-item"><span class="bi-zh">分析</span><span class="bi-en">Analyse</span></span>
-      <span class="workbench-summary-item"><span class="bi-zh">工作流</span><span class="bi-en">Workflow</span></span>
-      <span class="workbench-summary-item">
+    <!-- One row of real tabs. These used to be three inert labels while every
+         panel stayed open at once, with a second tab row nested inside Workflow. -->
+    <div class="workbench-tabs" role="tablist" aria-label="Console view" data-zh-aria="控制台视图" data-en-aria="Console view">
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="graph"><span class="bi-zh">图</span><span class="bi-en">Graph</span></button>
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="timeline"><span class="bi-zh">时间轴</span><span class="bi-en">Timeline</span></button>
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="assignments"><span class="bi-zh">分派</span><span class="bi-en">Assignments</span></button>
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="activity">
         <span class="bi-zh">活动</span><span class="bi-en">Activity</span>
         <span id="workbench-activity-count" class="workbench-tab-count">0</span>
-      </span>
+      </button>
     </div>
     <button id="workbench-collapse" class="workbench-collapse" type="button"
-      aria-expanded="true" title="Collapse analysis console"
-      data-zh-title="收起分析控制台" data-en-title="Collapse analysis console">⌄</button>
+      aria-expanded="true" data-tip="Collapse analysis console"
+      data-zh-tip="收起分析控制台" data-en-tip="Collapse analysis console">⌄</button>
   </header>
 
 <section id="workflow-inspector" class="workflow-inspector" aria-label="Workflow inspector" data-zh-aria="工作流检视器" data-en-aria="Workflow inspector"
@@ -2861,12 +3054,8 @@
     <span class="workflow-summary-chip" data-workflow-duration>—</span>
     <span class="workflow-summary-chip" data-workflow-tokens>0 tokens</span>
     <span class="workflow-inspector-spacer"></span>
-    <div class="workflow-tabs" role="tablist" aria-label="Workflow view" data-zh-aria="工作流视图" data-en-aria="Workflow view">
-      <button class="workflow-tab active" type="button" role="tab" aria-selected="true" data-workflow-tab="graph"><span class="bi-zh">图</span><span class="bi-en">Graph</span></button>
-      <button class="workflow-tab" type="button" role="tab" aria-selected="false" data-workflow-tab="timeline"><span class="bi-zh">时间轴</span><span class="bi-en">Timeline</span></button>
-      <button class="workflow-tab" type="button" role="tab" aria-selected="false" data-workflow-tab="assignments"><span class="bi-zh">分派</span><span class="bi-en">Assignments</span></button>
-    </div>
-    <button class="workflow-collapse" type="button" data-workflow-collapse aria-expanded="true">Collapse</button>
+    <!-- Graph / Timeline / Assignments are chosen by the workbench tab row above,
+         and the workbench header owns the one collapse control. -->
   </header>
   <div class="workflow-error-banner" data-workflow-error role="alert" hidden></div>
   <div class="workflow-view workflow-graph" data-workflow-view="graph" data-workflow-graph></div>
@@ -2887,29 +3076,44 @@
       <span id="activity-count" class="activity-count">0</span>
     </div>
     <div class="activity-controls">
-      <select id="activity-agent-filter" class="activity-select" aria-label="Filter by agent" data-zh-aria="按 Agent 筛选" data-en-aria="Filter by agent"
-        data-zh-aria="按 Agent 筛选" data-en-aria="Filter by agent">
-        <option value="all" data-zh="全部 Agent" data-en="All agents">All agents</option>
-        <option value="system" data-zh="系统" data-en="System">System</option>
-        <option value="orch" data-zh="队长" data-en="Captain">Captain</option>
-        <option value="jargon" data-zh="小词" data-en="Jargon">Jargon</option>
-        <option value="sum" data-zh="小摘" data-en="Summary">Summary</option>
-        <option value="comments" data-zh="小潜" data-en="Comments">Comments</option>
-        <option value="ctx" data-zh="小导" data-en="Context">Context</option>
-        <option value="synth" data-zh="合成" data-en="Synthesis">Synthesis</option>
-      </select>
-      <select id="activity-kind-filter" class="activity-select" aria-label="Filter by event" data-zh-aria="按事件筛选" data-en-aria="Filter by event"
-        data-zh-aria="按事件类型筛选" data-en-aria="Filter by event type">
-        <option value="all" data-zh="全部事件" data-en="All events">All events</option>
-        <option value="errors" data-zh="只看错误" data-en="Errors only">Errors only</option>
-        <option value="calls" data-zh="Agent 调用" data-en="Agent calls">Agent calls</option>
-        <option value="results" data-zh="输出与结果" data-en="Outputs &amp; results">Outputs &amp; results</option>
-        <option value="workflow" data-zh="工作流事件" data-en="Workflow events">Workflow events</option>
-      </select>
-      <label class="activity-autoscroll">
-        <input id="activity-autoscroll" type="checkbox" checked>
+      <!-- Page-owned listboxes and switch: see controls.js. They keep the native
+           `value` / `checked` property and the bubbling `change` event. -->
+      <div id="activity-agent-filter" class="ui-select activity-select" data-ui-select data-value="all">
+        <button class="ui-select-button" type="button" data-ui-select-button aria-haspopup="listbox" aria-expanded="false"
+          aria-label="Filter by agent" data-zh-aria="按 Agent 筛选" data-en-aria="Filter by agent">
+          <span class="ui-select-value" data-ui-select-label></span>
+          <span class="ui-select-caret" aria-hidden="true"></span>
+        </button>
+        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Filter by agent" data-zh-aria="按 Agent 筛选" data-en-aria="Filter by agent" hidden>
+          <button type="button" role="option" data-value="all" data-zh="全部 Agent" data-en="All agents">All agents</button>
+          <button type="button" role="option" data-value="system" data-zh="系统" data-en="System">System</button>
+          <button type="button" role="option" data-value="orch" data-zh="队长" data-en="Captain">Captain</button>
+          <button type="button" role="option" data-value="jargon" data-zh="小词" data-en="Jargon">Jargon</button>
+          <button type="button" role="option" data-value="sum" data-zh="小摘" data-en="Summary">Summary</button>
+          <button type="button" role="option" data-value="comments" data-zh="小潜" data-en="Comments">Comments</button>
+          <button type="button" role="option" data-value="ctx" data-zh="小导" data-en="Context">Context</button>
+          <button type="button" role="option" data-value="synth" data-zh="合成" data-en="Synthesis">Synthesis</button>
+        </div>
+      </div>
+      <div id="activity-kind-filter" class="ui-select activity-select" data-ui-select data-value="all">
+        <button class="ui-select-button" type="button" data-ui-select-button aria-haspopup="listbox" aria-expanded="false"
+          aria-label="Filter by event type" data-zh-aria="按事件类型筛选" data-en-aria="Filter by event type">
+          <span class="ui-select-value" data-ui-select-label></span>
+          <span class="ui-select-caret" aria-hidden="true"></span>
+        </button>
+        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Filter by event type" data-zh-aria="按事件类型筛选" data-en-aria="Filter by event type" hidden>
+          <button type="button" role="option" data-value="all" data-zh="全部事件" data-en="All events">All events</button>
+          <button type="button" role="option" data-value="errors" data-zh="只看错误" data-en="Errors only">Errors only</button>
+          <button type="button" role="option" data-value="calls" data-zh="Agent 调用" data-en="Agent calls">Agent calls</button>
+          <button type="button" role="option" data-value="results" data-zh="输出与结果" data-en="Outputs &amp; results">Outputs &amp; results</button>
+          <button type="button" role="option" data-value="workflow" data-zh="工作流事件" data-en="Workflow events">Workflow events</button>
+        </div>
+      </div>
+      <button id="activity-autoscroll" class="ui-switch activity-autoscroll" type="button" role="switch"
+        data-ui-switch data-checked="true" aria-checked="true">
+        <span class="ui-switch-box" aria-hidden="true"></span>
         <span class="bi-zh">自动卷动</span><span class="bi-en">Auto-scroll</span>
-      </label>
+      </button>
       <button id="activity-clear" class="activity-button" type="button">
         <span class="bi-zh">清空</span><span class="bi-en">Clear</span>
       </button>
@@ -3038,17 +3242,26 @@
       <button class="kb-filter" data-filter="known"><span class="bi-zh">已会</span><span class="bi-en">Known</span></button>
     </div>
     <div class="kb-organize-row">
-      <select id="kb-sort" class="kb-sort" data-zh-aria="排序生词" data-en-aria="Sort glossary" aria-label="Sort glossary">
-        <option value="recent" data-zh="最近出现" data-en="Most recent">Most recent</option>
-        <option value="frequent" data-zh="最常见" data-en="Most frequent">Most frequent</option>
-        <option value="az" data-zh="A-Z" data-en="A-Z">A-Z</option>
-      </select>
+      <div id="kb-sort" class="ui-select kb-sort" data-ui-select data-value="recent">
+        <button class="ui-select-button" type="button" data-ui-select-button aria-haspopup="listbox" aria-expanded="false"
+          aria-label="Sort glossary" data-zh-aria="排序生词" data-en-aria="Sort glossary">
+          <span class="ui-select-value" data-ui-select-label></span>
+          <span class="ui-select-caret" aria-hidden="true"></span>
+        </button>
+        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Sort glossary" data-zh-aria="排序生词" data-en-aria="Sort glossary" hidden>
+          <button type="button" role="option" data-value="recent" data-zh="最近出现" data-en="Most recent">Most recent</button>
+          <button type="button" role="option" data-value="frequent" data-zh="最常见" data-en="Most frequent">Most frequent</button>
+          <button type="button" role="option" data-value="az" data-zh="A-Z" data-en="A-Z">A-Z</button>
+        </div>
+      </div>
       <div class="kb-actions">
         <button id="kb-export" class="kb-mini-btn"><span class="bi-zh">导出</span><span class="bi-en">Export</span></button>
         <button id="kb-import" class="kb-mini-btn"><span class="bi-zh">导入</span><span class="bi-en">Import</span></button>
         <input id="kb-import-file" type="file" accept="application/json,.json" hidden>
       </div>
     </div>
+    <!-- Import failures used to go through alert(), which is an OS dialog. -->
+    <p id="kb-notice" class="kb-notice" role="status" hidden></p>
   </div>
   <div id="kb-list" class="kb-list"></div>
 </aside>
@@ -3068,7 +3281,11 @@
   <div id="agent-panel-body" class="agent-panel-body"></div>
 </aside>
 
+<!-- One page-drawn tooltip for every hint on the page, in place of `title`. -->
+<div id="ui-tip" class="ui-tip" role="tooltip" hidden></div>
+
 <script src="pixel.js"></script>
+<script src="controls.js"></script>
 <script src="workflow-model.js"></script>
 <script src="workflow-view.js"></script>
 <script src="app.js"></script>
