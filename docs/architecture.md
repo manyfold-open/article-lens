@@ -213,10 +213,35 @@ endpoint incrementally. The compatibility SSE route remains available for
 existing integrations.
 
 During a run and on the result page, the embedded Workflow Inspector renders
-the backend-provided role-level DAG and an A2A-call timeline. Agent prompts,
-progress, raw output, and exact errors remain in the Agent Detail drawer;
-Activity remains the complete raw event log. The graph is read-only—the pixel
-office remains the orchestration editor.
+the backend-provided role-level DAG, an A2A-call timeline, and 队长's division of
+labour. Agent prompts, progress, raw output, and exact errors remain in the Agent
+Detail drawer; Activity remains the complete raw event log. The graph is
+read-only—the pixel office remains the orchestration editor.
+
+## Two surfaces, two questions
+
+The result page is a demonstration of a multi-agent crew before it is a reading
+tool, so the two surfaces are split by the question they answer and nothing
+appears on both:
+
+- the pixel office and the six report cards answer **what the crew found**;
+- the Workbench (Workflow plus Activity) answers **how they found it**.
+
+That is why the division of labour lives in the Workflow Inspector's Assignments
+view rather than on 队长's card, and why 队长's card is an overall report: the
+verdict, then one synopsis per teammate, each linking to that teammate's own card.
+The card is deliberately an outline rather than the full text — it is the first
+card the reveal opens, so it has to stay scannable and leave the other five cards
+something to show. Every card also carries its agent's job in one line and its
+uniform colour down the left edge, because the office only reveals a role on
+hover and neither a phone nor a demo audience can hover.
+
+`flags.curation` records what 合成's pass cut, per section, measured off the arrays
+rather than inferred from the curator's keep-indices. 合成's card reports the cut
+rather than what survived: the other four cards already are what survived, so a
+kept-count says nothing about the work this role did. The field is absent on
+results cached before it existed and whenever 合成 fell back, and the card then
+says so instead of claiming that nothing was cut.
 
 The current `analysis_id` is stored in the URL as `?analysis=...`. Reloading the
 page replays the retained events once, resumes from the returned cursor, and

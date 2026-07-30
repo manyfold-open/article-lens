@@ -359,43 +359,95 @@
     /* Structured briefing/context rows (队长 / 小导) */
     .brief-title { font-size: 15px; font-weight: 700; color: var(--ink); margin: 0 0 2px; line-height: 1.4; }
     .brief-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 8px 0; }
-    .brief-k { flex: 0 0 64px; font-size: 11px; color: var(--muted); }
+    /* Wide enough that "Why on the front page" wraps to two lines, not three. */
+    .brief-k { flex: 0 0 96px; font-size: 11px; color: var(--muted); }
     .brief-v { flex: 1; min-width: 160px; font-size: 14px; line-height: 1.55; color: var(--ink); }
     .brief-index { margin-top: 12px; padding-top: 8px; border-top: 1px dashed var(--border); }
-    .captain-route {
-      margin: 12px 0;
-      padding: 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: #FFFCF8;
+
+    /* 队长's overall report: the verdict up top, then one synopsis block per
+       teammate who found something. Each block is an opener plus a way into that
+       teammate's own card, so the report doubles as the table of contents. */
+    .synopsis-who {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 800;
+      font-size: 13px;
+      color: var(--ink);
     }
-    .brief-nav {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      margin-top: 9px;
+    .synopsis-who::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      background: var(--role-color, var(--muted));
     }
-    .brief-nav-btn {
-      text-align: left;
+    .synopsis {
+      margin: 10px 0;
+      padding: 10px 12px;
       border: 1px solid var(--border);
+      border-left: 3px solid var(--role-color, var(--border));
       border-radius: 8px;
       background: #fff;
-      color: var(--ink);
-      padding: 9px 10px;
+    }
+    .synopsis-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+    .synopsis-jump {
+      border: none;
+      background: none;
+      padding: 0;
       cursor: pointer;
+      color: var(--accent);
+      font-size: 11.5px;
+      font-weight: 700;
     }
-    .brief-nav-btn:hover {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 2px rgba(255,102,0,.1);
+    .synopsis-jump:hover { text-decoration: underline; }
+    .synopsis-lines { list-style: none; margin: 0; padding: 0; }
+    .synopsis-lines li {
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--ink);
+      padding-left: 11px;
+      position: relative;
     }
-    .brief-nav-btn span { display: block; font-weight: 800; font-size: 13px; }
-    .brief-nav-btn small { display: block; color: var(--muted); font-size: 11px; line-height: 1.35; margin-top: 3px; }
-    .brief-nav-btn.skip { opacity: .72; }
-    .brief-nav-btn.reuse span { color: var(--green); }
-    .brief-nav-btn.real span { color: var(--green); }
-    .brief-nav-btn.cache span { color: #2563EB; }
-    .brief-nav-btn.fallback span { color: #B45309; }
-    .brief-nav-btn.skipped { opacity: .72; }
+    .synopsis-lines li::before {
+      content: '·';
+      position: absolute;
+      left: 2px;
+      color: var(--role-color, var(--muted));
+      font-weight: 700;
+    }
+    .synopsis-more { margin-top: 6px; }
+    .synopsis-more > summary {
+      cursor: pointer;
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .synopsis-more > .synopsis-lines { margin-top: 5px; }
+    .synopsis-empty { font-size: 12.5px; color: var(--muted); }
+
+    /* 合成's editing record: what the curation pass cut, per section. */
+    .edit-log { display: flex; flex-direction: column; gap: 7px; margin: 12px 0; }
+    .edit-log-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+    .edit-log-k { flex: 0 0 76px; font-size: 11px; color: var(--muted); }
+    .edit-log-v { font-size: 13.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+    .edit-log-cut { color: #B45309; font-weight: 700; }
+    .edit-log-kept { color: var(--muted); }
+    /* Who the verdict belongs to, on the verdict row itself: it is 小导's finding,
+       and this is the only teammate whose work has no synopsis block of its own. */
+    .verdict-owner {
+      border: none;
+      background: none;
+      padding: 0;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .verdict-owner:hover { text-decoration: underline; }
     .agent-status-table {
       display: flex;
       flex-direction: column;
@@ -883,6 +935,12 @@
       max-width: 100%;
       padding: 12px;
     }
+    .workflow-assignments {
+      min-width: 0;
+      max-width: 100%;
+      padding: 12px;
+    }
+    .workflow-assignments .assign-route { margin: 0 0 4px; }
     .workflow-attempt {
       min-width: 696px;
       overflow: hidden;
@@ -1813,6 +1871,25 @@
     .result-panel.active { display: block; animation: panel-in 0.18s ease; }
     @keyframes panel-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
+    /* Every card wears its agent's uniform colour and states that agent's job in
+       one line. The office only reveals a role on hover, which a phone and a demo
+       audience never get. Colours mirror pixel.js ROLE[*].shirt; CSS cannot read
+       that table, so this copy of the six values is unavoidable. */
+    [data-agent=orch]     { --role-color: #FF6600; }
+    [data-agent=sum]      { --role-color: #3B82F6; }
+    [data-agent=jargon]   { --role-color: #F59E0B; }
+    [data-agent=comments] { --role-color: #14B8A6; }
+    [data-agent=ctx]      { --role-color: #8B5CF6; }
+    [data-agent=synth]    { --role-color: #EC4899; }
+    .result-panel { border-left: 3px solid var(--role-color, var(--border)); }
+    .result-panel .section-title { margin-bottom: 6px; }
+    .panel-duty {
+      margin: 0 0 18px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+
     /* ── Jargon as expandable pill chips ─────────────────────────────────── */
     .jargon-list { flex-direction: row; flex-wrap: wrap; gap: 8px; }
     .jpill {
@@ -1921,15 +1998,9 @@
       color: var(--accent);
       font-weight: 700;
     }
-    .key-points li .bi-en {
-      display: block;
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 2px;
-    }
-    .key-points li .bi-zh {
-      display: block;
-    }
+    /* Deliberately no `.key-points li .bi-*` rules: the pair that lived here set
+       `display: block`, which outranked the html[data-lang] toggle and printed
+       every key point in both languages at once. The li's own type styles apply. */
 
     /* ── Comment Digest ──────────────────────────────────────────────────── */
     .overview {
@@ -2793,12 +2864,17 @@
     <div class="workflow-tabs" role="tablist" aria-label="Workflow view" data-zh-aria="工作流视图" data-en-aria="Workflow view">
       <button class="workflow-tab active" type="button" role="tab" aria-selected="true" data-workflow-tab="graph"><span class="bi-zh">图</span><span class="bi-en">Graph</span></button>
       <button class="workflow-tab" type="button" role="tab" aria-selected="false" data-workflow-tab="timeline"><span class="bi-zh">时间轴</span><span class="bi-en">Timeline</span></button>
+      <button class="workflow-tab" type="button" role="tab" aria-selected="false" data-workflow-tab="assignments"><span class="bi-zh">分派</span><span class="bi-en">Assignments</span></button>
     </div>
     <button class="workflow-collapse" type="button" data-workflow-collapse aria-expanded="true">Collapse</button>
   </header>
   <div class="workflow-error-banner" data-workflow-error role="alert" hidden></div>
   <div class="workflow-view workflow-graph" data-workflow-view="graph" data-workflow-graph></div>
   <div class="workflow-view workflow-timeline" data-workflow-view="timeline" data-workflow-timeline hidden></div>
+  <!-- 队长's division of labour: who was told to run, skip or reuse, and why. This
+       answers "how did they do it", so it lives here rather than on the report card.
+       WorkflowInspector only shows/hides this view; app.js fills it. -->
+  <div class="workflow-view workflow-assignments" data-workflow-view="assignments" data-workflow-assignments hidden></div>
 </section>
 
 <section id="activity-panel" class="activity-panel" aria-label="Agent activity log" data-zh-aria="Agent 活动记录" data-en-aria="Agent activity log"
@@ -2892,6 +2968,7 @@
   <!-- 小词 → jargon (default open) -->
   <section id="jargon-section" class="card jargon-card result-panel" data-agent="jargon">
     <h2 class="section-title"><span class="bi-zh">💡 白话术语</span><span class="bi-en">💡 Plain Language</span> <span class="section-title-en">Plain Language · 小词</span></h2>
+    <p class="panel-duty"><span class="bi-zh">挑出本文的核心术语，用白话解释给你听。</span><span class="bi-en">Picks out the article's core jargon and explains each one in plain words.</span></p>
     <div id="jargon-list" class="jargon-list"></div>
     <div class="ask-xici">
       <div class="ask-xici-label muted small"><span class="bi-zh">还有不懂的词？问小词</span><span class="bi-en">Still confused about a term? Ask 小词</span></div>
@@ -2907,30 +2984,35 @@
   <!-- 小摘 → summary -->
   <section id="summary-section" class="card result-panel" data-agent="sum">
     <h2 class="section-title"><span class="bi-zh">📝 文章摘要</span><span class="bi-en">📝 Summary</span> <span class="section-title-en">Summary · 小摘</span></h2>
+    <p class="panel-duty"><span class="bi-zh">读完全文，压成一句话结论和几条重点。</span><span class="bi-en">Reads the whole article, then compresses it into one line and a few key points.</span></p>
     <div id="summary-content"></div>
   </section>
 
   <!-- 小潜 → comment digest -->
   <section id="comments-section" class="card result-panel" data-agent="comments">
     <h2 class="section-title"><span class="bi-zh">💬 留言精华</span><span class="bi-en">💬 Comment Digest</span> <span class="section-title-en">Comment Digest · 小潜</span></h2>
+    <p class="panel-duty"><span class="bi-zh">潜进留言区，把吵成一团的意见整理成几个派别。</span><span class="bi-en">Dives into the comment thread and sorts the noise into a handful of camps.</span></p>
     <div id="comments-content"></div>
   </section>
 
   <!-- 小导 → context / verdict -->
   <section id="context-section" class="card result-panel" data-agent="ctx">
     <h2 class="section-title"><span class="bi-zh">🧭 该不该读</span><span class="bi-en">🧭 Should You Read It</span> <span class="section-title-en">Verdict &amp; Context · 小导</span></h2>
+    <p class="panel-duty"><span class="bi-zh">判断这篇该略读、速读还是深读，并说明为什么。</span><span class="bi-en">Decides whether to skim, skip or dive deep, and says why.</span></p>
     <div id="context-content"></div>
   </section>
 
-  <!-- 队长 → briefing (also opened by clicking the whiteboard) -->
+  <!-- 队长 → the overall report (also opened by clicking the whiteboard) -->
   <section id="briefing-section" class="card result-panel" data-agent="orch">
-    <h2 class="section-title"><span class="bi-zh">📋 报告总览</span><span class="bi-en">📋 Briefing</span> <span class="section-title-en">Briefing · 队长</span></h2>
+    <h2 class="section-title"><span class="bi-zh">📋 综合报告</span><span class="bi-en">📋 Overall Report</span> <span class="section-title-en">Overall Report · 队长</span></h2>
+    <p class="panel-duty"><span class="bi-zh">分派任务给五位组员，最后把大家的发现收成一份总览。</span><span class="bi-en">Assigns the work to five teammates, then gathers what they found into one overview.</span></p>
     <div id="briefing-content"></div>
   </section>
 
-  <!-- 合成 → integration & QA -->
+  <!-- 合成 → the editing record: what the curation pass cut -->
   <section id="synth-section" class="card result-panel" data-agent="synth">
-    <h2 class="section-title"><span class="bi-zh">🧩 整合与品管</span><span class="bi-en">🧩 Integration &amp; QA</span> <span class="section-title-en">Integration &amp; QA · 合成</span></h2>
+    <h2 class="section-title"><span class="bi-zh">🧩 编辑纪录</span><span class="bi-en">🧩 Editing Record</span> <span class="section-title-en">Editing Record · 合成</span></h2>
+    <p class="panel-duty"><span class="bi-zh">检查五位组员交上来的东西，删掉重复、离题和杂讯。</span><span class="bi-en">Reviews what the five teammates handed in, then cuts duplication, off-topic entries and noise.</span></p>
     <div id="synth-content"></div>
   </section>
 </main>

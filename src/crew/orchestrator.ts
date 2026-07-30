@@ -1107,9 +1107,20 @@ function keepByIndex<T>(arr: T[], keep?: number[]): T[] {
 }
 
 function applyCuration(result: HNLensResult, d: CuratorDecision): void {
+  const wasJargon = result.jargon.length
+  const wasKeyPoints = result.summary.key_points.length
+  const wasCamps = result.comment_digest.camps.length
   result.jargon = keepByIndex(result.jargon, d.jargon_keep)
   result.summary.key_points = keepByIndex(result.summary.key_points, d.key_points_keep)
   result.comment_digest.camps = keepByIndex(result.comment_digest.camps, d.camps_keep)
+  // The editing record: what synth cut. Counted off the arrays, not off
+  // `d.*_keep`, because keepByIndex keeps the original array when the indices are
+  // unusable — inferring from the decision would report cuts that never happened.
+  result.flags.curation = {
+    jargon: { before: wasJargon, after: result.jargon.length },
+    key_points: { before: wasKeyPoints, after: result.summary.key_points.length },
+    camps: { before: wasCamps, after: result.comment_digest.camps.length },
+  }
   if (d.note && (d.note.en || d.note.zh)) result.editor_note = toBi(d.note)
   if (d.summary_ok === false) result.flags.low_confidence = true
 }
