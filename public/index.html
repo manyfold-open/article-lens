@@ -806,35 +806,6 @@
     .workflow-overall.status-error::before { background: #EF4444; }
     .workflow-overall.status-queued::before { background: #F59E0B; }
     .workflow-inspector-spacer { flex: 1; }
-    .workflow-tabs {
-      display: inline-flex;
-      padding: 2px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--bg);
-    }
-    .workflow-tab,
-    .workflow-collapse {
-      border: 0;
-      border-radius: 6px;
-      background: transparent;
-      color: var(--muted);
-      font: 700 11px/1 var(--mono);
-      cursor: pointer;
-    }
-    .workflow-tab { height: 26px; padding: 0 10px; }
-    .workflow-tab.active {
-      color: var(--ink);
-      background: var(--card);
-      box-shadow: 0 1px 3px rgba(15,23,42,.12);
-    }
-    .workflow-collapse {
-      height: 28px;
-      padding: 0 9px;
-      border: 1px solid var(--border);
-    }
-    .workflow-tab:focus-visible,
-    .workflow-collapse:focus-visible,
     .workflow-node:focus-visible,
     .workflow-timeline-row:focus-visible {
       outline: 3px solid rgba(59,130,246,.35);
@@ -1172,7 +1143,10 @@
     .activity-panel.collapsed .activity-toolbar { border-bottom: 0; }
     .activity-entry {
       display: grid;
-      grid-template-columns: 74px 112px 78px minmax(0, 1fr);
+      /* Each row is its own grid, so the tag column has to stay a fixed width or
+         the message column starts at a different x on every row. 86px fits the
+         longest tag; .activity-kind clips anything longer than that. */
+      grid-template-columns: 74px 112px 86px minmax(0, 1fr);
       align-items: start;
       gap: 9px;
       min-height: 39px;
@@ -1241,23 +1215,37 @@
       font: 700 10px/1 var(--mono);
       white-space: nowrap;
     }
-    .workbench-summary {
+    .workbench-tabs {
+      display: inline-flex;
+      gap: 2px;
+      margin-left: auto;
+      padding: 2px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+    }
+    .workbench-tab {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      margin-left: auto;
+      height: 26px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
       color: var(--muted);
       font: 800 10px/1 var(--mono);
+      cursor: pointer;
     }
-    .workbench-summary-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      min-height: 26px;
-      padding: 0 8px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      background: var(--bg);
+    .workbench-tab:hover { color: var(--ink); }
+    .workbench-tab.active {
+      color: var(--ink);
+      background: var(--card);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, .12);
+    }
+    .workbench-tab:focus-visible {
+      outline: 3px solid rgba(59, 130, 246, .35);
+      outline-offset: 2px;
     }
     .workbench-collapse {
       height: 29px;
@@ -1317,10 +1305,7 @@
       min-height: 44px;
       padding-left: 14px;
     }
-    .workbench .workflow-collapse,
-    .workbench #activity-collapse {
-      display: none;
-    }
+    .workbench #activity-collapse { display: none; }
     .workbench .workflow-view {
       max-height: min(390px, 48vh);
     }
@@ -1441,7 +1426,12 @@
     }
     .activity-kind {
       display: inline-block;
-      max-width: max-content;
+      max-width: 100%;
+      /* A tag longer than its column clips inside the pill. Without this the text
+         escaped the rounded border and ran into the message column. */
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       padding: 2px 6px;
       border: 1px solid #34435B;
       border-radius: 999px;
@@ -2516,13 +2506,24 @@
       }
       .workbench-head {
         min-height: 44px;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 7px;
         padding: 6px 9px;
       }
       .workbench-heading { padding-left: 3px; }
       .workbench-context { display: none; }
-      .workbench-summary { display: none; }
+      /* The tabs pick the console view, so they stay reachable on a phone and
+         take their own full-width row instead of squeezing into the header. */
+      .workbench-tabs {
+        order: 3;
+        width: 100%;
+        margin-left: 0;
+        justify-content: space-between;
+      }
+      .workbench-tab {
+        min-height: 34px;
+        padding: 0 8px;
+      }
       .workbench-collapse {
         width: 36px;
         height: 36px;
@@ -2574,14 +2575,6 @@
       [data-workflow-duration] { display: none; }
       [data-workflow-tokens] { grid-column: 2 / -1; justify-self: end; }
       .workflow-inspector-spacer { display: none; }
-      .workflow-tabs {
-        grid-column: 1 / -1;
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        width: 100%;
-        margin-left: 0;
-      }
-      .workflow-tab { min-height: 36px; }
       .workflow-view {
         scrollbar-width: thin;
         -webkit-overflow-scrolling: touch;
@@ -2839,13 +2832,16 @@
       <span class="bi-en">Analysis console</span>
     </span>
     <span id="workbench-context" class="workbench-context">Ready</span>
-    <div class="workbench-summary" aria-label="Open panels" data-zh-aria="打开面板" data-en-aria="Open panels">
-      <span class="workbench-summary-item"><span class="bi-zh">分析</span><span class="bi-en">Analyse</span></span>
-      <span class="workbench-summary-item"><span class="bi-zh">工作流</span><span class="bi-en">Workflow</span></span>
-      <span class="workbench-summary-item">
+    <!-- One row of real tabs. These used to be three inert labels while every
+         panel stayed open at once, with a second tab row nested inside Workflow. -->
+    <div class="workbench-tabs" role="tablist" aria-label="Console view" data-zh-aria="控制台视图" data-en-aria="Console view">
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="graph"><span class="bi-zh">图</span><span class="bi-en">Graph</span></button>
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="timeline"><span class="bi-zh">时间轴</span><span class="bi-en">Timeline</span></button>
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="assignments"><span class="bi-zh">分派</span><span class="bi-en">Assignments</span></button>
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="activity">
         <span class="bi-zh">活动</span><span class="bi-en">Activity</span>
         <span id="workbench-activity-count" class="workbench-tab-count">0</span>
-      </span>
+      </button>
     </div>
     <button id="workbench-collapse" class="workbench-collapse" type="button"
       aria-expanded="true" title="Collapse analysis console"
@@ -2861,12 +2857,8 @@
     <span class="workflow-summary-chip" data-workflow-duration>—</span>
     <span class="workflow-summary-chip" data-workflow-tokens>0 tokens</span>
     <span class="workflow-inspector-spacer"></span>
-    <div class="workflow-tabs" role="tablist" aria-label="Workflow view" data-zh-aria="工作流视图" data-en-aria="Workflow view">
-      <button class="workflow-tab active" type="button" role="tab" aria-selected="true" data-workflow-tab="graph"><span class="bi-zh">图</span><span class="bi-en">Graph</span></button>
-      <button class="workflow-tab" type="button" role="tab" aria-selected="false" data-workflow-tab="timeline"><span class="bi-zh">时间轴</span><span class="bi-en">Timeline</span></button>
-      <button class="workflow-tab" type="button" role="tab" aria-selected="false" data-workflow-tab="assignments"><span class="bi-zh">分派</span><span class="bi-en">Assignments</span></button>
-    </div>
-    <button class="workflow-collapse" type="button" data-workflow-collapse aria-expanded="true">Collapse</button>
+    <!-- Graph / Timeline / Assignments are chosen by the workbench tab row above,
+         and the workbench header owns the one collapse control. -->
   </header>
   <div class="workflow-error-banner" data-workflow-error role="alert" hidden></div>
   <div class="workflow-view workflow-graph" data-workflow-view="graph" data-workflow-graph></div>

@@ -14,6 +14,7 @@ let workflowState = window.WorkflowModel?.createState('') || null;
 let analysisPollGeneration = 0;
 let workflowRenderTimer = 0;
 let workbenchCollapsed = false;
+let workbenchView = 'graph';   // the console opens on the execution graph
 
 const AGENT_NAMES = {
   orch:     { zh: '队长', en: 'Orchestrator' },
@@ -44,11 +45,23 @@ const sandboxDownReasons = {};
 
 // ── i18n ─────────────────────────────────────────────────────────────────
 function getLang() { return document.documentElement.dataset.lang || 'en'; }
+// Agents write Chinese and English arrives later from /api/translate, so the
+// requested side of a BiStr is routinely present but empty. An empty string has
+// to count as missing here: `??` would pass it through and the reader would get a
+// blank line where the Chinese they could have read was already in hand.
 function L(v) {
   if (v == null) return '';
   if (typeof v === 'string') return v;
   const lang = getLang();
-  return v[lang] ?? v.zh ?? v.en ?? '';
+  const other = lang === 'zh' ? 'en' : 'zh';
+  return firstFilled(v[lang], v[other]);
+}
+
+function firstFilled(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return '';
 }
 function syncI18nAttrs() {
   const lang = getLang();
@@ -80,13 +93,37 @@ function setPhase(phase) {
 }
 
 // ── Bottom workbench ───────────────────────────────────────────────────────
-// Analyze, Workflow and Activity stay open together. During a live run the
-// Analyze controls remain visible but locked so a second run cannot race it.
+// One row of tabs picks one view: Graph, Timeline, Assignments or Activity. The
+// first three are rendered by WorkflowInspector inside the same panel, so the tab
+// both chooses the panel and tells that module which of its views to show.
+//
+// Analyze is not a tab. It is the input you need before there is anything to
+// inspect, so it stays open below the view; during a live run its controls remain
+// visible but locked, so a second run cannot race the first.
+const WORKBENCH_VIEW_PANEL = {
+  graph: 'workflow', timeline: 'workflow', assignments: 'workflow', activity: 'activity',
+};
+
+function setWorkbenchView(view) {
+  workbenchView = WORKBENCH_VIEW_PANEL[view] ? view : 'graph';
+  syncWorkbench();
+  if (WORKBENCH_VIEW_PANEL[workbenchView] === 'workflow') {
+    window.WorkflowInspector?.setTab?.(workbenchView);
+  }
+}
+
 function syncWorkbench() {
   const root = document.getElementById('workbench');
   if (!root) return;
+  const shown = WORKBENCH_VIEW_PANEL[workbenchView] || 'workflow';
   document.querySelectorAll('[data-workbench-panel]').forEach(panel => {
-    panel.hidden = false;
+    const name = panel.dataset.workbenchPanel;
+    panel.hidden = name !== 'analyze' && name !== shown;
+  });
+  root.querySelectorAll('[data-workbench-view]').forEach(button => {
+    const selected = button.dataset.workbenchView === workbenchView;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-selected', String(selected));
   });
 
   const runLocked = currentPhase === 'running';
@@ -174,6 +211,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('workbench-collapse')?.addEventListener('click', () => {
     workbenchCollapsed = !workbenchCollapsed;
     syncWorkbench();
+  });
+  document.querySelectorAll('[data-workbench-view]').forEach(button => {
+    button.addEventListener('click', () => setWorkbenchView(button.dataset.workbenchView));
   });
   document.getElementById('access-lock')?.addEventListener('click', async () => {
     try {
@@ -481,6 +521,7 @@ function resolveInput(raw) {
 
 function prepareAnalysisUi(input, restoring = false) {
   workbenchCollapsed = false;
+  setWorkbenchView('graph');   // a new run opens on the graph, whatever was last shown
   clearActivityLog();
   appendActivity({
     agent: 'system',
@@ -1115,6 +1156,15 @@ function activityAgentLabel(agent) {
   return L(AGENT_NAMES[agent]) || agent;
 }
 
+// The tag sits in a narrow column and renders uppercase with letter spacing, so
+// the two `workflow_*` kinds have to be shortened rather than clipped. `plan` is
+// already taken by the orchestrator's own event, hence `graph` for the topology.
+const ACTIVITY_KIND_TAG = { workflow_state: 'state', workflow_plan: 'graph' };
+
+function activityKindTag(kind) {
+  return ACTIVITY_KIND_TAG[kind] || kind || 'event';
+}
+
 function activityTime(at) {
   try {
     return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -1123,10 +1173,20 @@ function activityTime(at) {
   }
 }
 
+// Entries arrive in receipt order, which is not clock order: replaying a retained
+// run pushes the "restoring" notice first and then events carrying their original
+// timestamps, so the log used to open with a later time than the rows beneath it.
+// Sort by the timestamp the row actually displays, and break ties by arrival.
+function activityChronological(a, b) {
+  const at = Date.parse(a.at) || 0;
+  const bt = Date.parse(b.at) || 0;
+  return at === bt ? a.id - b.id : at - bt;
+}
+
 function renderActivityLog() {
   const stream = document.getElementById('activity-stream');
   if (!stream) return;
-  const filtered = activityEntries.filter(activityMatches);
+  const filtered = activityEntries.filter(activityMatches).sort(activityChronological);
   stream.innerHTML = filtered.length
     ? filtered.map(activityEntryHtml).join('')
     : `<div class="activity-empty">${esc(L({ zh: '这个筛选条件下还没有事件。', en: 'No events match this filter yet.' }))}</div>`;
@@ -1168,7 +1228,7 @@ function activityEntryHtml(entry) {
     ${clickableAgent
       ? `<button type="button" class="activity-agent" data-activity-open-agent="${esc(entry.agent)}"><span class="activity-agent-dot" style="--agent-color:${esc(AGENT_COLORS[entry.agent] || '#94A3B8')}"></span>${esc(agent)}</button>`
       : `<span class="activity-agent"><span class="activity-agent-dot" style="--agent-color:#64748B"></span>${esc(agent)}</span>`}
-    <span class="activity-kind">${esc(entry.kind)}</span>
+    <span class="activity-kind">${esc(activityKindTag(entry.kind))}</span>
     <div class="activity-message">
       <span>${esc(L(entry.message))}</span>
       ${metadata ? `<span class="activity-meta">${esc(metadata)}</span>` : ''}
@@ -1550,9 +1610,11 @@ function jargonSynopsisLine(t) {
 }
 
 function campSynopsisLine(c) {
+  const label = L(c.label);
+  if (!label) return '';   // a camp with no name is not a line worth printing
   const weight = esc(L(WEIGHT_LABEL[c.weight]) || c.weight || '');
   const wrapped = getLang() === 'zh' ? `（${weight}）` : ` (${weight})`;
-  return `<strong>${esc(L(c.label))}</strong>${wrapped}`;
+  return `<strong>${esc(label)}</strong>${wrapped}`;
 }
 
 const SYNOPSIS_PREVIEW = 3;
@@ -1561,8 +1623,11 @@ const SYNOPSIS_JUMP = { zh: '看完整 →', en: 'See all →' };
 function synopsisBlock(agent, lines, flags, opts = {}) {
   const limit = opts.preview || SYNOPSIS_PREVIEW;
   const lead = opts.lead ? `<li><strong>${esc(opts.lead)}</strong></li>` : '';
-  const preview = lines.slice(0, limit);
-  const rest = lines.slice(limit);
+  // Drop lines a builder declined to write, so an untranslated or half-filled
+  // section falls through to the empty note instead of printing blank bullets.
+  const filled = lines.filter(Boolean);
+  const preview = filled.slice(0, limit);
+  const rest = filled.slice(limit);
   const body = (lead || preview.length)
     ? `<ul class="synopsis-lines">${lead}${preview.map(line => `<li>${line}</li>`).join('')}</ul>`
     : `<p class="synopsis-empty">${esc(synopsisEmptyNote(agent, flags))}</p>`;

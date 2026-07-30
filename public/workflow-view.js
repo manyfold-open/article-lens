@@ -8,7 +8,6 @@
 
   let options = {};
   let activeTab = 'graph';
-  let collapsed = false;
   let lastState = null;
 
   const POSITIONS = {
@@ -89,18 +88,13 @@
 
   function init(config) {
     options = config || {};
-    const root = document.getElementById('workflow-inspector');
-    if (!root) return;
-    root.querySelectorAll('[data-workflow-tab]').forEach(button => {
-      button.addEventListener('click', () => {
-        activeTab = button.dataset.workflowTab || 'graph';
-        render(lastState);
-      });
-    });
-    root.querySelector('[data-workflow-collapse]')?.addEventListener('click', () => {
-      collapsed = !collapsed;
-      render(lastState);
-    });
+  }
+
+  // Which view is showing is chosen by the workbench tab row, which also owns the
+  // one collapse control, so this module no longer binds either itself.
+  function setTab(tab) {
+    activeTab = tab || 'graph';
+    render(lastState);
   }
 
   function render(state) {
@@ -108,7 +102,6 @@
     const root = document.getElementById('workflow-inspector');
     if (!root || !state) return;
     const attempt = window.WorkflowModel?.currentAttempt(state);
-    root.classList.toggle('collapsed', collapsed);
     root.dataset.workflowState = state.phase || 'queued';
     const status = root.querySelector('[data-workflow-status]');
     if (status) {
@@ -129,24 +122,14 @@
     const tokenEl = root.querySelector('[data-workflow-tokens]');
     const tokenTotal = attempt?.usage?.total || 0;
     if (tokenEl) tokenEl.textContent = tr(`${tokenTotal} 个 token`, `${tokenTotal} tokens`);
-    const collapseButton = root.querySelector('[data-workflow-collapse]');
-    if (collapseButton) {
-      collapseButton.textContent = collapsed ? tr('展开', 'Expand') : tr('收起', 'Collapse');
-      collapseButton.setAttribute('aria-expanded', String(!collapsed));
-    }
     const errorBanner = root.querySelector('[data-workflow-error]');
     if (errorBanner) {
       const reason = state.error || attempt?.error || '';
-      errorBanner.hidden = collapsed || !reason;
+      errorBanner.hidden = !reason;
       errorBanner.textContent = reason ? `${state.phase === 'error' ? tr('失败原因', 'Failure reason') : tr('重试原因', 'Retry reason')}: ${reason}` : '';
     }
-    root.querySelectorAll('[data-workflow-tab]').forEach(button => {
-      const selected = button.dataset.workflowTab === activeTab;
-      button.classList.toggle('active', selected);
-      button.setAttribute('aria-selected', String(selected));
-    });
     root.querySelectorAll('[data-workflow-view]').forEach(view => {
-      view.hidden = collapsed || view.dataset.workflowView !== activeTab;
+      view.hidden = view.dataset.workflowView !== activeTab;
     });
     const graph = root.querySelector('[data-workflow-graph]');
     const timeline = root.querySelector('[data-workflow-timeline]');
@@ -310,5 +293,5 @@
     });
   }
 
-  return { init, render };
+  return { init, render, setTab };
 });
