@@ -2056,7 +2056,8 @@ function renderCommentDigest(d, itemId, flags) {
   };
   const emptyDiscussion = !camps.length && !disputes.length && !corrections.length && !spicy.length && !biText(d.consensus);
 
-  document.getElementById('comments-content').innerHTML = `
+  const el = document.getElementById('comments-content');
+  el.innerHTML = `
     ${sectionTrustNote('comments')}
     ${flags?.comments_sampled ? `<p class="trust-line">${esc(L({ zh: '只分析高信号留言串，没有逐字看完整留言区。', en: 'Analysed high-signal threads only, not the full comment section verbatim.' }))}</p>` : ''}
     <p class="overview bi-zh">${esc(d.overview?.zh || '')}</p>
@@ -2064,54 +2065,78 @@ function renderCommentDigest(d, itemId, flags) {
     ${emptyDiscussion ? `<p class="muted">${esc(L({ zh: '小潜没有抓到明确派别、争议或可引用留言。', en: "Comments didn't surface clear camps, disputes, or quotable comments." }))}</p>` : ''}
 
     ${camps.length ? `<div class="digest-group">
-      <strong class="small mono digest-heading">${esc(L({ zh: '主要派别', en: 'Camps' }))}</strong>
-      <div class="camps">
-      ${camps.map(c => `<div class="camp-card">
-        <div class="camp-header">
+      <strong class="small mono digest-heading">${esc(L({ zh: `主要派别 · ${camps.length} 组`, en: `Camps · ${camps.length}` }))}</strong>
+      <div class="camp-deck">
+      ${camps.map((c, i) => `<details class="camp-item"${i === 0 ? ' open' : ''}>
+        <summary>
           <span class="bi-zh camp-label">${esc(c.label?.zh || '')}</span>
           <span class="bi-en camp-label">${esc(c.label?.en || '')}</span>
           <span class="badge ${wc[c.weight] || 'badge-muted'}">${esc(weightLabel(c.weight))}</span>
+          <span class="camp-peek bi-zh">${esc(c.stance?.zh || '')}</span>
+          <span class="camp-peek bi-en">${esc(c.stance?.en || '')}</span>
+        </summary>
+        <div class="camp-body">
+          <p class="camp-stance bi-zh">${esc(c.stance?.zh || '')}</p>
+          <p class="camp-stance bi-en">${esc(c.stance?.en || '')}</p>
+          ${c.quote ? `<blockquote class="camp-quote">"${esc(c.quote)}" ${hnLink(c.comment_id)}</blockquote>` : hnLink(c.comment_id)}
         </div>
-        <p class="camp-stance bi-zh">${esc(c.stance?.zh || '')}</p>
-        <p class="camp-stance bi-en">${esc(c.stance?.en || '')}</p>
-        ${c.quote ? `<blockquote class="camp-quote">"${esc(c.quote)}" ${hnLink(c.comment_id)}</blockquote>` : hnLink(c.comment_id)}
-      </div>`).join('')}
+      </details>`).join('')}
       </div>
     </div>` : ''}
 
-    ${biText(d.consensus) ? `<div class="consensus-block">
-      <strong class="small mono">${esc(L({ zh: '共识', en: 'Consensus' }))}</strong>
-      <p class="bi-zh">${esc(d.consensus?.zh || '')}</p>
-      <p class="bi-en">${esc(d.consensus?.en || '')}</p>
-    </div>` : ''}
+    ${biText(d.consensus) ? `<p class="consensus-line">
+      <span class="digest-k">${esc(L({ zh: '共识', en: 'Consensus' }))}</span>
+      <span class="bi-zh">${esc(d.consensus?.zh || '')}</span>
+      <span class="bi-en">${esc(d.consensus?.en || '')}</span>
+    </p>` : ''}
 
-    ${disputes.length ? `<div class="disputes-block">
-      <strong class="small mono">${esc(L({ zh: '争议点', en: 'Disputes' }))}</strong>
-      <ul class="dispute-list">
-        ${disputes.map(x => `<li>
-          <span class="bi-zh">${esc(x.zh || '')}</span>
-          <span class="bi-en">${esc(x.en || '')}</span>
-        </li>`).join('')}
-      </ul>
-    </div>` : ''}
+    ${digestFold({ zh: '争议点', en: 'Disputes' }, disputes.map(x => `
+      <span class="bi-zh">${esc(x.zh || '')}</span>
+      <span class="bi-en">${esc(x.en || '')}</span>`), { pair: true })}
 
-    ${corrections.length ? `<div class="corrections-block">
-      <strong class="small mono red">${esc(L({ zh: '专家纠错', en: 'Expert Corrections' }))}</strong>
-      ${corrections.map(ec => `<div class="correction-card">
-        <p class="bi-zh">${esc(ec.correction?.zh || '')}</p>
-        <p class="bi-en">${esc(ec.correction?.en || '')}</p>
-        ${hnLink(ec.comment_id)}
-      </div>`).join('')}
-    </div>` : ''}
+    ${digestFold({ zh: '专家纠错', en: 'Expert Corrections' }, corrections.map(ec => `
+      <span class="bi-zh">${esc(ec.correction?.zh || '')}</span>
+      <span class="bi-en">${esc(ec.correction?.en || '')}</span>
+      ${hnLink(ec.comment_id)}`), { pair: true })}
 
-    ${spicy.length ? `<div class="spicy-block">
-      <strong class="small mono amber">${esc(L({ zh: '辣评', en: 'Spicy Takes' }))}</strong>
-      ${spicy.map(s => `<div class="spicy-card">
-        ${s.quote ? `<blockquote>"${esc(s.quote)}"</blockquote>` : ''}
-        <p class="bi-zh">${esc(s.zh)}</p>
-        ${hnLink(s.comment_id)}
-      </div>`).join('')}
-    </div>` : ''}`;
+    ${digestFold({ zh: '辣评', en: 'Spicy Takes' }, spicy.map(s => `
+      ${s.quote ? `<blockquote>"${esc(s.quote)}"</blockquote>` : ''}
+      <span class="bi-zh">${esc(s.zh || '')}</span>
+      ${hnLink(s.comment_id)}`))}`;
+
+  bindCampDeck(el);
+}
+
+// Disputes, corrections and spicy takes were four tinted full-width blocks with
+// one card per item, and together they cost more height than the camps and the
+// overview put together. Each is now one row. The count on the label is the part
+// that matters: a collapsed row that only says 争议点 reads as an empty section,
+// while 争议点 2 says there is something behind it. Items arrive as already-escaped
+// HTML, the same contract synopsisBlock uses.
+function digestFold(label, items, opts = {}) {
+  const filled = items.filter(html => html && html.trim());
+  if (!filled.length) return '';
+  const pair = opts.pair && filled.length > 1 ? ' digest-pair' : '';
+  return `<details class="digest-fold">
+    <summary>${esc(L(label))}<span class="digest-fold-n">${filled.length}</span></summary>
+    <div class="digest-fold-body${pair}">
+      ${filled.map(html => `<div class="digest-item">${html}</div>`).join('')}
+    </div>
+  </details>`;
+}
+
+// One camp open at a time, so the card keeps a predictable height while a reader
+// clicks through the deck. `<details name="…">` does this natively but is too
+// recent to depend on, and closing a sibling re-enters this handler with
+// `open === false`, which returns before it can cascade.
+function bindCampDeck(root) {
+  const deck = root.querySelector('.camp-deck');
+  if (!deck) return;
+  const items = [...deck.querySelectorAll('.camp-item')];
+  items.forEach(item => item.addEventListener('toggle', () => {
+    if (!item.open) return;
+    items.forEach(other => { if (other !== item) other.open = false; });
+  }));
 }
 
 function biText(v) {

@@ -25,8 +25,12 @@
       --shadow-md: 0 4px 12px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.04);
 
       --topbar-h: 56px;
-      /* Office and its three-panel console share one responsive outer edge. */
+      /* Office, report column and console share one responsive outer edge. */
       --workspace-width: min(1040px, 94vw);
+      /* A card is as wide as the office; a paragraph inside it is not. Cards hold
+         both — repeated items that want the width, and prose that wants a line a
+         reader can track back to. */
+      --prose-measure: 76ch;
     }
 
     /* ── Reset & Base ───────────────────────────────────────────────────── */
@@ -827,8 +831,20 @@
     #frontpage-section { margin-top: 10px; max-height: 230px; overflow-y: auto; }
 
     /* ── Page Layout ─────────────────────────────────────────────────────── */
+    /* The office, the report and the console are three stacked bands, so they
+       share one outer edge. A column of its own width made the band with the
+       most text the narrowest one, and therefore the longest: the same digest
+       that needs 1360px at 680px wide needs 638px at the office's width. The
+       +40px absorbs this column's own padding, so it is the card's edge — not
+       the column's — that lands on the office's. */
     main {
-      max-width: 680px;
+      /* `width` is load-bearing, not decoration. `main` is a flex item of the
+         column .app-shell, and an `auto` cross-axis margin opts it out of
+         stretching, so without this it sizes to its content — 784px of camp text
+         rather than the 1080px cap. The old 680px cap hid that, because the
+         content always overflowed it. */
+      width: 100%;
+      max-width: calc(var(--workspace-width) + 40px);
       margin: 0 auto;
       padding: 12px 20px 60px;
     }
@@ -2048,7 +2064,7 @@
     /* ── Slim verdict bar (always visible, between office and panels) ─────── */
     .verdict-bar {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 10px;
       flex-wrap: wrap;
       padding: 10px 14px;
@@ -2061,12 +2077,17 @@
     .verdict-bar[data-worth=high]   { border-left-color: var(--green); }
     .verdict-bar[data-worth=medium] { border-left-color: var(--amber); }
     .verdict-bar[data-worth=low]    { border-left-color: var(--red); }
+    /* The reason owns its own row. As a flex sibling of the badges it kept any
+       width down to `min-width`, so four English badges (385px against Chinese's
+       232px) left it a ~200px ribbon 17 lines tall, with the short badges centred
+       against it. `min-width` cannot express "wrap or take the width": a basis of
+       100% can. */
     .verdict-bar .vb-why {
       font-size: 13px;
       color: var(--muted);
       line-height: 1.5;
-      flex: 1;
-      min-width: 160px;
+      flex: 1 1 100%;
+      max-width: var(--prose-measure);
     }
 
     .panel-hint { text-align: center; margin-bottom: 10px; opacity: 0.8; }
@@ -2207,6 +2228,16 @@
        `display: block`, which outranked the html[data-lang] toggle and printed
        every key point in both languages at once. The li's own type styles apply. */
 
+    /* Prose in a card that is now as wide as the office. Repeated items keep the
+       full width; sentences do not. */
+    .tldr p,
+    .key-points li,
+    .verdict-why,
+    .camp-stance,
+    .consensus-line,
+    .digest-fold-body,
+    .overview { max-width: var(--prose-measure); }
+
     /* ── Comment Digest ──────────────────────────────────────────────────── */
     .overview {
       font-size: 14px;
@@ -2224,25 +2255,39 @@
       color: var(--muted);
     }
 
-    .camps {
+    /* The camps are the section's primary finding, so they stay on the page — but
+       as a deck rather than as three fully-open cards. Collapsed items overlap by
+       5px so the stack reads as paper rather than as a list of rows, and each strip
+       still carries its name, its weight and one line of its stance. */
+    .camp-deck {
       display: flex;
       flex-direction: column;
-      gap: 10px;
     }
-    .camp-card {
-      padding: 14px 16px;
+    .camp-item {
       border: 1px solid var(--border);
       border-left: 4px solid var(--accent);
       border-radius: var(--radius);
       background: var(--card);
     }
-    .camp-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-bottom: 8px;
+    .camp-item + .camp-item { margin-top: -5px; }
+    .camp-item[open] { margin-top: 8px; position: relative; z-index: 1; box-shadow: 0 2px 10px rgba(255,102,0,.10); }
+    .camp-item[open] + .camp-item { margin-top: 8px; }
+    .camp-item > summary { padding: 11px 14px; gap: 9px; }
+    .camp-item > summary > .camp-label { flex: none; }
+    /* The peek is the collapsed strip's whole job: it is why a closed camp is not
+       an empty row. It never wraps, so the strip height never changes. */
+    .camp-peek {
+      flex: 1;
+      min-width: 0;
+      font-size: 12.5px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
+    .camp-item[open] > summary > .camp-peek { display: none; }
+    .camp-body { padding: 0 14px 13px 27px; }
+
     .camp-label {
       font-size: 13.5px;
       font-weight: 600;
@@ -2267,76 +2312,60 @@
       margin-top: 3px;
     }
 
-    .consensus-block {
-      background: #F0FDF4;
-      border: 1px solid #BBF7D0;
-      border-radius: var(--radius);
-      padding: 14px 16px;
-      margin-bottom: 14px;
-    }
-    .consensus-block strong { display: block; margin-bottom: 6px; }
-    .consensus-block p { font-size: 13.5px; line-height: 1.65; }
-
-    .disputes-block {
-      background: #EFF6FF;
-      border: 1px solid #BFDBFE;
-      border-radius: var(--radius);
-      padding: 14px 16px;
-      margin-bottom: 14px;
-    }
-    .disputes-block strong { display: block; margin-bottom: 8px; }
-    .dispute-list {
-      margin: 0;
-      padding-left: 18px;
-    }
-    .dispute-list li {
+    /* The consensus is one short paragraph and it is what the thread settled on,
+       so it reads inline under the overview rather than as a tinted block. */
+    .consensus-line {
       font-size: 13.5px;
       line-height: 1.65;
+      margin: 14px 0;
+    }
+    .consensus-line > .digest-k { font-weight: 600; margin-right: 8px; }
+
+    /* Disputes, corrections and spicy takes are the section's secondary groups:
+       four tinted full-width blocks, one card per item, cost more height than the
+       camps and the overview together. Each is now one row carrying its count —
+       the count is what stops a closed row from reading as an empty section.
+       The caret comes from the global `details > summary` rule. */
+    .digest-fold {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg);
       margin-bottom: 6px;
     }
-    .dispute-list li:last-child { margin-bottom: 0; }
-    .dispute-list .bi-en {
+    .digest-fold > summary { padding: 9px 13px; font-size: 13px; }
+    .digest-fold-n {
+      margin-left: auto;
+      font-family: var(--mono);
+      font-size: 11px;
       color: var(--muted);
-      font-size: 12.5px;
-      margin-top: 2px;
+      font-variant-numeric: tabular-nums;
     }
-
-    .corrections-block,
-    .spicy-block {
-      margin-top: 14px;
+    .digest-fold-body {
+      padding: 2px 13px 13px 24px;
+      font-size: 13.5px;
+      line-height: 1.65;
     }
-    .corrections-block strong,
-    .spicy-block strong {
-      display: block;
-      margin-bottom: 8px;
+    .digest-item + .digest-item {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
     }
-
-    .correction-card {
-      border: 1px solid #FECACA;
-      border-left: 4px solid var(--red);
-      border-radius: var(--radius);
-      padding: 13px 15px;
-      background: #FEF2F2;
-      margin-bottom: 8px;
+    .digest-item .bi-en { color: var(--muted); font-size: 12.5px; }
+    .digest-item blockquote { font-style: italic; color: var(--ink); }
+    /* Two short items sit side by side once the card is as wide as the office. */
+    @media (min-width: 900px) {
+      .digest-fold-body.digest-pair {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        max-width: none;
+      }
+      .digest-fold-body.digest-pair .digest-item + .digest-item {
+        margin-top: 0;
+        padding-top: 0;
+        border-top: none;
+      }
     }
-    .correction-card p { font-size: 13.5px; line-height: 1.65; }
-    .correction-card p + p { color: var(--muted); margin-top: 4px; font-size: 12px; }
-
-    .spicy-card {
-      border: 1px solid #FDE68A;
-      border-left: 4px solid var(--amber);
-      border-radius: var(--radius);
-      padding: 13px 15px;
-      background: #FFFBEB;
-      margin-bottom: 8px;
-    }
-    .spicy-card blockquote {
-      font-style: italic;
-      font-size: 13px;
-      color: var(--ink);
-      margin-bottom: 6px;
-    }
-    .spicy-card p { font-size: 12.5px; color: var(--muted); }
     .hn-link {
       display: inline-flex;
       align-items: center;
