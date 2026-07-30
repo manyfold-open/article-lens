@@ -487,7 +487,7 @@ export async function orchestrateAnalysis(
       mode: 'skipped',
       reason: bi('你在编辑面板关掉合成，保留各角色的原始结果。', 'You turned Synthesiser off in the editor, so the original role outputs were kept.'),
     }
-    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'skipped', label: bi('已关闭，略过整合', 'Turned off — skipping synthesis') })
+    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'skipped', label: bi('已关闭，略过整合', 'Turned off, skipping synthesis') })
   } else {
     await curate(env, item, result, emit, agentSources, meter, audience, fallbackAgents)
   }
@@ -509,7 +509,7 @@ async function replaySection<T>(
   emit: (e: SSEEvent) => void,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<T> {
-  if (agentSources) agentSources[agent] = { mode: 'cache', reason: bi('这段直接使用上一轮缓存，没有重新调用 agent。', 'Reused this section from the previous cache — the agent was not called again.') }
+  if (agentSources) agentSources[agent] = { mode: 'cache', reason: bi('这段直接使用上一轮缓存，没有重新调用 agent。', 'Reused this section from the previous cache, the agent was not called again.') }
   emit({ event: 'status', agent, state: 'done', mode: 'cache', label: LABELS[agent].done })
   emit({ event: 'section', agent, data })
   return data
@@ -532,7 +532,7 @@ function buildCaptainPlan(
       agent: 'sum',
       action: cachedShared ? 'reuse' : 'run',
       reason: cachedShared
-        ? bi('摘要已在缓存里，直接拿来用。', 'The summary is already cached — reusing it as-is.')
+        ? bi('摘要已在缓存里，直接拿来用。', 'The summary is already cached, reusing it as-is.')
         : bi('先读文章，抓出一句话和重点。', 'Read the article first to pull out a one-liner and the key points.'),
     },
     {
@@ -541,18 +541,18 @@ function buildCaptainPlan(
       reason: cachedJargon
         ? bi('术语清单已依你的生词本缓存。', 'The jargon list is already cached against your known-terms list.')
         : looksTechnical && textLen >= 220
-          ? bi('内容看起来有技术密度，请小词挑真正会卡住的词。', 'The content looks technically dense — let Jargon pick out the terms that would actually trip readers up.')
-          : bi('内容太短或不像技术文，先不硬找术语。', 'The content is too short or not technical — skipping the jargon hunt for now.'),
+          ? bi('内容看起来有技术密度，请小词挑真正会卡住的词。', 'The content looks technically dense, so let Jargon pick out the terms that would actually trip readers up.')
+          : bi('内容太短或不像技术文，先不硬找术语。', 'The content is too short or not technical, so skipping the jargon hunt for now.'),
     },
     {
       agent: 'comments',
       action: cachedShared ? 'reuse' : (comments >= 3 ? 'run' : 'skip'),
       reason: cachedShared
-        ? bi('留言摘要已在缓存里，直接拿来用。', 'The comment digest is already cached — reusing it as-is.')
+        ? bi('留言摘要已在缓存里，直接拿来用。', 'The comment digest is already cached, reusing it as-is.')
         : comments >= 3
           ? bi(
               commentsWereSampled(item) ? '留言很多，挑高信号串分析。' : '留言量足够，请小潜整理派别。',
-              commentsWereSampled(item) ? 'There are a lot of comments — sampling the highest-signal threads to analyse.' : 'There are enough comments — let Comments sort out the camps.'
+              commentsWereSampled(item) ? 'There are a lot of comments, so sampling the highest-signal threads to analyse.' : 'There are enough comments, so let Comments sort out the camps.'
             )
           : bi('留言太少，没有必要做派别分析。', 'Too few comments to bother with camp analysis.'),
     },
@@ -589,7 +589,7 @@ function applyGraphToPlan(plan: CaptainPlan, graph: NormalizedGraph): void {
   for (const a of plan.assignments) {
     if (graph.enabled[a.agent] === false) {
       a.action = 'skip'
-      a.reason = bi('你在编辑面板把这位关掉了，这轮直接略过。', 'You turned this one off in the editor panel — skipping it this round.')
+      a.reason = bi('你在编辑面板把这位关掉了，这轮直接略过。', 'You turned this one off in the editor panel, so skipping it this round.')
     }
   }
   const route = plan.assignments.map(a => `${agentZh(a.agent)}:${actionZh(a.action)}`).join(' · ')
@@ -783,10 +783,10 @@ async function skipSummary(
 ): Promise<HNLensResult['summary']> {
   skippedAgents.add('sum')
   const empty: HNLensResult['summary'] = {
-    tldr: bi('你在编辑面板把小摘关掉了，这轮没有产生摘要。', 'You turned Summariser off in the editor panel — no summary was produced this round.'),
+    tldr: bi('你在编辑面板把小摘关掉了，这轮没有产生摘要。', 'You turned Summariser off in the editor panel, so no summary was produced this round.'),
     key_points: [],
   }
-  emit({ event: 'status', agent: 'sum', state: 'done', mode: 'skipped', label: bi('已关闭，略过摘要', 'Turned off — skipping summary') })
+  emit({ event: 'status', agent: 'sum', state: 'done', mode: 'skipped', label: bi('已关闭，略过摘要', 'Turned off, skipping summary') })
   emit({ event: 'section', agent: 'sum', data: empty })
   if (agentSources) agentSources.sum = { mode: 'skipped', reason: bi('你在编辑面板关掉小摘，没有调用摘要 agent。', 'You turned Summariser off in the editor panel, so the summary agent was not called.') }
   return empty
@@ -910,7 +910,7 @@ function isWorthReading(verdict: HNLensResult['verdict'] | null | undefined): bo
 function escalateReason(verdict: HNLensResult['verdict'] | null | undefined, go: boolean): string {
   const wr = String(verdict?.worth_reading ?? '').trim().toLowerCase()
   const known = wr === 'high' || wr === 'medium' || wr === 'low'
-  if (go) return known ? `worth_reading=${wr}` : 'worth_reading unknown — over-delivering'
+  if (go) return known ? `worth_reading=${wr}` : 'worth_reading unknown, over-delivering'
   return `worth_reading=${wr || 'low'}`
 }
 
@@ -924,10 +924,10 @@ async function skipContext(
   skippedAgents.add('ctx')
   const empty: HNLensResult['verdict'] = {
     worth_reading: mock.verdict.worth_reading,
-    why_frontpage: bi('你在编辑面板把小导关掉了，这轮没有重新裁定。', 'You turned Verdict off in the editor panel — no new verdict was made this round.'),
+    why_frontpage: bi('你在编辑面板把小导关掉了，这轮没有重新裁定。', 'You turned Verdict off in the editor panel, so no new verdict was made this round.'),
     tier: mock.verdict.tier,
   }
-  emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'skipped', label: bi('已关闭，略过裁定', 'Turned off — skipping verdict') })
+  emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'skipped', label: bi('已关闭，略过裁定', 'Turned off, skipping verdict') })
   emit({ event: 'section', agent: 'ctx', data: empty })
   if (agentSources) agentSources.ctx = { mode: 'skipped', reason: bi('你在编辑面板关掉小导，没有调用裁定 agent。', 'You turned Verdict off in the editor panel, so the verdict agent was not called.') }
   return empty
@@ -1013,16 +1013,16 @@ async function skipComments(
 ): Promise<HNLensResult['comment_digest']> {
   skippedAgents.add('comments')
   const empty = normalizeDigest({
-    overview: bi('留言太少，队长略过小潜的派别分析。', 'Too few comments — the captain skipped Comments’ camp analysis.'),
+    overview: bi('留言太少，队长略过小潜的派别分析。', 'Too few comments, so the captain skipped Comments’ camp analysis.'),
     camps: [],
     consensus: bi('尚无足够讨论形成共识。', 'Not enough discussion yet to form a consensus.'),
     disputes: [],
     expert_corrections: [],
     spicy: [],
   })
-  emit({ event: 'status', agent: 'comments', state: 'done', mode: 'skipped', label: bi('留言太少，略过', 'Too few comments — skipped') })
+  emit({ event: 'status', agent: 'comments', state: 'done', mode: 'skipped', label: bi('留言太少，略过', 'Too few comments, skipped') })
   emit({ event: 'section', agent: 'comments', data: empty.overview.zh ? empty : mock.comment_digest })
-  if (agentSources) agentSources.comments = { mode: 'skipped', reason: bi('留言太少，队长判断不用调用小潜。', 'Too few comments — the captain decided Comments did not need to be called.') }
+  if (agentSources) agentSources.comments = { mode: 'skipped', reason: bi('留言太少，队长判断不用调用小潜。', 'Too few comments, so the captain decided Comments did not need to be called.') }
   return empty.overview.zh ? empty : mock.comment_digest
 }
 
@@ -1088,11 +1088,11 @@ async function curate(
       reason: sandboxReason
         ? bi(
             `合成的 sandbox/runtime 不在线，保留各组原始结果，不再等 QA 修剪。原因：${sandboxReason}`,
-            `Synth's sandbox/runtime is offline — keeping each section's raw results instead of waiting for QA pruning. Reason: ${sandboxReason}`
+            `Synth's sandbox/runtime is offline, so each section's raw results are kept instead of waiting for QA pruning. Reason: ${sandboxReason}`
           )
         : bi(
             `合成超过等待时间或 runtime 失败；保留各组原始结果，不再等 QA 修剪。原因：${shortErr(e)}`,
-            `Synth exceeded its wait budget or the runtime failed — keeping each section's raw results instead of waiting for QA pruning. Reason: ${shortErr(e)}`
+            `Synth exceeded its wait budget or the runtime failed, so each section's raw results are kept instead of waiting for QA pruning. Reason: ${shortErr(e)}`
           ),
     }
   } finally {
@@ -1381,7 +1381,7 @@ async function runJargon(
       reason: sandboxReason
         ? bi(
             `小词的 sandbox/runtime 不在线，为避免整篇卡住，先不显示术语。原因：${sandboxReason}`,
-            `Jargon's sandbox/runtime is offline — skipping the jargon list for now to avoid stalling the whole run. Reason: ${sandboxReason}`
+            `Jargon's sandbox/runtime is offline, so the jargon list is skipped for now to avoid stalling the whole run. Reason: ${sandboxReason}`
           )
         // A cut-off or non-JSON answer is NOT a timeout: 小词 replied, and saying
         // it "did not respond in time" sends the next fix at the wrong target.
@@ -1412,7 +1412,7 @@ async function skipJargon(
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<JargonTerm[]> {
   skippedAgents.add('jargon')
-  emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'skipped', label: bi('非技术文，略过术语', 'Not technical — skipping jargon') })
+  emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'skipped', label: bi('非技术文，略过术语', 'Not technical, skipping jargon') })
   emit({ event: 'section', agent: 'jargon', data: [] })
   if (agentSources) agentSources.jargon = { mode: 'skipped', reason: bi('队长判断内容太短或不像技术文，没有调用小词。', 'The captain judged the content too short or not technical, so Jargon was not called.') }
   return []
