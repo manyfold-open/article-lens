@@ -237,6 +237,30 @@ something to show. Every card also carries its agent's job in one line and its
 uniform colour down the left edge, because the office only reveals a role on
 hover and neither a phone nor a demo audience can hover.
 
+The office, the report column and the console are three stacked full-width bands,
+so they share one outer edge: `main` is `calc(var(--workspace-width) + 40px)`, the
+same variable the office and console use, plus that column's own padding. A column
+with a width of its own made the band holding the most text the narrowest one, and
+therefore the longest — the comment digest measured 1200px at 640px wide and 676px
+at the office's 1040px, for the same result. The mobile rule had always done this;
+only the desktop column had a number of its own. `width: 100%` is load-bearing
+there: `main` is a flex item of the column `.app-shell`, and an `auto` cross-axis
+margin opts it out of stretching, so without it the column sizes to its content and
+the cap never applies. Prose does not inherit the card's new width — `--prose-measure`
+keeps a paragraph to a line a reader can track back.
+
+Inside 小潜's card the camps are a deck, not five tinted blocks. The camps are the
+role's primary finding, so they stay on the page as labelled strips that overlap by
+5px, one open at a time, with the majority camp open by default; each closed strip
+carries its name, its weight and one clipped line of its stance. Disputes, expert
+corrections and spicy takes are secondary, and as four full-width tinted blocks with
+one card per item they cost more height than the camps and the overview together.
+Each is now one `<details>` row carrying its item count, because a collapsed row that
+only says 争议点 reads as an empty section while 争议点 2 does not. Collapsing the camps
+too is shorter still and was rejected for the same reason the cards state their
+agent's job: the first thing a reader or a demo audience sees would be nothing the
+crew found.
+
 The Assignments view holds two facts that arrive at different times, so it shows
 two columns rather than one status chip. `briefing.assignments[].action` is the
 order 队长 gave and is known the moment the briefing arrives, while
