@@ -34,6 +34,12 @@ export interface Camp {
   comment_id: number
 }
 
+// One section's size before and after 合成 pruned it. Always measured off the
+// arrays themselves rather than derived from the curator's keep-indices, because
+// `keepByIndex` deliberately keeps the original array when those indices are
+// unusable: only measuring reports what the reader actually ends up with.
+export interface CurationTrim { before: number; after: number }
+
 export interface ExpertCorrection {
   correction: BiStr
   comment_id: number
@@ -84,6 +90,14 @@ export interface HNLensResult {
       // or format is not landing.
       output_unparseable?: UnparseableKind
     }>>
+    // What 合成's curation pass actually removed, per section. Absent on results
+    // written before this field existed and whenever synth fell back, so the
+    // reader is told "not pruned this time" instead of a fabricated zero.
+    curation?: {
+      jargon: CurationTrim
+      key_points: CurationTrim
+      camps: CurationTrim
+    }
   }
   briefing?: {
     route: BiStr
