@@ -14,7 +14,12 @@ import {
   type Stage1Agent,
   STAGE1,
 } from './graph'
-import { parseLoose } from './json'
+import {
+  parseLoose,
+  classifyUnparseable,
+  isUnparseableOutputError,
+  UnparseableOutputError,
+} from './json'
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 // Cloudflare Queue consumers have a 15-minute wall-clock ceiling. Reserve
@@ -40,7 +45,7 @@ interface RunState {
 const runStates = new WeakMap<(event: SSEEvent) => void, RunState>()
 
 // Run `body` with calls charged to `stage`, then restore the previous stage.
-// 省錢漸進 runs ctx between two halves of stage 1, so this cannot be monotonic.
+// 省钱渐进 runs ctx between two halves of stage 1, so this cannot be monotonic.
 async function inStage<T>(
   emit: (event: SSEEvent) => void,
   stage: Stage,
@@ -1321,11 +1326,19 @@ async function runJargon(
       const rej = settled.find(s => s.status === 'rejected') as PromiseRejectedResult | undefined
       throw rej ? rej.reason : new Error('jargon: no windows returned')
     }
-    const parseable = outputs.some(output => {
+    const usable = outputs.filter(output => {
       const parsed = parseLoose<unknown>(output)
       return Array.isArray(parsed) || Boolean(parsed && Array.isArray((parsed as { jargon?: unknown }).jargon))
     })
-    if (!parseable) throw new Error('Jargon returned no parseable JSON from any completed window.')
+    if (!usable.length) {
+      // The peers answered; their output was unusable. 小词 has the longest
+      // structured output of any role, so a cut-off response is its most likely
+      // non-transport failure — and it must not be reported as a timeout.
+      throw new UnparseableOutputError(
+        classifyUnparseable(outputs[0]) ?? 'not_json',
+        { returned: outputs.length, parsed: 0 },
+      )
+    }
     let merged = mergeJargon(outputs)
     // Hard filter: never show a term the user already knows (case-insensitive).
     const knownSet = new Set(known.map(k => k.trim().toLowerCase()))
@@ -1353,15 +1366,28 @@ async function runJargon(
     if (agentSources) agentSources.jargon = {
       mode: 'fallback',
       budget_limited: isBudgetExhaustedError(e) || undefined,
+      output_unparseable: isUnparseableOutputError(e) ? e.classification : undefined,
       reason: sandboxReason
         ? bi(
             `小词的 sandbox/runtime 不在线，为避免整篇卡住，先不显示术语。原因：${sandboxReason}`,
             `Jargon's sandbox/runtime is offline — skipping the jargon list for now to avoid stalling the whole run. Reason: ${sandboxReason}`
           )
-        : bi(
-            `小词最多等待 ${Math.round(timeoutMs / 1000)} 秒；这次没有及时回复，为避免整篇卡住，先不显示术语。原因：${shortErr(e)}`,
-            `Jargon waits up to ${Math.round(timeoutMs / 1000)}s; it did not respond in time this run, so the jargon list is skipped to avoid stalling the whole run. Reason: ${shortErr(e)}`
-          ),
+        // A cut-off or non-JSON answer is NOT a timeout: 小词 replied, and saying
+        // it "did not respond in time" sends the next fix at the wrong target.
+        : isUnparseableOutputError(e)
+          ? e.classification === 'truncated'
+            ? bi(
+                `小词回复了，但术语清单写到一半就被截断，无法解析，所以这次不显示术语。它要写的条目最多，最容易超出输出长度上限。`,
+                `Jargon did reply, but its term list was cut off mid-answer and could not be parsed, so no terms are shown. It has the longest output of any role, so it is the likeliest to exceed the output cap.`
+              )
+            : bi(
+                `小词回复了，但内容不是可解析的 JSON，所以这次不显示术语。原因：${shortErr(e)}`,
+                `Jargon did reply, but the content was not parseable JSON, so no terms are shown. Reason: ${shortErr(e)}`
+              )
+          : bi(
+              `小词最多等待 ${Math.round(timeoutMs / 1000)} 秒；这次没有及时回复，为避免整篇卡住，先不显示术语。原因：${shortErr(e)}`,
+              `Jargon waits up to ${Math.round(timeoutMs / 1000)}s; it did not respond in time this run, so the jargon list is skipped to avoid stalling the whole run. Reason: ${shortErr(e)}`
+            ),
     }
     return []
   } finally {
@@ -1418,7 +1444,7 @@ function fallbackReason(agent: WorkerAgent, e: unknown, sandboxReason: string | 
   const enName = agentEn(agent)
   if (isBudgetExhaustedError(e))
     return bi(
-      `這一輪分給 ${zhName} 的時間用完了（後面的角色要留時間），${fallbackText.zh}；整篇不會因此重跑。`,
+      `这一轮分给 ${zhName} 的时间用完了（后面的角色要留时间），${fallbackText.zh}；整篇不会因此重跑。`,
       `${enName} ran out of the time this round allotted it (later roles keep a reserve), so ${fallbackText.en}; the whole run is not retried for this.`
     )
   if (sandboxReason)

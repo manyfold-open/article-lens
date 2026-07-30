@@ -2,6 +2,10 @@
 export interface BiStr { en: string; zh: string }
 
 // ── Core types ────────────────────────────────────────────────────
+// Why a completed agent call's output could not be parsed. 'truncated' means the
+// role wrote past its output cap, so the fix is to ask for less; 'not_json'
+// means the prompt or format is not landing. Produced by crew/json.ts.
+export type UnparseableKind = 'truncated' | 'not_json' | 'empty'
 export type ItemType     = 'article' | 'ask' | 'show' | 'pdf' | 'paywalled'
 export type WorthReading = 'high' | 'medium' | 'low'
 export type ReadingTier  = '10s' | '1min' | 'deep'
@@ -73,6 +77,12 @@ export interface HNLensResult {
       mode: 'real' | 'cache' | 'fallback' | 'skipped'
       reason: BiStr
       budget_limited?: boolean
+      // `output_unparseable` marks a fallback where the peer DID answer but the
+      // output could not be parsed. Separate from both budget_limited and a
+      // transport failure, because the fix differs: 'truncated' means the role
+      // wrote past its output cap (ask for less), 'not_json' means the prompt
+      // or format is not landing.
+      output_unparseable?: UnparseableKind
     }>>
   }
   briefing?: {

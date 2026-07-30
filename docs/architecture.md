@@ -117,6 +117,26 @@ Manyfold recovery is layered:
 5. the final attempt may finish with explicit fallback sources, but degraded
    output is never written to the seven-day result cache.
 
+A fallback is only one of three distinct failures, and they need different
+fixes. `agent_sources` distinguishes them:
+
+| Field | Meaning | Fix |
+|---|---|---|
+| `budget_limited` | the role ran out of its own time slice | rebalance the stage reserves |
+| `output_unparseable` | the peer answered, but the output could not be parsed | see below |
+| neither | transport, timeout, or an offline sandbox | the peer or the network |
+
+`output_unparseable` carries its own classification, because a cut-off answer
+and a malformed one are not the same problem: `truncated` means the role wrote
+past its output cap, so the fix is to ask for less; `not_json` means the prompt
+or output format is not landing; `empty` means nothing came back at all.
+
+This matters most for `jargon`, which has the longest structured output of any
+role (10–16 term objects against `sum`'s single summary) and is therefore the
+likeliest to be cut off. Before this distinction existed, a truncated jargon
+answer was reported to the reader as "did not respond in time", which pointed
+the next fix at the timeout instead of at the output length.
+
 The Durable Object currently stores events and the compact final result in one
 SQLite-backed value. Keep it below the Durable Object value-size limit. If
 results grow materially, put large payloads in KV or R2 and persist references.
