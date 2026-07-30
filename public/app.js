@@ -1420,9 +1420,12 @@ function renderResults(r) {
   renderCommentDigest(r.comment_digest, r.item_id, r.flags);
   renderContext(r);
   renderBriefing(r);     // 队长 (also opened by clicking the whiteboard)
+  renderAssignments(r);  // how the work was divided — Workflow inspector, not a card
   renderSynth(r);        // 合成 — distinct from 小导
   renderMetaBar(r);
-  selectAgentSection('jargon');           // default-open panel = 小词
+  // The reveal opens on 队长's overall report: it is what the office walks to the
+  // whiteboard to present, and it indexes the other five cards.
+  selectAgentSection('orch');
 }
 
 function clearReportPanels() {
@@ -1500,39 +1503,118 @@ function renderContext(r) {
     <p class="verdict-why bi-en">${esc(v.why_frontpage?.en || '')}</p>`;
 }
 
-// 队长 (Orchestrator) — the structured briefing shown on the whiteboard.
+// 队长 (Orchestrator) — the overall report, and the first card the reveal opens.
+//
+// An outline, not prose: the verdict on top, then one synopsis per teammate who
+// found something, each with a way into that teammate's own card. The opening
+// lines are deliberately repeated from those cards, because this card doubles as
+// the table of contents — a full-text version would read as one wall of text and
+// leave the other five cards with nothing new to show.
+//
+// Nothing here describes how the work was divided up. That question belongs to
+// the Workflow inspector's Assignments view (see renderAssignments).
 function renderBriefing(r) {
   const v = r.verdict || {};
-  const nJ = (r.jargon || []).length;
-  const nC = ((r.comment_digest || {}).camps || []).length;
-  const nK = ((r.summary || {}).key_points || []).length;
-  const briefing = r.briefing || latestBriefing;
-  const assignments = briefing?.assignments || [];
+  const summary = r.summary || {};
+  const digest = r.comment_digest || {};
+  const jargon = r.jargon || [];
+  const keyPoints = summary.key_points || [];
+  const camps = digest.camps || [];
   const flags = r.flags || {};
-  document.getElementById('briefing-content').innerHTML = `
+  const el = document.getElementById('briefing-content');
+  el.innerHTML = `
     <p class="brief-title bi-zh">${esc(r.title?.zh || '')}</p>
     <p class="brief-title bi-en">${esc(r.title?.en || '')}</p>
     <div class="brief-row"><span class="brief-k mono">${esc(L({ zh: '结论', en: 'Verdict' }))}</span>
       <span class="badge badge-amber">${esc(L(WORTH_LABEL[v.worth_reading]) || v.worth_reading || '')}</span>
-      <span class="badge badge-muted">${esc(L(TIER_LABEL[v.tier]) || v.tier || '')}</span></div>
-    <div class="brief-row"><span class="brief-k mono">${esc(L({ zh: '一句话', en: 'TL;DR' }))}</span>
-      <span class="brief-v bi-zh">${esc(r.summary?.tldr?.zh || '')}</span>
-      <span class="brief-v bi-en">${esc(r.summary?.tldr?.en || '')}</span></div>
+      <span class="badge badge-muted">${esc(L(TIER_LABEL[v.tier]) || v.tier || '')}</span>
+      <button class="verdict-owner synopsis-who" data-agent="ctx" data-jump-agent="ctx">${esc(agentLabel('ctx'))}</button></div>
     <div class="brief-row"><span class="brief-k mono">${esc(r.source === 'hn' ? L({ zh: '为何上首页', en: 'Why on the front page' }) : L({ zh: '为什么值得读', en: 'Why worth reading' }))}</span>
       <span class="brief-v bi-zh">${esc(v.why_frontpage?.zh || '')}</span>
       <span class="brief-v bi-en">${esc(v.why_frontpage?.en || '')}</span></div>
-    ${briefing ? `<div class="captain-route">
-      <strong class="small mono">${esc(L(CAPTAIN_ASSIGNS))}</strong>
-      <p class="muted small">${esc(L(briefing.route))}</p>
-      ${agentStatusTable(assignments, flags.agent_sources || {}, r)}
-    </div>` : ''}
+    ${synopsisBlock('sum', keyPoints.map(k => esc(L(k))), flags, { lead: L(summary.tldr) })}
+    ${synopsisBlock('jargon', jargon.map(jargonSynopsisLine), flags)}
+    ${synopsisBlock('comments', camps.map(campSynopsisLine), flags, { lead: L(digest.overview), preview: 2 })}
     ${trustBadges(flags)}
-    <div class="brief-index mono small muted">${esc(L({ zh: `本次产出：术语 ${nJ} 个 · 留言 ${nC} 派 · 重点 ${nK} 条`, en: `This run: ${nJ} terms · ${nC} camps · ${nK} key points` }))}</div>
-    <p class="muted small">${esc(L({ zh: '点上方各小帮手或目录列看细节', en: 'Click a teammate or row above for details' }))}</p>`;
+    <div class="brief-index mono small muted">${esc(L({ zh: `本次产出：术语 ${jargon.length} 个 · 留言 ${camps.length} 派 · 重点 ${keyPoints.length} 条`, en: `This run: ${jargon.length} terms · ${camps.length} camps · ${keyPoints.length} key points` }))}</div>
+    <p class="muted small">${esc(L({ zh: '点上方各小帮手，或点这里的「看完整」看细节', en: 'Click a teammate above, or "See all" here, for the details' }))}</p>`;
 
-  document.querySelectorAll('[data-jump-agent]').forEach(btn => {
+  bindAgentJumps(el);
+}
+
+// Lines handed to synopsisBlock are already-escaped HTML, so a term can keep its
+// mono styling and a camp its weight. Escape at the point of interpolation.
+function jargonSynopsisLine(t) {
+  const zh = t.zh_term && getLang() === 'zh' ? `（${esc(t.zh_term)}）` : '';
+  return `<strong class="mono">${esc(t.term)}</strong>${zh}`;
+}
+
+function campSynopsisLine(c) {
+  const weight = esc(L(WEIGHT_LABEL[c.weight]) || c.weight || '');
+  const wrapped = getLang() === 'zh' ? `（${weight}）` : ` (${weight})`;
+  return `<strong>${esc(L(c.label))}</strong>${wrapped}`;
+}
+
+const SYNOPSIS_PREVIEW = 3;
+const SYNOPSIS_JUMP = { zh: '看完整 →', en: 'See all →' };
+
+function synopsisBlock(agent, lines, flags, opts = {}) {
+  const limit = opts.preview || SYNOPSIS_PREVIEW;
+  const lead = opts.lead ? `<li><strong>${esc(opts.lead)}</strong></li>` : '';
+  const preview = lines.slice(0, limit);
+  const rest = lines.slice(limit);
+  const body = (lead || preview.length)
+    ? `<ul class="synopsis-lines">${lead}${preview.map(line => `<li>${line}</li>`).join('')}</ul>`
+    : `<p class="synopsis-empty">${esc(synopsisEmptyNote(agent, flags))}</p>`;
+  const more = rest.length
+    ? `<details class="synopsis-more">
+        <summary>${esc(L({ zh: `展开其余 ${rest.length} 项`, en: `${rest.length} more` }))}</summary>
+        <ul class="synopsis-lines">${rest.map(line => `<li>${line}</li>`).join('')}</ul>
+      </details>`
+    : '';
+  return `<div class="synopsis" data-agent="${esc(agent)}">
+    <div class="synopsis-head">
+      <span class="synopsis-who">${esc(agentLabel(agent))}</span>
+      <button class="synopsis-jump" data-jump-agent="${esc(agent)}">${esc(L(SYNOPSIS_JUMP))}</button>
+    </div>
+    ${body}${more}
+  </div>`;
+}
+
+// An empty block still keeps its teammate on the page: a missing section is part
+// of the story, and saying which kind of missing it is beats a blank block.
+function synopsisEmptyNote(agent, flags) {
+  const source = (flags || {}).agent_sources?.[agent] || fallbackSource(agent, flags || {});
+  if (source?.mode === 'skipped') return L({ zh: '这次没派工给他。', en: 'Not assigned this run.' });
+  if (source?.mode === 'fallback') return L({ zh: '这次没拿到他的结果。', en: 'No result came back this run.' });
+  return L({ zh: '这次没有产出。', en: 'Nothing to report this run.' });
+}
+
+function bindAgentJumps(root) {
+  root.querySelectorAll('[data-jump-agent]').forEach(btn => {
     btn.addEventListener('click', () => selectAgentSection(btn.dataset.jumpAgent));
   });
+}
+
+// 队长's division of labour: who was told to run, skip or reuse, and why. It
+// answers how the crew worked rather than what they found, so it lives in the
+// Workflow inspector. Rendered here because the route and the per-role sources
+// are app state; WorkflowInspector only owns showing and hiding the view.
+function renderAssignments(r) {
+  const el = document.querySelector('[data-workflow-assignments]');
+  if (!el) return;
+  const result = r || {};
+  const briefing = result.briefing || latestBriefing;
+  const assignments = briefing?.assignments || [];
+  if (!briefing) {
+    el.innerHTML = `<div class="workflow-empty">${esc(L({ zh: '等队长分派任务…', en: 'Waiting for the orchestrator to assign the work…' }))}</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <strong class="small mono">${esc(L(CAPTAIN_ASSIGNS))}</strong>
+    <p class="assign-route muted small">${esc(L(briefing.route))}</p>
+    ${agentStatusTable(assignments, (result.flags || {}).agent_sources || {}, result)}`;
+  bindAgentJumps(el);
 }
 
 const CAPTAIN_ASSIGNS = { zh: '队长分派', en: "Orchestrator's Assignments" };
@@ -1542,17 +1624,6 @@ const MODE_LABEL = {
   skipped: { zh: '略过', en: 'Skipped' },
   cache: { zh: '缓存', en: 'Cache' },
 };
-
-function briefNavButton(a, source) {
-  const name = agentLabel(a.agent);
-  const mode = source?.mode || ({ run: 'real', skip: 'skipped', reuse: 'cache' }[a.action] || 'real');
-  const action = L(MODE_LABEL[mode]) || mode;
-  const reason = L(source?.reason) || L(a.reason) || '';
-  return `<button class="brief-nav-btn ${esc(mode)}" data-jump-agent="${esc(a.agent)}">
-    <span>${esc(name)} · ${esc(action)}</span>
-    <small>${esc(reason)}</small>
-  </button>`;
-}
 
 function agentStatusTable(assignments, sources, r) {
   const rows = assignments.map(a => statusRow(a.agent, sources[a.agent], a.reason, r)).join('');
@@ -1621,28 +1692,62 @@ function fallbackSource(agent, flags) {
   return null;
 }
 
-// 合成 (Synthesizer) — integration & QA. Distinct from 小导: this is the editor's
-// note on what was pruned/merged, not the verdict.
+// 合成 (Synthesizer) — the editing record. What it cut, not what survived: the
+// other four cards already are what survived, so a kept-count says nothing about
+// the work this role did. Cutting is the whole job, so the cut is the report.
+const EDIT_LOG_ROWS = [
+  { key: 'jargon',     label: { zh: '术语',     en: 'Jargon terms' },  unit: { zh: '个', en: '' } },
+  { key: 'key_points', label: { zh: '重点',     en: 'Key points' },    unit: { zh: '条', en: '' } },
+  { key: 'camps',      label: { zh: '留言派别', en: 'Comment camps' }, unit: { zh: '派', en: '' } },
+];
+
 function renderSynth(r) {
   const en = r.editor_note || {};
+  // Absent on results cached before the editing record existed, and whenever synth
+  // fell back. Both cases fall back to the kept-counts line: an absent record is
+  // not the same claim as "reviewed everything and cut nothing".
+  const curation = (r.flags || {}).curation;
   const nJ = (r.jargon || []).length;
   const nC = ((r.comment_digest || {}).camps || []).length;
   const nK = ((r.summary || {}).key_points || []).length;
+  const record = curation
+    ? `<div class="edit-log">${EDIT_LOG_ROWS.map(row => editLogRow(row, curation[row.key])).join('')}</div>`
+    : `<div class="brief-index mono small">${esc(L({ zh: `这次没有修剪纪录 · 目前保留：术语 ${nJ} 个 · 重点 ${nK} 条 · 留言 ${nC} 派`, en: `No editing record this run. Currently kept: ${nJ} terms · ${nK} points · ${nC} camps` }))}</div>`;
   document.getElementById('synth-content').innerHTML = `
     ${sectionTrustNote('synth')}
-    <p class="muted small">${esc(L({ zh: '整合与品管：把四位组员的产出去芜存菁、修跨段落不一致。', en: 'Integration & QA: prunes noise from the four teammates’ output and fixes cross-section inconsistencies.' }))}</p>
-    <div class="brief-index mono small">${esc(L({ zh: `保留：术语 ${nJ} · 重点 ${nK} · 留言派别 ${nC}`, en: `Kept: ${nJ} terms · ${nK} points · ${nC} camps` }))}</div>
+    ${record}
     ${ (en.zh || en.en) ? `
       <p class="editor-note bi-zh">📋 ${esc(en.zh)}</p>
       <p class="editor-note bi-en">📋 ${esc(en.en)}</p>`
       : `<p class="muted small">${esc(L({ zh: '（这次没有额外编辑注记）', en: '(No additional editor notes this time)' }))}</p>`}`;
 }
 
+function editLogRow(row, trim) {
+  const before = Math.max(0, Number(trim?.before) || 0);
+  const after = Math.max(0, Number(trim?.after) || 0);
+  const cut = Math.max(0, before - after);
+  const unit = L(row.unit);
+  let value;
+  if (!before) {
+    value = `<span class="edit-log-kept">${esc(L({ zh: '这段本来就没有内容', en: 'Nothing came in' }))}</span>`;
+  } else if (cut) {
+    value = `<span class="edit-log-v">${before} → ${after}</span>
+      <span class="edit-log-cut">${esc(L({ zh: `砍掉 ${cut} ${unit}`, en: `cut ${cut}` }))}</span>`;
+  } else {
+    value = `<span class="edit-log-v">${after}</span>
+      <span class="edit-log-kept">${esc(L({ zh: '原封不动', en: 'kept as-is' }))}</span>`;
+  }
+  return `<div class="edit-log-row">
+    <span class="edit-log-k mono">${esc(L(row.label))}</span>
+    ${value}
+  </div>`;
+}
+
 // Progressive: render one section as soon as its agent finishes, and reveal the
 // report so panels visibly populate while the office keeps animating.
 function renderSection(agent, data) {
   if (data?.briefing) {
-    renderBriefingShell(data.briefing);
+    renderAssignments(null);
     return;
   }
   const shouldShowProgress = currentPhase === 'results' || reportReady;
@@ -1650,23 +1755,10 @@ function renderSection(agent, data) {
   else if (agent === 'jargon') renderJargon(Array.isArray(data) ? data : []);
   else if (agent === 'comments') renderCommentDigest(data, 0, {});
   else if (agent === 'ctx') { renderVerdictBar(data, undefined, {}); renderContextFromVerdict(data); }
-  if (shouldShowProgress && !document.querySelector('.result-panel.active')) selectAgentSection('jargon');
-}
-
-function renderBriefingShell(briefing) {
-  const el = document.getElementById('briefing-content');
-  if (!el) return;
-  el.innerHTML = `
-    <div class="captain-route">
-      <strong class="small mono">${esc(L(CAPTAIN_ASSIGNS))}</strong>
-      <p class="muted small">${esc(L(briefing.route))}</p>
-      <div class="brief-nav">
-        ${(briefing.assignments || []).map(a => briefNavButton(a)).join('')}
-      </div>
-    </div>`;
-  el.querySelectorAll('.brief-nav-btn[data-jump-agent]').forEach(btn => {
-    btn.addEventListener('click', () => selectAgentSection(btn.dataset.jumpAgent));
-  });
+  // Mid-run, open the card of whoever just finished, so the audience watches the
+  // cards come alive one by one. Not 队长's report: its synopsis blocks are still
+  // empty this early, and it is the reveal's payoff — showing it now spends it.
+  if (shouldShowProgress && !document.querySelector('.result-panel.active')) selectAgentSection(agent);
 }
 
 function renderContextFromVerdict(v) {
@@ -1680,7 +1772,7 @@ const AGENT_SECTION = {
   orch: 'briefing-section', sum: 'summary-section', jargon: 'jargon-section',
   comments: 'comments-section', ctx: 'context-section', synth: 'synth-section',
 };
-let selectedAgent = 'jargon';
+let selectedAgent = 'orch';   // the reveal opens on 队长's overall report
 
 function selectAgentSection(id) {
   const secId = AGENT_SECTION[id] || 'context-section';
