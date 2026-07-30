@@ -237,6 +237,25 @@ something to show. Every card also carries its agent's job in one line and its
 uniform colour down the left edge, because the office only reveals a role on
 hover and neither a phone nor a demo audience can hover.
 
+The Assignments view holds two facts that arrive at different times, so it shows
+two columns rather than one status chip. `briefing.assignments[].action` is the
+order 队长 gave and is known the moment the briefing arrives, while
+`flags.agent_sources[].mode` is what the section turned out to be and exists only
+on the finished result. One chip could only guess the second, so mid-run every row
+claimed a real analysis while the route line above it said cache. An unknown fact
+now says it is unknown, and a role told to run that came back on fallback is
+legible instead of invisible. Output volume is absent from the table on purpose:
+how many terms or camps a role produced is what the crew found, so it stays on the
+cards and in the office hover detail.
+
+`briefing.route` is no longer rendered anywhere. It is this table's assignment
+column serialized onto one line, in a second vocabulary whose `running` and
+`from cache` read as live state rather than as an order. The view carries no title
+either, because the active tab already names it and neither Graph nor Timeline
+titles itself. The same reasoning removed the division-of-labour list from 队长's
+click-to-inspect panel: that panel is office-side, so it keeps the job description
+and the output counts and nothing else.
+
 The Workbench presents one view at a time through a single row of tabs: Graph,
 Timeline, Assignments, Activity. Analyse is not one of them, because it is the
 input needed before there is anything to inspect, so it stays open below the

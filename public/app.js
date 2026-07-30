@@ -63,6 +63,12 @@ function firstFilled(...values) {
   }
   return '';
 }
+
+// English needs the singular at one. Chinese measure words take no plural form,
+// so this only ever wraps the `en` side of a BiStr.
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
 function syncI18nAttrs() {
   const lang = getLang();
   document.querySelectorAll('[data-zh-ph]').forEach(el => { el.placeholder = lang === 'zh' ? el.dataset.zhPh : el.dataset.enPh; });
@@ -1444,7 +1450,6 @@ function agentStructuredResult(id) {
     case 'orch': {
       const briefing = r?.briefing || latestBriefing || agentOutputs.orch;
       body = briefing ? agentPanelCaptain({
-        briefing,
         jargon: r?.jargon || agentOutputs.jargon || [],
         comment_digest: r?.comment_digest || agentOutputs.comments || { camps: [] },
       }) : agentPanelEmpty();
@@ -1464,14 +1469,12 @@ const KB_KNOWN_LABEL = { zh: '已会', en: 'Known' };
 const SAVE_LABEL = { zh: '＋ 收藏', en: '+ Save' };
 const SAVED_LABEL = { zh: '✓ 已收藏', en: '✓ Saved' };
 
+// No division-of-labour list here. That is the Workflow inspector's 分派 view and
+// it appears in exactly one place; this panel is office-side, so it keeps the job
+// description and the output counts.
 function agentPanelCaptain(r) {
-  const briefing = r.briefing || latestBriefing;
-  const rows = (briefing?.assignments || []).map(a =>
-    `<li><strong>${esc(agentLabel(a.agent))}</strong>：${esc(L(ASSIGN_ACTION_LABEL[a.action]) || a.action)} — ${esc(L(a.reason))}</li>`
-  ).join('');
   return `<p class="muted">${esc(L({ zh: '读题、分派任务给组员，再汇整成果。', en: 'Reads the brief, assigns tasks to the team, then compiles the results.' }))}</p>
-    ${briefing ? `<ul>${rows}</ul>` : ''}
-    <p>${esc(L({ zh: `术语 ${(r.jargon || []).length} 个 · 留言派别 ${((r.comment_digest || {}).camps || []).length} 组`, en: `${(r.jargon || []).length} terms · ${((r.comment_digest || {}).camps || []).length} camps` }))}</p>`;
+    <p>${esc(L({ zh: `术语 ${(r.jargon || []).length} 个 · 留言派别 ${((r.comment_digest || {}).camps || []).length} 组`, en: `${plural((r.jargon || []).length, 'term')} · ${plural(((r.comment_digest || {}).camps || []).length, 'camp')}` }))}</p>`;
 }
 
 // ── Results rendering ──────────────────────────────────────────────────────
@@ -1600,7 +1603,7 @@ function renderBriefing(r) {
     ${synopsisBlock('jargon', jargon.map(jargonSynopsisLine), flags)}
     ${synopsisBlock('comments', camps.map(campSynopsisLine), flags, { lead: L(digest.overview), preview: 2 })}
     ${trustBadges(flags)}
-    <div class="brief-index mono small muted">${esc(L({ zh: `本次产出：术语 ${jargon.length} 个 · 留言 ${camps.length} 派 · 重点 ${keyPoints.length} 条`, en: `This run: ${jargon.length} terms · ${camps.length} camps · ${keyPoints.length} key points` }))}</div>
+    <div class="brief-index mono small muted">${esc(L({ zh: `本次产出：术语 ${jargon.length} 个 · 留言 ${camps.length} 派 · 重点 ${keyPoints.length} 条`, en: `This run: ${plural(jargon.length, 'term')} · ${plural(camps.length, 'camp')} · ${plural(keyPoints.length, 'key point')}` }))}</div>
     <p class="muted small">${esc(L({ zh: '点上方各小帮手，或点这里的「看完整」看细节', en: 'Click a teammate above, or "See all" here, for the details' }))}</p>`;
 
   bindAgentJumps(el);
@@ -1679,44 +1682,75 @@ function renderAssignments(r) {
     el.innerHTML = `<div class="workflow-empty">${esc(L({ zh: '等队长分派任务…', en: 'Waiting for the orchestrator to assign the work…' }))}</div>`;
     return;
   }
-  el.innerHTML = `
-    <strong class="small mono">${esc(L(CAPTAIN_ASSIGNS))}</strong>
-    <p class="assign-route muted small">${esc(L(briefing.route))}</p>
-    ${agentStatusTable(assignments, (result.flags || {}).agent_sources || {}, result)}`;
+  // No heading and no route line. Graph and Timeline carry no in-panel title
+  // either, the active tab already reads 分派, and briefing.route is nothing but
+  // this table's 分派 column serialized onto one line (see the captain plan in
+  // src/crew/orchestrator.ts), in a second vocabulary that read as live state.
+  el.innerHTML = agentStatusTable(assignments, result.flags || {}, result);
   bindAgentJumps(el);
 }
 
-const CAPTAIN_ASSIGNS = { zh: '队长分派', en: "Orchestrator's Assignments" };
+// ASSIGN_ACTION_LABEL is the order 队长 gave, known the moment the briefing lands.
+// MODE_LABEL is what the section turned out to be, which only exists on the
+// finished result. Two facts, two vocabularies, two columns.
 const MODE_LABEL = {
   real: { zh: '真实分析', en: 'Real analysis' },
   fallback: { zh: '备援', en: 'Fallback' },
   skipped: { zh: '略过', en: 'Skipped' },
   cache: { zh: '缓存', en: 'Cache' },
 };
+const ASSIGN_COLUMNS = [
+  { zh: '组员', en: 'Agent' },
+  { zh: '分派', en: 'Assigned' },
+  { zh: '结果', en: 'Result' },
+  { zh: '原因', en: 'Why' },
+];
+// Shown wherever a fact has not arrived yet. Matches the Workflow inspector's
+// placeholder for an unstarted duration.
+const UNKNOWN_CELL = '—';
 
-function agentStatusTable(assignments, sources, r) {
-  const rows = assignments.map(a => statusRow(a.agent, sources[a.agent], a.reason, r)).join('');
-  const synthRow = statusRow('synth', sources.synth, { zh: '整合各组产出并做品管。', en: 'Integrates every teammate’s output and does QA.' }, r);
+function agentStatusTable(assignments, flags, r) {
+  const rows = assignments.map(a => statusRow(a.agent, a.action, flags, a.reason, r)).join('');
+  // synth is never assigned: it always runs, so it has an outcome but no order.
+  const synthRow = statusRow('synth', null, flags, { zh: '整合各组产出并做品管。', en: 'Integrates every teammate’s output and does QA.' }, r);
+  const head = `<div class="agent-status-head" aria-hidden="true">${
+    ASSIGN_COLUMNS.map(column => `<span>${esc(L(column))}</span>`).join('')}</div>`;
   return `<div class="agent-status-table">
-    ${rows}${synthRow}
+    ${head}${rows}${synthRow}
   </div>`;
 }
 
-function statusRow(agent, source, fallbackReason, r) {
-  const mode = source?.mode || 'real';
+// Order and outcome are two different facts that arrive at two different times,
+// so they get two columns. One chip could only ever guess at the outcome, which
+// is why mid-run every row used to claim 真实分析 while the route line directly
+// above it said 缓存. An unknown fact now says so.
+function statusRow(agent, order, flags, fallbackReason, r) {
+  const source = flags.agent_sources?.[agent] || fallbackSource(agent, flags);
+  const outcome = source?.mode || '';
   const reason = L(source?.reason) || L(fallbackReason) || L({ zh: '等待状态回报。', en: 'Waiting for status.' });
-  return `<button class="agent-status-row ${esc(mode)}" data-jump-agent="${esc(agent)}">
+  const orderLabel = order ? (L(ASSIGN_ACTION_LABEL[order]) || order) : UNKNOWN_CELL;
+  const outcomeLabel = outcome ? (L(MODE_LABEL[outcome]) || outcome) : UNKNOWN_CELL;
+  // A role ordered to skip will not run, so dim it now instead of waiting for a
+  // report that can only say the same thing. Its outcome cell still reads unknown.
+  const tone = outcome || (order === 'skip' ? 'skipped' : '');
+  return `<button class="agent-status-row ${esc(tone)}" data-jump-agent="${esc(agent)}"
+    aria-label="${esc([
+      agentLabel(agent),
+      `${L(ASSIGN_COLUMNS[1])} ${orderLabel}`,
+      `${L(ASSIGN_COLUMNS[2])} ${outcomeLabel}`,
+      reason,
+    ].join(' · '))}">
     <span class="agent-status-name">${esc(agentLabel(agent))}</span>
-    <span class="agent-status-mode">${esc(L(MODE_LABEL[mode]) || mode)}</span>
-    <span class="agent-status-count">${esc(agentOutputCount(agent, r))}</span>
+    <span class="agent-status-order">${esc(orderLabel)}</span>
+    <span class="agent-status-outcome">${esc(outcomeLabel)}</span>
     <span class="agent-status-reason">${esc(reason)}</span>
   </button>`;
 }
 
 function agentOutputCount(agent, r) {
-  if (agent === 'jargon') return L({ zh: `${(r.jargon || []).length} 词`, en: `${(r.jargon || []).length} terms` });
-  if (agent === 'comments') return L({ zh: `${((r.comment_digest || {}).camps || []).length} 派`, en: `${((r.comment_digest || {}).camps || []).length} camps` });
-  if (agent === 'sum') return L({ zh: `${((r.summary || {}).key_points || []).length} 重点`, en: `${((r.summary || {}).key_points || []).length} points` });
+  if (agent === 'jargon') return L({ zh: `${(r.jargon || []).length} 词`, en: plural((r.jargon || []).length, 'term') });
+  if (agent === 'comments') return L({ zh: `${((r.comment_digest || {}).camps || []).length} 派`, en: plural(((r.comment_digest || {}).camps || []).length, 'camp') });
+  if (agent === 'sum') return L({ zh: `${((r.summary || {}).key_points || []).length} 重点`, en: plural(((r.summary || {}).key_points || []).length, 'point') });
   if (agent === 'ctx') return r.verdict?.tier ? (L(TIER_LABEL[r.verdict.tier]) || r.verdict.tier) : L({ zh: '裁定', en: 'Verdict' });
   if (agent === 'synth') return (r.editor_note?.zh || r.editor_note?.en) ? L({ zh: '有注记', en: 'Has note' }) : L({ zh: '完成', en: 'Done' });
   return '';

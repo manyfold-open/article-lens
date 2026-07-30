@@ -641,17 +641,22 @@
       font-size: 12px;
     }
     .verdict-owner:hover { text-decoration: underline; }
+    /* The table owns the tracks and every row is a subgrid of them, so columns
+       line up across rows while each track sizes to the widest real label in
+       whichever language is showing. Fixed widths were what collided: they were
+       cut for two-glyph Chinese, and English overflowed them into the next cell. */
     .agent-status-table {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
+      display: grid;
+      grid-template-columns: max-content max-content max-content minmax(0, 1fr);
+      column-gap: 12px;
+      row-gap: 6px;
       margin-top: 10px;
     }
-    .agent-status-row {
+    .agent-status-row, .agent-status-head {
       display: grid;
-      grid-template-columns: 54px 70px 62px minmax(0, 1fr);
+      grid-template-columns: subgrid;
+      grid-column: 1 / -1;
       align-items: center;
-      gap: 8px;
       width: 100%;
       border: 1px solid var(--border);
       border-left: 4px solid var(--border);
@@ -662,6 +667,21 @@
       text-align: left;
       cursor: pointer;
     }
+    /* The header keeps a row's inline box, borders included, because a subgrid's
+       own left/right padding and border are subtracted from the tracks it spans.
+       Only the vertical padding is free to differ. */
+    .agent-status-head {
+      border-color: transparent;
+      background: none;
+      padding-top: 0;
+      padding-bottom: 0;
+      cursor: default;
+    }
+    .agent-status-head span {
+      font: 700 10px/1.4 var(--mono);
+      color: var(--muted);
+      letter-spacing: .04em;
+    }
     .agent-status-row:hover {
       border-color: var(--accent);
       box-shadow: 0 0 0 2px rgba(255,102,0,.08);
@@ -670,15 +690,15 @@
     .agent-status-row.cache { border-left-color: #3B82F6; }
     .agent-status-row.fallback { border-left-color: var(--amber); }
     .agent-status-row.skipped { border-left-color: var(--muted); opacity: .82; }
-    .agent-status-name, .agent-status-mode, .agent-status-count {
+    .agent-status-name, .agent-status-order, .agent-status-outcome {
       font-size: 12px;
       font-weight: 800;
       white-space: nowrap;
     }
-    .agent-status-mode { color: var(--muted); }
-    .agent-status-row.real .agent-status-mode { color: #047857; }
-    .agent-status-row.cache .agent-status-mode { color: #2563EB; }
-    .agent-status-row.fallback .agent-status-mode { color: #B45309; }
+    .agent-status-order, .agent-status-outcome { color: var(--muted); }
+    .agent-status-row.real .agent-status-outcome { color: #047857; }
+    .agent-status-row.cache .agent-status-outcome { color: #2563EB; }
+    .agent-status-row.fallback .agent-status-outcome { color: #B45309; }
     .agent-status-reason {
       min-width: 0;
       overflow: hidden;
@@ -1104,7 +1124,6 @@
       max-width: 100%;
       padding: 12px;
     }
-    .workflow-assignments .assign-route { margin: 0 0 4px; }
     .workflow-attempt {
       min-width: 696px;
       overflow: hidden;
