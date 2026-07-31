@@ -671,6 +671,7 @@ function handleSSEEvent(ev, options = {}) {
         agentOutputs.orch = ev.data.briefing;
         refreshOpenAgentPanel('orch');
       } else {
+        ev.data = coerceLegacySection(ev.agent, ev.data);
         agentOutputs[ev.agent] = ev.data;
       }
       renderSection(ev.agent, ev.data);   // populate this panel as soon as it's ready
@@ -693,7 +694,7 @@ function handleSSEEvent(ev, options = {}) {
       setWorkflowStage('assign');
       break;
     case 'result':
-      currentResult = ev.data;
+      currentResult = coerceLegacyResult(ev.data);
       // Finalize the token meter from the authoritative total, if provided.
       if (ev.data?.usage && window.pixelAgents?.setUsageTotal && typeof ev.data.usage.total === 'number') {
         window.pixelAgents.setUsageTotal(ev.data.usage.total);
@@ -2024,6 +2025,74 @@ function textOf(v) {
   if (!v) return '';
   if (typeof v === 'string') return v.trim();
   return String(v.en || v.zh || '').trim();
+}
+
+// A result written before the language collapse holds {en, zh} objects where the
+// renderers interpolate a string, so an uncoerced one reaches the reader as the
+// literal "[object Object]". The Worker coerces what it reads from its cache, but
+// the browser cannot assume the Worker wrote what it is being handed: a Durable
+// Object retains a result for 24 hours and replays it verbatim on reload.
+//
+// An explicit field walk, not a deep traversal — `quote`, `appeared_as` and
+// `comment_id` have to survive untouched.
+function coerceLegacyResult(r) {
+  if (!r || typeof r !== 'object') return r;
+  r.title = textOf(r.title);
+  if (r.editor_note !== undefined) r.editor_note = textOf(r.editor_note);
+  if (r.verdict) r.verdict.why_frontpage = textOf(r.verdict.why_frontpage);
+  if (r.summary) coerceLegacySummary(r.summary);
+  if (Array.isArray(r.jargon)) r.jargon = coerceLegacyJargon(r.jargon);
+  if (r.comment_digest) coerceLegacyDigest(r.comment_digest);
+  if (r.briefing) {
+    r.briefing.route = textOf(r.briefing.route);
+    r.briefing.assignments = (r.briefing.assignments || [])
+      .map(a => ({ ...a, reason: textOf(a.reason) }));
+  }
+  const sources = r.flags?.agent_sources;
+  if (sources) {
+    for (const key of Object.keys(sources)) {
+      if (sources[key]) sources[key].reason = textOf(sources[key].reason);
+    }
+  }
+  return r;
+}
+
+function coerceLegacySummary(s) {
+  if (!s || typeof s !== 'object') return s;
+  s.tldr = textOf(s.tldr);
+  s.key_points = (s.key_points || []).map(textOf).filter(Boolean);
+  return s;
+}
+
+function coerceLegacyJargon(terms) {
+  if (!Array.isArray(terms)) return terms;
+  return terms.map(t => ({ ...t, explain: textOf(t.explain) }));
+}
+
+function coerceLegacyDigest(d) {
+  if (!d || typeof d !== 'object') return d;
+  d.overview = textOf(d.overview);
+  d.consensus = textOf(d.consensus);
+  d.camps = (d.camps || []).map(c => ({ ...c, label: textOf(c.label), stance: textOf(c.stance) }));
+  d.disputes = (d.disputes || []).map(textOf).filter(Boolean);
+  d.expert_corrections = (d.expert_corrections || [])
+    .map(e => ({ ...e, correction: textOf(e.correction) }));
+  // `note` was named `zh` while the remark was written in Chinese.
+  d.spicy = (d.spicy || []).map(x => ({ ...x, note: textOf(x.note ?? x.zh) }));
+  return d;
+}
+
+// A section arrives on its own before the result does, so it needs the same
+// treatment; which coercion applies depends on whose section it is.
+function coerceLegacySection(agent, data) {
+  if (agent === 'sum') return coerceLegacySummary(data);
+  if (agent === 'jargon') return coerceLegacyJargon(data);
+  if (agent === 'comments') return coerceLegacyDigest(data);
+  if (agent === 'ctx' && data && typeof data === 'object') {
+    data.why_frontpage = textOf(data.why_frontpage);
+    return data;
+  }
+  return data;
 }
 
 function renderMetaBar(r) {

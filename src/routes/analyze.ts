@@ -1,5 +1,6 @@
 import { cacheGet, cachePut } from '../cache'
 import { CriticalAgentFallbackError, mockOrchestrate, orchestrateAnalysis } from '../crew/orchestrator'
+import { coerceLegacyJargon, coerceLegacyResult, coerceLegacyShared } from '../crew/legacy'
 import { buildWorkflowPlan } from '../crew/graph'
 import { detectItemType, extractArticle, extractFromUrl } from '../extract'
 import { hashString } from '../hash'
@@ -150,14 +151,16 @@ export async function runAnalysisRequest(
   const sharedKey = `${cacheKey}:shared${cacheTag}${CACHE_QUALITY_TAG}`
   const jargonKey = `${cacheKey}:j:${knownTermsHash}${cacheTag}${CACHE_QUALITY_TAG}`
   const fullKey = `${cacheKey}:${knownTermsHash}${cacheTag}${CACHE_QUALITY_TAG}`
-  const cachedFull = parseCachedJson(await cacheGet(env, fullKey)) as HNLensResult | null
+  const cachedFull = coerceLegacyResult(
+    parseCachedJson(await cacheGet(env, fullKey)) as HNLensResult | null,
+  )
   if (isReusableResult(cachedFull)) {
     await replayResult(cachedFull, emit)
     return cachedFull
   }
 
-  const cachedShared = parseCachedJson(await cacheGet(env, sharedKey))
-  const cachedJargon = parseCachedJson(await cacheGet(env, jargonKey))
+  const cachedShared = coerceLegacyShared(parseCachedJson(await cacheGet(env, sharedKey)))
+  const cachedJargon = coerceLegacyJargon(parseCachedJson(await cacheGet(env, jargonKey)))
   let result: HNLensResult
   if (env.MF_API_TOKEN) {
     try {

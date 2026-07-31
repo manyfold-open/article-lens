@@ -4,6 +4,8 @@ import type {
 } from '../schema'
 import { getSubtrees } from '../hn'
 import { stripHtml } from '../extract'
+import { toText } from './legacy'
+import type { SharedSections } from './legacy'
 import { buildMockResult } from './mock'
 import { callMfAgent, isBudgetExhaustedError } from './mf'
 import { createRunBudget, stageDeadline, type RunBudget, type Stage } from './budget'
@@ -83,22 +85,7 @@ function callAgent(
   })
 }
 
-// ── text coercion ─────────────────────────────────────────────────
-// Every user-facing string is plain English now: the roles are prompted in
-// English and answer in English, so there is no second language to carry, no
-// lazy /api/translate pass, and nothing that can render half-translated.
-// A role can still answer with the old {zh, en} object shape, so accept it and
-// take whichever side has text rather than rendering "[object Object]".
-function toText(v: unknown): string {
-  if (v == null) return ''
-  if (typeof v === 'string') return v
-  const o = v as { en?: unknown; zh?: unknown }
-  if (typeof o.en === 'string' && o.en.trim()) return o.en
-  if (typeof o.zh === 'string' && o.zh.trim()) return o.zh
-  return ''
-}
-
-export type SharedSections = Pick<HNLensResult, 'summary' | 'comment_digest' | 'verdict'>
+export type { SharedSections } from './legacy'
 
 // ── Audience (reader level) ────────────────────────────────────────
 // A single graph flag shifts the TONE/DEPTH of Summariser/Jargon/Context/
