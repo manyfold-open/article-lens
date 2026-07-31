@@ -13,7 +13,6 @@ import { handleAnalyze, handleAnalysisStatus, handleCreateAnalysis } from './rou
 import { handleDefine } from './routes/define'
 import { handleFrontPage } from './routes/frontpage'
 import { handleHealth } from './routes/health'
-import { handleTranslate } from './routes/translate'
 import type { Env } from './schema'
 import { handleAnalysisTaskBatch } from './workflow/analysis-task'
 
@@ -63,9 +62,6 @@ export default {
     }
     if (url.pathname === '/api/define' && request.method === 'POST') {
       return handleDefine(request, runtimeEnv)
-    }
-    if (url.pathname === '/api/translate' && request.method === 'POST') {
-      return handleTranslate(request, runtimeEnv)
     }
     if (url.pathname === '/api/health' && request.method === 'GET') {
       return handleHealth(url, runtimeEnv)

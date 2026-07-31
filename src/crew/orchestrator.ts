@@ -1,6 +1,6 @@
 import type {
   Env, HNItem, HNComment, ItemType, SSEEvent, AgentName, HNLensResult,
-  JargonTerm, BiStr, GraphConfig, Effort,
+  JargonTerm, GraphConfig, Effort,
 } from '../schema'
 import { getSubtrees } from '../hn'
 import { stripHtml } from '../extract'
@@ -45,7 +45,7 @@ interface RunState {
 const runStates = new WeakMap<(event: SSEEvent) => void, RunState>()
 
 // Run `body` with calls charged to `stage`, then restore the previous stage.
-// 省钱渐进 runs ctx between two halves of stage 1, so this cannot be monotonic.
+// Thrifty Progressive runs ctx between two halves of stage 1, so this cannot be monotonic.
 async function inStage<T>(
   emit: (event: SSEEvent) => void,
   stage: Stage,
@@ -83,52 +83,50 @@ function callAgent(
   })
 }
 
-// ── zh-first helpers ──────────────────────────────────────────────
-// Agents now generate Chinese only (to save tokens); English is fetched lazily
-// by the client via /api/translate. Everything is still stored as BiStr so the
-// schema and UI are unchanged — the `en` field just starts empty.
-const bz = (zh = ''): BiStr => ({ en: '', zh })
-// Orchestrator-authored strings (SSE labels, briefing route/reason, agent_sources
-// reason) are NOT covered by the client's lazy /api/translate pass (it only
-// walks title/summary/jargon/comment_digest/why_frontpage/editor_note) — so
-// these need a real `en` baked in at the source, via `bi(zh, en)` below.
-const bi = (zh: string, en: string): BiStr => ({ zh, en })
-function toBi(v: unknown): BiStr {
-  if (v == null) return bz('')
-  if (typeof v === 'string') return bz(v)
-  const o = v as { en?: string; zh?: string }
-  return { en: o.en || '', zh: o.zh || o.en || '' }
+// ── text coercion ─────────────────────────────────────────────────
+// Every user-facing string is plain English now: the roles are prompted in
+// English and answer in English, so there is no second language to carry, no
+// lazy /api/translate pass, and nothing that can render half-translated.
+// A role can still answer with the old {zh, en} object shape, so accept it and
+// take whichever side has text rather than rendering "[object Object]".
+function toText(v: unknown): string {
+  if (v == null) return ''
+  if (typeof v === 'string') return v
+  const o = v as { en?: unknown; zh?: unknown }
+  if (typeof o.en === 'string' && o.en.trim()) return o.en
+  if (typeof o.zh === 'string' && o.zh.trim()) return o.zh
+  return ''
 }
 
 export type SharedSections = Pick<HNLensResult, 'summary' | 'comment_digest' | 'verdict'>
 
-// ── 受众语气 (reader level) ─────────────────────────────────────────
-// A single graph flag shifts the TONE/DEPTH of 小摘/小词/小导/统整 without
-// changing which agents run. Absent → today's default (an intermediate dev),
-// byte-for-byte.
+// ── Audience (reader level) ────────────────────────────────────────
+// A single graph flag shifts the TONE/DEPTH of Summariser/Jargon/Context/
+// Synthesiser without changing which agents run. Absent → the default
+// (an intermediate dev).
 type Audience = 'beginner' | 'expert'
 function normAudience(a: unknown): Audience | undefined {
   return a === 'beginner' || a === 'expert' ? a : undefined
 }
-// The "读者是…" descriptor shared across prompts.
+// The "the reader is…" descriptor shared across prompts.
 function readerDesc(a?: Audience): string {
-  if (a === 'beginner') return '读者是「刚接触程序／这个领域的新手」'
-  if (a === 'expert') return '读者是「该领域的资深专家」'
-  return '读者是「会写程序但不是这个领域的专家」'
+  if (a === 'beginner') return 'the reader is new to programming or to this field'
+  if (a === 'expert') return 'the reader is a senior expert in this field'
+  return 'the reader can code but is not a specialist in this field'
 }
 // Per-agent tone directive (leading \n so it slots into a prompt). Empty for the
-// default audience so those prompts stay byte-for-byte identical to today.
+// default audience, so those prompts stay as they are.
 function audienceDirective(a: Audience | undefined, who: 'sum' | 'jargon' | 'ctx'): string {
   if (!a) return ''
   if (who === 'sum') return a === 'beginner'
-    ? '\n受众语气：读者是新手，请用更白话、少术语，必要时补一句背景。'
-    : '\n受众语气：读者是专家，可假设他懂基础，直接讲重点与深入细节，不必解释常识。'
+    ? '\nTone: the reader is a beginner. Use plainer wording, fewer technical terms, and add a line of background where it helps.'
+    : '\nTone: the reader is an expert. Assume the basics, go straight to the substance and the deeper detail, and do not explain common knowledge.'
   if (who === 'jargon') return a === 'beginner'
-    ? '\n受众语气：读者是新手，收录门槛放宽（连中阶常见词也值得解释），解说更浅白、多用比喻。'
-    : '\n受众语气：读者是专家，只收真正进阶／冷门／细微的术语，基础与中阶词一律跳过；解说可精简、可用专业语汇。'
+    ? '\nTone: the reader is a beginner. Lower the bar for inclusion (even mid-level common terms are worth explaining) and keep explanations plain, leaning on analogies.'
+    : '\nTone: the reader is an expert. Only include genuinely advanced, obscure or subtle terms and skip everything basic or mid-level; explanations can be terse and use professional vocabulary.'
   return a === 'beginner'   // ctx
-    ? '\n受众语气：读者是新手，判断阅读门槛时标准更严（新手更容易卡）。'
-    : '\n受众语气：读者是专家，基础内容对他们门槛低，tier 只在真正有深度时才给 deep。'
+    ? '\nTone: the reader is a beginner, so judge the reading bar more strictly — a beginner gets stuck more easily.'
+    : '\nTone: the reader is an expert, so basic material is a low bar for them; only award the deep tier when the piece genuinely has depth.'
 }
 
 // ── Token meter ────────────────────────────────────────────────────
@@ -210,10 +208,10 @@ type RouteAction = 'run' | 'skip' | 'reuse'
 interface RouteAssignment {
   agent: WorkerAgent
   action: RouteAction
-  reason: BiStr
+  reason: string
 }
 interface CaptainPlan {
-  route: BiStr
+  route: string
   assignments: RouteAssignment[]
 }
 
@@ -233,25 +231,25 @@ export async function mockOrchestrate(
     await sleep(120)
   }
   await sleep(320)
-  emit({ event: 'status', agent: 'sum', state: 'done', mode: 'fallback', label: bi('TL;DR 完成!', 'TL;DR done!') })
+  emit({ event: 'status', agent: 'sum', state: 'done', mode: 'fallback', label: 'TL;DR done!' })
   emit({ event: 'section', agent: 'sum', data: result.summary })
   await sleep(260)
-  emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'fallback', label: bi(`找到 ${result.jargon.length} 个词! 💡`, `Found ${result.jargon.length} terms! 💡`) })
+  emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'fallback', label: `Found ${result.jargon.length} terms! 💡` })
   emit({ event: 'section', agent: 'jargon', data: result.jargon })
   await sleep(260)
-  emit({ event: 'status', agent: 'comments', state: 'done', mode: 'fallback', label: bi(`分成 ${result.comment_digest.camps.length} 派!`, `Split into ${result.comment_digest.camps.length} camps!`) })
+  emit({ event: 'status', agent: 'comments', state: 'done', mode: 'fallback', label: `Split into ${result.comment_digest.camps.length} camps!` })
   emit({ event: 'section', agent: 'comments', data: result.comment_digest })
   await sleep(260)
-  emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'fallback', label: bi('裁定完成!', 'Verdict is in!') })
+  emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'fallback', label: 'Verdict is in!' })
   emit({ event: 'section', agent: 'ctx', data: result.verdict })
   await sleep(220)
   return result
 }
 
 // ── Main orchestration ────────────────────────────────────────────
-// Stage 1 (parallel): 小摘 summary · 小词 jargon (KB-aware) · 小潜 comments.
-// Stage 2: 小导 verdict — runs AFTER, fed the summary + comment overview.
-// Then 统整/Synthesizer integrates + QA-prunes and the caller emits the final.
+// Stage 1 (parallel): Summariser summary · Jargon jargon (KB-aware) · Comments comments.
+// Stage 2: Context verdict — runs AFTER, fed the summary + comment overview.
+// Then Synthesiser/Synthesizer integrates + QA-prunes and the caller emits the final.
 export async function orchestrateAnalysis(
   item: HNItem,
   articleText: string,
@@ -263,7 +261,7 @@ export async function orchestrateAnalysis(
   runRequestBudgets.set(emit, { remaining: FREE_WORKERS_A2A_SUBREQUEST_BUDGET })
   const mock = buildMockResult(item, articleText, itemType)
   const graph = normalizeGraph(opts.graph)
-  // 辩论裁定 flag rides on the raw graph (like escalate). Applies wherever 小导 runs.
+  // Debate Verdict flag rides on the raw graph (like escalate). Applies wherever Context runs.
   const debate = !!opts.graph?.debate
   const budgetLimited = new Set<AgentName>()
   runStates.set(emit, {
@@ -271,7 +269,7 @@ export async function orchestrateAnalysis(
     stage: 'stage1',
     budgetLimited,
   })
-  // 受众语气: reader level shifts tone/depth of sum/jargon/ctx/curator prompts.
+  // Audience tone: reader level shifts tone/depth of sum/jargon/ctx/curator prompts.
   const audience = normAudience(opts.graph?.audience)
   const captain = buildCaptainPlan(item, articleText, itemType, opts)
   // Reflect graph.enabled in the emitted plan/briefing so the office shows the
@@ -313,7 +311,7 @@ export async function orchestrateAnalysis(
         replicaSources: NonNullable<HNLensResult['flags']['agent_sources']>,
       ) => Promise<T>,
       merge: (results: Awaited<T>[]) => Awaited<T>,
-      doneLabel: (merged: Awaited<T>) => BiStr,
+      doneLabel: (merged: Awaited<T>) => string,
     ): Promise<Awaited<T>> => {
       if (n <= 1) return await single(false, fallbackAgents, agentSources)
       emit({ event: 'status', agent, state: 'running', label: LABELS[agent].running })
@@ -338,15 +336,12 @@ export async function orchestrateAnalysis(
         fallbackAgents.add(agent)
         agentSources[agent] = usable[0].state.sources[agent] ?? {
           mode: 'fallback',
-          reason: bi('所有投票副本都使用备援结果。', 'Every voting replica used fallback output.'),
+          reason: 'Every voting replica used fallback output.',
         }
       } else {
         agentSources[agent] = {
           mode: 'real',
-          reason: bi(
-            `${real.length}/${n} 个投票副本成功，已合并有效结果。`,
-            `${real.length}/${n} voting replicas succeeded; merged the valid results.`,
-          ),
+          reason: `${real.length}/${n} voting replicas succeeded; merged the valid results.`,
         }
       }
       const merged = merge(usable.map(entry => entry.result.value))
@@ -361,7 +356,7 @@ export async function orchestrateAnalysis(
         : graph.enabled.sum === false ? skipSummary(mock, emit, skippedAgents, agentSources)
           : withReplicas('sum', graph.replicas.sum,
               (q, fallbacks, sources) => runSummary(env, item, articleText, itemType, mock, emit, fallbacks, sources, extra, eff.sum, meter, q, audience),
-              bestSummary, () => bi('TL;DR 完成!', 'TL;DR done!'))
+              bestSummary, () => 'TL;DR done!')
     const runCom = (extra?: string): Promise<HNLensResult['comment_digest']> =>
       haveShared ? replaySection('comments', opts.cachedShared!.comment_digest, emit, agentSources)
         : graph.enabled.comments === false ? skipComments(mock, emit, skippedAgents, agentSources)
@@ -373,7 +368,7 @@ export async function orchestrateAnalysis(
         : graph.enabled.jargon === false ? skipJargon(emit, skippedAgents, agentSources)
           : withReplicas('jargon', graph.replicas.jargon,
               (q, fallbacks, sources) => runJargon(env, item, articleText, opts.kbTerms ?? [], emit, fallbacks, sources, extra, eff.jargon, meter, q, audience),
-              mergeJargonReplicas, m => bi(`找到 ${m.length} 个词!`, `Found ${m.length} terms!`))
+              mergeJargonReplicas, m => `Found ${m.length} terms!`)
     // ctx producer, parameterised by the comment_digest to feed it (cheap phase
     // passes an empty digest — summary-only is fine for a quick worth-reading call).
     const runCtx = (cd: HNLensResult['comment_digest'], jrg: JargonTerm[] = []): Promise<HNLensResult['verdict']> =>
@@ -382,13 +377,13 @@ export async function orchestrateAnalysis(
           : runContext(env, item, summary, cd, jrg, mock, emit, fallbackAgents, agentSources, meter, debate, audience)
 
     if (opts.graph?.escalate) {
-      // ── Conditional escalate (省钱渐进): cheap first, escalate if worthy ──
+      // ── Conditional escalate (Thrifty Progressive): cheap first, escalate if worthy ──
       // Phase 1 (cheap): sum + ctx only. ctx runs on the summary alone (empty
       // comment_digest) — good enough for a quick "is it worth reading" call.
       summary = await runSum()
       assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'], budgetLimited)
       const emptyDigest = normalizeDigest({
-        overview: bz(''), camps: [], consensus: bz(''), disputes: [], expert_corrections: [], spicy: [],
+        overview: '', camps: [], consensus: '', disputes: [], expert_corrections: [], spicy: [],
       })
       verdict = await runCtx(emptyDigest)
       assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['ctx'], budgetLimited)
@@ -421,7 +416,7 @@ export async function orchestrateAnalysis(
       jargon = stage1.jargon
       assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'], budgetLimited)
 
-      // ── Stage 2: ctx — now also fed 小词's jargon density (dep edge). ──
+      // ── Stage 2: ctx — now also fed Jargon's jargon density (dep edge). ──
       verdict = await runCtx(comment_digest, jargon)
     }
   } else {
@@ -445,8 +440,8 @@ export async function orchestrateAnalysis(
     const [summaryR, comment_digestR] = await Promise.all([summaryP, commentsP])
     summary = summaryR
     comment_digest = comment_digestR
-    // 小词 runs in parallel with 小摘/小潜; await it BEFORE 小导 so the verdict can
-    // weigh jargon density (the 小词→小导 dependency edge). It's usually already
+    // Jargon runs in parallel with Summariser/Comments; await it BEFORE Context so the verdict can
+    // weigh jargon density (the Jargon→Context dependency edge). It's usually already
     // resolved by now, so this rarely adds latency.
     jargon = await jargonP
     assertCriticalAgents(fallbackAgents, opts.requireCriticalAgents, ['sum'], budgetLimited)
@@ -463,7 +458,7 @@ export async function orchestrateAnalysis(
     item_id: item.id,
     spec_version: Number(env.SPEC_VERSION) || 1,
     type: itemType,
-    title: { en: '', zh: item.title },
+    title: '',
     url: item.url ?? '',
     meta: { points: item.points, comments: item.children?.length ?? 0, author: item.author, age: '' },
     verdict,
@@ -485,9 +480,9 @@ export async function orchestrateAnalysis(
     skippedAgents.add('synth')
     agentSources.synth = {
       mode: 'skipped',
-      reason: bi('你在编辑面板关掉合成，保留各角色的原始结果。', 'You turned Synthesiser off in the editor, so the original role outputs were kept.'),
+      reason: 'You turned Synthesiser off in the editor, so the original role outputs were kept.',
     }
-    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'skipped', label: bi('已关闭，略过整合', 'Turned off, skipping synthesis') })
+    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'skipped', label: 'Turned off, skipping synthesis' })
   } else {
     await curate(env, item, result, emit, agentSources, meter, audience, fallbackAgents)
   }
@@ -509,7 +504,7 @@ async function replaySection<T>(
   emit: (e: SSEEvent) => void,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<T> {
-  if (agentSources) agentSources[agent] = { mode: 'cache', reason: bi('这段直接使用上一轮缓存，没有重新调用 agent。', 'Reused this section from the previous cache, the agent was not called again.') }
+  if (agentSources) agentSources[agent] = { mode: 'cache', reason: 'Reused this section from the previous cache, the agent was not called again.' }
   emit({ event: 'status', agent, state: 'done', mode: 'cache', label: LABELS[agent].done })
   emit({ event: 'section', agent, data })
   return data
@@ -532,50 +527,41 @@ function buildCaptainPlan(
       agent: 'sum',
       action: cachedShared ? 'reuse' : 'run',
       reason: cachedShared
-        ? bi('摘要已在缓存里，直接拿来用。', 'The summary is already cached, reusing it as-is.')
-        : bi('先读文章，抓出一句话和重点。', 'Read the article first to pull out a one-liner and the key points.'),
+        ? 'The summary is already cached, reusing it as-is.'
+        : 'Read the article first to pull out a one-liner and the key points.',
     },
     {
       agent: 'jargon',
       action: cachedJargon ? 'reuse' : (looksTechnical && textLen >= 220 ? 'run' : 'skip'),
       reason: cachedJargon
-        ? bi('术语清单已依你的生词本缓存。', 'The jargon list is already cached against your known-terms list.')
+        ? 'The jargon list is already cached against your known-terms list.'
         : looksTechnical && textLen >= 220
-          ? bi('内容看起来有技术密度，请小词挑真正会卡住的词。', 'The content looks technically dense, so let Jargon pick out the terms that would actually trip readers up.')
-          : bi('内容太短或不像技术文，先不硬找术语。', 'The content is too short or not technical, so skipping the jargon hunt for now.'),
+          ? 'The content looks technically dense, so let Jargon pick out the terms that would actually trip readers up.'
+          : 'The content is too short or not technical, so skipping the jargon hunt for now.',
     },
     {
       agent: 'comments',
       action: cachedShared ? 'reuse' : (comments >= 3 ? 'run' : 'skip'),
       reason: cachedShared
-        ? bi('留言摘要已在缓存里，直接拿来用。', 'The comment digest is already cached, reusing it as-is.')
+        ? 'The comment digest is already cached, reusing it as-is.'
         : comments >= 3
-          ? bi(
-              commentsWereSampled(item) ? '留言很多，挑高信号串分析。' : '留言量足够，请小潜整理派别。',
-              commentsWereSampled(item) ? 'There are a lot of comments, so sampling the highest-signal threads to analyse.' : 'There are enough comments, so let Comments sort out the camps.'
-            )
-          : bi('留言太少，没有必要做派别分析。', 'Too few comments to bother with camp analysis.'),
+          ? commentsWereSampled(item) ? 'There are a lot of comments, so sampling the highest-signal threads to analyse.' : 'There are enough comments, so let Comments sort out the camps.'
+          : 'Too few comments to bother with camp analysis.',
     },
     {
       agent: 'ctx',
       action: cachedShared ? 'reuse' : 'run',
       reason: cachedShared
-        ? bi('裁定已在缓存里。', 'The verdict is already cached.')
-        : bi('等摘要和留言轮廓出来后，再判断值不值得读。', 'Wait for the summary and comment overview, then judge whether it is worth reading.'),
+        ? 'The verdict is already cached.'
+        : 'Wait for the summary and comment overview, then judge whether it is worth reading.',
     },
   ]
   const route = assignments
-    .map(a => `${agentZh(a.agent)}:${actionZh(a.action)}`)
-    .join(' · ')
-  const routeEn = assignments
     .map(a => `${agentEn(a.agent)}: ${actionEn(a.action)}`)
     .join(' · ')
-  return { route: bi(route, routeEn), assignments }
+  return { route, assignments }
 }
 
-function actionZh(action: RouteAction): string {
-  return action === 'run' ? '开工' : action === 'reuse' ? '拿缓存' : '略过'
-}
 function actionEn(action: RouteAction): string {
   return action === 'run' ? 'running' : action === 'reuse' ? 'from cache' : 'skipped'
 }
@@ -589,12 +575,10 @@ function applyGraphToPlan(plan: CaptainPlan, graph: NormalizedGraph): void {
   for (const a of plan.assignments) {
     if (graph.enabled[a.agent] === false) {
       a.action = 'skip'
-      a.reason = bi('你在编辑面板把这位关掉了，这轮直接略过。', 'You turned this one off in the editor panel, so skipping it this round.')
+      a.reason = 'You turned this one off in the editor panel, so skipping it this round.'
     }
   }
-  const route = plan.assignments.map(a => `${agentZh(a.agent)}:${actionZh(a.action)}`).join(' · ')
-  const routeEn = plan.assignments.map(a => `${agentEn(a.agent)}: ${actionEn(a.action)}`).join(' · ')
-  plan.route = bi(route, routeEn)
+  plan.route = plan.assignments.map(a => `${agentEn(a.agent)}: ${actionEn(a.action)}`).join(' · ')
 }
 
 // Build a substantive digest of a stage-1 agent's output to thread into the
@@ -604,35 +588,35 @@ function applyGraphToPlan(plan: CaptainPlan, graph: NormalizedGraph): void {
 function relayDigest(agent: Stage1Agent, value: unknown): string {
   if (agent === 'sum') {
     const s = value as HNLensResult['summary']
-    const kp = (s.key_points ?? []).slice(0, 10).map(k => `- ${k.zh}`).join('\n')
-    return [`TL;DR：${s.tldr?.zh || ''}`, kp && `重点：\n${kp}`].filter(Boolean).join('\n')
+    const kp = (s.key_points ?? []).slice(0, 10).map(k => `- ${toText(k)}`).join('\n')
+    return [`TL;DR: ${toText(s.tldr)}`, kp && `Key points:\n${kp}`].filter(Boolean).join('\n')
   }
   if (agent === 'comments') {
     const cd = value as HNLensResult['comment_digest']
     const camps = (cd.camps ?? []).slice(0, 6)
-      .map(c => `- ${c.label?.zh || ''}${c.stance?.zh ? `：${c.stance.zh}` : ''}`)
+      .map(c => `- ${toText(c.label)}${toText(c.stance) ? `: ${toText(c.stance)}` : ''}`)
       .join('\n')
-    return [`留言轮廓：${cd.overview?.zh || ''}`, camps && `派别：\n${camps}`].filter(Boolean).join('\n')
+    return [`Discussion shape: ${toText(cd.overview)}`, camps && `Camps:\n${camps}`].filter(Boolean).join('\n')
   }
   // jargon
   const terms = value as JargonTerm[]
-  return (terms ?? []).slice(0, 12).map(t => `- ${t.term}：${t.explain?.zh || ''}`).join('\n')
+  return (terms ?? []).slice(0, 12).map(t => `- ${t.term}: ${toText(t.explain)}`).join('\n')
 }
 
 // Per-pair directive telling the downstream agent HOW to use the upstream
 // output, so relay makes a real, explainable difference from parallel.
 function relayDirective(upstream: Stage1Agent, downstream: Stage1Agent): string {
   if (downstream === 'jargon' && upstream === 'sum')
-    return '请优先解释上面摘要强调的核心概念（先把这些讲清楚），再补上其他术语，让术语清单贴合文章真正的主旨。'
+    return 'Explain the core concepts the summary above emphasises first, then add the remaining terms, so the term list tracks what the article is actually about.'
   if (downstream === 'jargon' && upstream === 'comments')
-    return '除了文章术语，也要收录上面讨论在争辩／反复提到的词（社群特有的行话），不要只看文章。'
+    return 'As well as the article\'s terms, include the words the discussion above argues over or keeps returning to (the community\'s own jargon) — do not work from the article alone.'
   if (downstream === 'comments' && upstream === 'sum')
-    return '请依照上面摘要点出的主要主张／段落，来组织留言的派别与争论（让派别对应到文章的核心论点）。'
+    return 'Organise the camps and disputes around the main claims and sections the summary above identifies, so the camps map onto the article\'s core arguments.'
   if (downstream === 'comments' && upstream === 'jargon')
-    return '若某个派别的分歧其实卡在上面某个技术术语上，请明确点出是哪个词。'
+    return 'Where a camp\'s disagreement actually turns on one of the technical terms above, say which term it is.'
   if (downstream === 'sum')
-    return '请特别加重上一步强调的重点。'
-  return '参考上一步的产出，聚焦在它强调的重点。'
+    return 'Give extra weight to what the previous step emphasised.'
+  return 'Use the previous step\'s output as context and focus on what it emphasised.'
 }
 
 // Compose the full relay context block injected into a downstream member's
@@ -640,7 +624,7 @@ function relayDirective(upstream: Stage1Agent, downstream: Stage1Agent): string 
 function relayContext(upstream: Stage1Agent, downstream: Stage1Agent, value: unknown): string {
   const digest = relayDigest(upstream, value)
   const directive = relayDirective(upstream, downstream)
-  return `【接力脉络 ← 上一步(${agentZh(upstream)})】\n${digest}\n→ ${directive}`
+  return `[Relay context — from the previous step (${agentEn(upstream)})]\n${digest}\n→ ${directive}`
 }
 
 interface Stage1Producers {
@@ -703,12 +687,8 @@ async function runStage1Graph(graph: NormalizedGraph, prod: Stage1Producers): Pr
   }
 }
 
-function agentZh(agent: WorkerAgent): string {
-  return ({ sum: '小摘', jargon: '小词', comments: '小潜', ctx: '小导' } as Record<WorkerAgent, string>)[agent]
-}
-
-// English display names for the same agents, used when building bilingual
-// route/reason strings that go straight to the client (not agent prompts).
+// Display names for the agents, used in route/reason strings that go straight
+// to the client and in the relay context block handed to a downstream peer.
 function agentEn(agent: WorkerAgent): string {
   return ({ sum: 'Summariser', jargon: 'Jargon', comments: 'Comments', ctx: 'Verdict' } as Record<WorkerAgent, string>)[agent]
 }
@@ -730,7 +710,7 @@ function commentsWereSampled(item: HNItem): boolean {
   return comments >= 10 && topSubtrees(item, 8).length < comments
 }
 
-// ── 小摘 summary ───────────────────────────────────────────────────
+// ── Summariser summary ───────────────────────────────────────────────────
 async function runSummary(
   env: Env, item: HNItem, articleText: string, itemType: ItemType,
   mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
@@ -745,26 +725,26 @@ async function runSummary(
     const p = parseLoose<{ tldr?: unknown; key_points?: unknown[] }>(text)
     if (!p?.tldr) throw new Error('Summariser returned output that could not be parsed as the required JSON.')
     const summary: HNLensResult['summary'] = {
-      tldr: toBi(p.tldr),
-      key_points: (Array.isArray(p.key_points) ? p.key_points : []).map(toBi).filter(k => k.zh),
+      tldr: toText(p.tldr),
+      key_points: (Array.isArray(p.key_points) ? p.key_points : []).map(toText).filter(Boolean),
     }
     if (!quiet) {
-      emit({ event: 'status', agent: 'sum', state: 'done', mode: 'real', label: bi('TL;DR 完成!', 'TL;DR done!') })
+      emit({ event: 'status', agent: 'sum', state: 'done', mode: 'real', label: 'TL;DR done!' })
       emit({ event: 'section', agent: 'sum', data: summary })
     }
-    if (agentSources) agentSources.sum = { mode: 'real', reason: bi('小摘实际读取文章内容后产出。', 'Summariser actually read the article content to produce this.') }
+    if (agentSources) agentSources.sum = { mode: 'real', reason: 'Summariser actually read the article content to produce this.' }
     return summary
   } catch (e) {
     fallbackAgents?.add('sum')
     noteBudgetLimit(emit, 'sum', e)
     const sandboxReason = emitAgentFailure('sum', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'sum', state: 'done', mode: 'fallback', label: bi('摘要用备援内容', 'Summary used fallback content') })
+      emit({ event: 'status', agent: 'sum', state: 'done', mode: 'fallback', label: 'Summary used fallback content' })
       emit({ event: 'section', agent: 'sum', data: mock.summary })
     }
     if (agentSources) agentSources.sum = {
       mode: 'fallback',
-      reason: fallbackReason('sum', e, sandboxReason, bi('改用本地备援摘要', 'falling back to the local backup summary')),
+      reason: fallbackReason('sum', e, sandboxReason, 'falling back to the local backup summary'),
       budget_limited: isBudgetExhaustedError(e) || undefined,
     }
     return mock.summary
@@ -773,7 +753,7 @@ async function runSummary(
   }
 }
 
-// Graph-only: force-skip 小摘 (no captain skip path exists). Mirrors the other
+// Graph-only: force-skip Summariser (no captain skip path exists). Mirrors the other
 // skip helpers — empty/placeholder section + a done status + skipped source.
 async function skipSummary(
   mock: HNLensResult,
@@ -783,27 +763,27 @@ async function skipSummary(
 ): Promise<HNLensResult['summary']> {
   skippedAgents.add('sum')
   const empty: HNLensResult['summary'] = {
-    tldr: bi('你在编辑面板把小摘关掉了，这轮没有产生摘要。', 'You turned Summariser off in the editor panel, so no summary was produced this round.'),
+    tldr: 'You turned Summariser off in the editor panel, so no summary was produced this round.',
     key_points: [],
   }
-  emit({ event: 'status', agent: 'sum', state: 'done', mode: 'skipped', label: bi('已关闭，略过摘要', 'Turned off, skipping summary') })
+  emit({ event: 'status', agent: 'sum', state: 'done', mode: 'skipped', label: 'Turned off, skipping summary' })
   emit({ event: 'section', agent: 'sum', data: empty })
-  if (agentSources) agentSources.sum = { mode: 'skipped', reason: bi('你在编辑面板关掉小摘，没有调用摘要 agent。', 'You turned Summariser off in the editor panel, so the summary agent was not called.') }
+  if (agentSources) agentSources.sum = { mode: 'skipped', reason: 'You turned Summariser off in the editor panel, so the summary agent was not called.' }
   return empty
 }
 
-// ── 小导 verdict (depends on summary + comments + 小词 jargon) ──────
-// The one meaningful dependency edge: 小导 also reads 小词's jargon density
+// ── Context verdict (depends on summary + comments + Jargon jargon) ──────
+// The one meaningful dependency edge: Context also reads Jargon's jargon density
 // (how many blocking / hard terms) so its worth_reading/tier/why reflect the
 // article's reading accessibility, not just its content. `jargon` may be empty
-// (e.g. the cheap escalate phase before 小词 runs) — then it's ignored.
-// Parse a 小导 verdict JSON into a typed verdict, or null if unusable.
+// (e.g. the cheap escalate phase before Jargon runs) — then it's ignored.
+// Parse a Context verdict JSON into a typed verdict, or null if unusable.
 function parseVerdict(text: string): HNLensResult['verdict'] | null {
   const p = parseLoose<{ worth_reading?: string; why_frontpage?: unknown; tier?: string }>(text)
   const worth = String(p?.worth_reading ?? '').trim().toLowerCase()
   if (worth !== 'high' && worth !== 'medium' && worth !== 'low') return null
-  const why = toBi(p?.why_frontpage)
-  if (!why.zh.trim()) return null
+  const why = toText(p?.why_frontpage)
+  if (!why.trim()) return null
   const rawTier = String(p?.tier ?? '').trim()
   const tier = rawTier === '10s' || rawTier === '1min' || rawTier === 'deep' ? rawTier : '1min'
   return {
@@ -813,14 +793,14 @@ function parseVerdict(text: string): HNLensResult['verdict'] | null {
   }
 }
 
-// 辩论裁定: run 小导 twice with opposing framings (正方/反方) in parallel, then a
+// Debate Verdict: run Context twice with opposing framings (pro/con) in parallel, then a
 // third adjudication pass merges them into one balanced verdict. Throws only if
 // BOTH sides fail (→ outer fallback); a single failed side still adjudicates.
 async function debateVerdict(
   env: Env, item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'],
   jargon: JargonTerm[], mock: HNLensResult, emit: (e: SSEEvent) => void, meter?: UsageMeter, audience?: Audience
 ): Promise<HNLensResult['verdict']> {
-  emit({ event: 'step', agent: 'ctx', label: bi('正方 vs 反方 辩论中…', 'Pro vs con debating…') })
+  emit({ event: 'step', agent: 'ctx', label: 'Pro vs con debating…' })
   const proPrompt = buildDebatePrompt(item, summary, cd, jargon, 'pro', audience)
   const conPrompt = buildDebatePrompt(item, summary, cd, jargon, 'con', audience)
   const [proR, conR] = await Promise.allSettled([
@@ -833,7 +813,7 @@ async function debateVerdict(
   if (!proText && !conText) throw new Error('debate: both sides failed')
   const pro = parseVerdict(proText)
   const con = parseVerdict(conText)
-  emit({ event: 'step', agent: 'ctx', label: bi('首席裁判合议中…', 'Head judge deliberating…') })
+  emit({ event: 'step', agent: 'ctx', label: 'Head judge deliberating…' })
   const mergePrompt = buildDebateMergePrompt(item, pro, con)
   const mergeText = await callAgent(env, env.AGENT_CONTEXT, mergePrompt, 'ctx', emit)
   meter?.add('ctx', mergePrompt.length, mergeText.length)
@@ -848,7 +828,7 @@ async function runContext(
   jargon: JargonTerm[], mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>, meter?: UsageMeter, debate = false, audience?: Audience
 ): Promise<HNLensResult['verdict']> {
-  emit({ event: 'status', agent: 'ctx', state: 'running', label: debate ? bi('辩论裁定中…', 'Debating verdict…') : LABELS.ctx.running })
+  emit({ event: 'status', agent: 'ctx', state: 'running', label: debate ? 'Debating verdict…' : LABELS.ctx.running })
   try {
     let verdict: HNLensResult['verdict']
     if (debate) {
@@ -862,25 +842,21 @@ async function runContext(
       if (!parsed) throw new Error('Context returned output that could not be parsed as the required verdict JSON.')
       verdict = parsed
     }
-    emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'real', label: debate ? bi('辩论裁定完成!', 'Debate verdict is in!') : bi('裁定完成!', 'Verdict is in!') })
+    emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'real', label: debate ? 'Debate verdict is in!' : 'Verdict is in!' })
     emit({ event: 'section', agent: 'ctx', data: verdict })
-    if (agentSources) agentSources.ctx = { mode: 'real', reason: bi(
-      debate ? '小导以正反双方辩论后合议出平衡裁定。'
-        : jargon.length ? '小导根据摘要、留言轮廓与小词的术语密度重新判断。'
-          : '小导根据摘要和留言轮廓重新判断。',
-      debate ? 'Context reached a balanced verdict after arguing both sides of the debate.'
+    if (agentSources) agentSources.ctx = { mode: 'real', reason: debate ? 'Context reached a balanced verdict after arguing both sides of the debate.'
         : jargon.length ? "Context re-judged this based on the summary, comment overview, and Jargon's term density."
-          : 'Context re-judged this based on the summary and comment overview.') }
+          : 'Context re-judged this based on the summary and comment overview.' }
     return verdict
   } catch (e) {
     fallbackAgents?.add('ctx')
     noteBudgetLimit(emit, 'ctx', e)
     const sandboxReason = emitAgentFailure('ctx', e, emit)
-    emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'fallback', label: bi('裁定用备援内容', 'Verdict used fallback content') })
+    emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'fallback', label: 'Verdict used fallback content' })
     emit({ event: 'section', agent: 'ctx', data: mock.verdict })
     if (agentSources) agentSources.ctx = {
       mode: 'fallback',
-      reason: fallbackReason('ctx', e, sandboxReason, bi('改用本地裁定', 'falling back to the local verdict')),
+      reason: fallbackReason('ctx', e, sandboxReason, 'falling back to the local verdict'),
       budget_limited: isBudgetExhaustedError(e) || undefined,
     }
     return mock.verdict
@@ -914,7 +890,7 @@ function escalateReason(verdict: HNLensResult['verdict'] | null | undefined, go:
   return `worth_reading=${wr || 'low'}`
 }
 
-// Graph-only: force-skip 小导. Mirrors the other skip helpers.
+// Graph-only: force-skip Context. Mirrors the other skip helpers.
 async function skipContext(
   mock: HNLensResult,
   emit: (e: SSEEvent) => void,
@@ -924,12 +900,12 @@ async function skipContext(
   skippedAgents.add('ctx')
   const empty: HNLensResult['verdict'] = {
     worth_reading: mock.verdict.worth_reading,
-    why_frontpage: bi('你在编辑面板把小导关掉了，这轮没有重新裁定。', 'You turned Verdict off in the editor panel, so no new verdict was made this round.'),
+    why_frontpage: 'You turned Verdict off in the editor panel, so no new verdict was made this round.',
     tier: mock.verdict.tier,
   }
-  emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'skipped', label: bi('已关闭，略过裁定', 'Turned off, skipping verdict') })
+  emit({ event: 'status', agent: 'ctx', state: 'done', mode: 'skipped', label: 'Turned off, skipping verdict' })
   emit({ event: 'section', agent: 'ctx', data: empty })
-  if (agentSources) agentSources.ctx = { mode: 'skipped', reason: bi('你在编辑面板关掉小导，没有调用裁定 agent。', 'You turned Verdict off in the editor panel, so the verdict agent was not called.') }
+  if (agentSources) agentSources.ctx = { mode: 'skipped', reason: 'You turned Verdict off in the editor panel, so the verdict agent was not called.' }
   return empty
 }
 
@@ -942,13 +918,13 @@ interface CommentParams {
 }
 function commentParams(effort: Effort): CommentParams {
   if (effort === 'low')
-    return { rankedBudget: 1400, reduceCap: 4000, campsHint: '只挑最主要的 2-3 个派别（宁缺勿滥）。' }
+    return { rankedBudget: 1400, reduceCap: 4000, campsHint: 'Pick only the 2-3 most significant camps (fewer is better than padded).' }
   if (effort === 'high')
-    return { rankedBudget: 3600, reduceCap: 12000, campsHint: '尽量涵盖更多派别（含 vocal-minority／fringe），最多 6 个。' }
+    return { rankedBudget: 3600, reduceCap: 12000, campsHint: 'Cover as many camps as you can (including vocal-minority and fringe ones), up to 6.' }
   return { rankedBudget: 2600, reduceCap: 8000, campsHint: '' }
 }
 
-// ── 小潜 comments (token-budgeted, high-signal first) ──────────────
+// ── Comments comments (token-budgeted, high-signal first) ──────────────
 async function runComments(
   env: Env, item: HNItem, mock: HNLensResult, emit: (e: SSEEvent) => void, fallbackAgents?: Set<AgentName>,
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>,
@@ -957,18 +933,18 @@ async function runComments(
   const commentCount = item.children?.length ?? 0
   if (commentCount === 0) {
     if (!quiet) {
-      emit({ event: 'status', agent: 'comments', state: 'running', label: bi('这篇没有 HN 讨论', 'No HN discussion on this one') })
-      emit({ event: 'status', agent: 'comments', state: 'done', mode: 'skipped', label: bi('无留言', 'No comments') })
+      emit({ event: 'status', agent: 'comments', state: 'running', label: 'No HN discussion on this one' })
+      emit({ event: 'status', agent: 'comments', state: 'done', mode: 'skipped', label: 'No comments' })
       emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
       meter?.finish('comments')
     }
     if (agentSources) agentSources.comments = {
       mode: 'skipped',
-      reason: bi('这篇内容没有 HN 留言，因此没有调用留言 agent。', 'This item has no HN comments, so the Comments agent was not called.'),
+      reason: 'This item has no HN comments, so the Comments agent was not called.',
     }
     return mock.comment_digest
   }
-  if (!quiet) emit({ event: 'status', agent: 'comments', state: 'running', label: bi(`潜进 ${commentCount} 楼…`, `Diving into ${commentCount} comments…`) })
+  if (!quiet) emit({ event: 'status', agent: 'comments', state: 'running', label: `Diving into ${commentCount} comments…` })
   const params = commentParams(effort)
   try {
     const text = await runCommentPipeline(item, env, emit, extraContext, params, meter, quiet)
@@ -982,8 +958,8 @@ async function runComments(
     if (agentSources) agentSources.comments = {
       mode: 'real',
       reason: commentsWereSampled(item)
-        ? bi('小潜实际分析高信号留言串。', 'Comments actually analysed the highest-signal threads.')
-        : bi('小潜实际分析留言。', 'Comments actually analysed the comments.'),
+        ? 'Comments actually analysed the highest-signal threads.'
+        : 'Comments actually analysed the comments.',
     }
     return cd
   } catch (e) {
@@ -991,12 +967,12 @@ async function runComments(
     noteBudgetLimit(emit, 'comments', e)
     const sandboxReason = emitAgentFailure('comments', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'comments', state: 'done', mode: 'fallback', label: bi('留言用备援内容', 'Comments used fallback content') })
+      emit({ event: 'status', agent: 'comments', state: 'done', mode: 'fallback', label: 'Comments used fallback content' })
       emit({ event: 'section', agent: 'comments', data: mock.comment_digest })
     }
     if (agentSources) agentSources.comments = {
       mode: 'fallback',
-      reason: fallbackReason('comments', e, sandboxReason, bi('改用本地留言摘要', 'falling back to the local comment digest')),
+      reason: fallbackReason('comments', e, sandboxReason, 'falling back to the local comment digest'),
       budget_limited: isBudgetExhaustedError(e) || undefined,
     }
     return mock.comment_digest
@@ -1013,30 +989,30 @@ async function skipComments(
 ): Promise<HNLensResult['comment_digest']> {
   skippedAgents.add('comments')
   const empty = normalizeDigest({
-    overview: bi('留言太少，队长略过小潜的派别分析。', 'Too few comments, so the captain skipped Comments’ camp analysis.'),
+    overview: 'Too few comments, so the captain skipped Comments’ camp analysis.',
     camps: [],
-    consensus: bi('尚无足够讨论形成共识。', 'Not enough discussion yet to form a consensus.'),
+    consensus: 'Not enough discussion yet to form a consensus.',
     disputes: [],
     expert_corrections: [],
     spicy: [],
   })
-  emit({ event: 'status', agent: 'comments', state: 'done', mode: 'skipped', label: bi('留言太少，略过', 'Too few comments, skipped') })
-  emit({ event: 'section', agent: 'comments', data: empty.overview.zh ? empty : mock.comment_digest })
-  if (agentSources) agentSources.comments = { mode: 'skipped', reason: bi('留言太少，队长判断不用调用小潜。', 'Too few comments, so the captain decided Comments did not need to be called.') }
-  return empty.overview.zh ? empty : mock.comment_digest
+  emit({ event: 'status', agent: 'comments', state: 'done', mode: 'skipped', label: 'Too few comments, skipped' })
+  emit({ event: 'section', agent: 'comments', data: empty.overview ? empty : mock.comment_digest })
+  if (agentSources) agentSources.comments = { mode: 'skipped', reason: 'Too few comments, so the captain decided Comments did not need to be called.' }
+  return empty.overview ? empty : mock.comment_digest
 }
 
 function normalizeDigest(d: HNLensResult['comment_digest']): HNLensResult['comment_digest'] {
   return {
-    overview: toBi(d.overview),
+    overview: toText(d.overview),
     camps: (d.camps ?? []).map(c => ({
-      label: toBi(c.label), stance: toBi(c.stance),
+      label: toText(c.label), stance: toText(c.stance),
       weight: c.weight || 'majority', quote: c.quote || '', comment_id: c.comment_id || 0,
     })),
-    consensus: toBi(d.consensus),
-    disputes: (d.disputes ?? []).map(toBi),
-    expert_corrections: (d.expert_corrections ?? []).map(ec => ({ correction: toBi(ec.correction), comment_id: ec.comment_id || 0 })),
-    spicy: (d.spicy ?? []).map(s => ({ quote: s.quote || '', zh: s.zh || '', comment_id: s.comment_id || 0 })),
+    consensus: toText(d.consensus),
+    disputes: (d.disputes ?? []).map(toText).filter(Boolean),
+    expert_corrections: (d.expert_corrections ?? []).map(ec => ({ correction: toText(ec.correction), comment_id: ec.comment_id || 0 })),
+    spicy: (d.spicy ?? []).map(s => ({ quote: s.quote || '', note: toText(s.note), comment_id: s.comment_id || 0 })),
   }
 }
 
@@ -1045,7 +1021,7 @@ interface CuratorDecision {
   key_points_keep?: number[]
   camps_keep?: number[]
   summary_ok?: boolean
-  note?: BiStr
+  note?: string
 }
 
 async function curate(
@@ -1066,7 +1042,7 @@ async function curate(
   // whenever the call happens, consistent with the other agents, instead of the
   // `finally` emitting a misleading synth:0 for a call that really ran.
   const prompt = buildCuratorPrompt(item, result, audience)
-  emit({ event: 'status', agent: 'synth', state: 'running', label: bi('整合中…', 'Synthesising…') })
+  emit({ event: 'status', agent: 'synth', state: 'running', label: 'Synthesising…' })
   meter?.add('synth', prompt.length, 0)
   try {
     const text = await inStage(emit, 'synth', () =>
@@ -1075,25 +1051,19 @@ async function curate(
     const d = parseLoose<CuratorDecision>(text)
     if (!d) throw new Error('Synthesiser returned output that could not be parsed as the required curation JSON.')
     applyCuration(result, d)
-    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'real', label: bi('整合完成!', 'Synthesis done!') })
-    if (agentSources) agentSources.synth = { mode: 'real', reason: bi('合成实际检查并修剪各段输出。', 'Synth actually reviewed and pruned each section’s output.') }
+    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'real', label: 'Synthesis done!' })
+    if (agentSources) agentSources.synth = { mode: 'real', reason: 'Synth actually reviewed and pruned each section’s output.' }
   } catch (e) {
     fallbackAgents?.add('synth')
     noteBudgetLimit(emit, 'synth', e)
     const sandboxReason = emitAgentFailure('synth', e, emit)
-    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'fallback', label: bi('整合略过', 'Synthesis skipped') })
+    emit({ event: 'status', agent: 'synth', state: 'done', mode: 'fallback', label: 'Synthesis skipped' })
     if (agentSources) agentSources.synth = {
       mode: 'fallback',
       budget_limited: isBudgetExhaustedError(e) || undefined,
       reason: sandboxReason
-        ? bi(
-            `合成的 sandbox/runtime 不在线，保留各组原始结果，不再等 QA 修剪。原因：${sandboxReason}`,
-            `Synth's sandbox/runtime is offline, so each section's raw results are kept instead of waiting for QA pruning. Reason: ${sandboxReason}`
-          )
-        : bi(
-            `合成超过等待时间或 runtime 失败；保留各组原始结果，不再等 QA 修剪。原因：${shortErr(e)}`,
-            `Synth exceeded its wait budget or the runtime failed, so each section's raw results are kept instead of waiting for QA pruning. Reason: ${shortErr(e)}`
-          ),
+        ? `Synth's sandbox/runtime is offline, so each section's raw results are kept instead of waiting for QA pruning. Reason: ${sandboxReason}`
+        : `Synth exceeded its wait budget or the runtime failed, so each section's raw results are kept instead of waiting for QA pruning. Reason: ${shortErr(e)}`,
     }
   } finally {
     meter?.finish('synth')
@@ -1121,40 +1091,41 @@ function applyCuration(result: HNLensResult, d: CuratorDecision): void {
     key_points: { before: wasKeyPoints, after: result.summary.key_points.length },
     camps: { before: wasCamps, after: result.comment_digest.camps.length },
   }
-  if (d.note && (d.note.en || d.note.zh)) result.editor_note = toBi(d.note)
+  const note = toText(d.note)
+  if (note) result.editor_note = note
   if (d.summary_ok === false) result.flags.low_confidence = true
 }
 
 function buildCuratorPrompt(item: HNItem, r: HNLensResult, audience?: Audience): string {
-  const jl = r.jargon.map((t, i) => `${i}: ${t.term} — ${t.zh_term} — ${t.explain.zh}`).join('\n')
-  const kp = r.summary.key_points.map((k, i) => `${i}: ${k.zh}`).join('\n')
-  const camps = r.comment_digest.camps.map((c, i) => `${i}: [${c.weight}] ${c.label.zh} — ${(c.quote || '').slice(0, 80)}`).join('\n')
+  const jl = r.jargon.map((t, i) => `${i}: ${t.term} — ${t.explain}`).join('\n')
+  const kp = r.summary.key_points.map((k, i) => `${i}: ${k}`).join('\n')
+  const camps = r.comment_digest.camps.map((c, i) => `${i}: [${c.weight}] ${c.label} — ${(c.quote || '').slice(0, 80)}`).join('\n')
 
-  return `你是 统整，负责整合与品管。${readerDesc(audience)}。检视四个 agent 的产出，决定要保留哪些，并修掉跨段落的不一致。
+  return `You are the Synthesiser, responsible for integration and quality control. Assume ${readerDesc(audience)}. Review what the four agents produced, decide what to keep, and fix inconsistencies across sections.
 
-术语（JARGON）— 先认出本文的核心技术领域，只保留 4-8 个【属于该技术领域、且对理解本文真正会卡住】的词；务必删掉：重复、太显而易见、循环定义，以及任何离题或非技术的词（一般英文字、无关专有名词）：
+JARGON — first identify this article's core technical field, then keep only 4-8 terms that belong to that field AND would genuinely block understanding of this article. Cut duplicates, the too-obvious, circular definitions, and anything off-topic or non-technical (ordinary words, unrelated proper nouns):
 ${jl || '(none)'}
 
-重点（KEY POINTS）— 删掉冗余、薄弱、重复的，留下实质的：
+KEY POINTS — cut the redundant, thin and repetitive; keep the substantive:
 ${kp || '(none)'}
 
-留言派别（CAMPS）— 删掉几乎重复或琐碎的，留下真正不同的观点：
+CAMPS — cut near-duplicates and trivia; keep the genuinely distinct viewpoints:
 ${camps || '(none)'}
 
-摘要 TL;DR：${r.summary.tldr.zh || '(none)'}
+Summary TL;DR: ${r.summary.tldr || '(none)'}
 
-返回每个清单「要保留」的 0-based index（子集合，顺序不限）、摘要是否合格，以及一句中文编辑注记。
-只返回这个 JSON（不要 markdown；字符串值里不要用 " 字元，用 ' 或「」）：
-{"jargon_keep":[0,1,2],"key_points_keep":[0,1],"camps_keep":[0,1],"summary_ok":true,"note":{"zh":"..."}}`
+Return the 0-based indexes to KEEP from each list (a subset, any order), whether the summary passes, and a one-sentence editor's note in British English.
+Return only this JSON (no markdown; never use the " character inside string values — use ' instead):
+{"jargon_keep":[0,1,2],"key_points_keep":[0,1],"camps_keep":[0,1],"summary_ok":true,"note":"..."}`
 }
 
 // ── Agent caller labels ────────────────────────────────────────────
-const LABELS: Record<AgentName, { running: BiStr; done: BiStr }> = {
-  sum:      { running: bi('读文章中…', 'Reading the article…'),   done: bi('TL;DR 完成!', 'TL;DR done!') },
-  jargon:   { running: bi('找术语中…', 'Hunting for jargon…'),   done: bi('术语解释完成!', 'Jargon explained!') },
-  comments: { running: bi('潜进留言区…', 'Diving into the comments…'), done: bi('留言分析完成!', 'Comments analysed!') },
-  ctx:      { running: bi('评估文章价值…', 'Judging if it is worth reading…'), done: bi('裁定完成!', 'Verdict is in!') },
-  synth:    { running: bi('整合中…', 'Synthesising…'),     done: bi('整合完成!', 'Synthesis done!') },
+const LABELS: Record<AgentName, { running: string; done: string }> = {
+  sum:      { running: 'Reading the article…',              done: 'TL;DR done!' },
+  jargon:   { running: 'Hunting for jargon…',               done: 'Jargon explained!' },
+  comments: { running: 'Diving into the comments…',         done: 'Comments analysed!' },
+  ctx:      { running: 'Judging if it is worth reading…',   done: 'Verdict is in!' },
+  synth:    { running: 'Synthesising…',                     done: 'Synthesis done!' },
 }
 
 // ── Comment pipeline: local ranking → one reduce, token-budgeted ──
@@ -1172,7 +1143,7 @@ async function runCommentPipeline(
   if (commentCount >= 10 && !quiet) emit({
     event: 'step',
     agent: 'comments',
-    label: bi('已挑出高信号留言，直接聚类分析…', 'Ranked high-signal comments; clustering directly…'),
+    label: 'Ranked high-signal comments; clustering directly…',
   })
   return singleCommentCall(env, ranked, item, emit, extraContext, params, meter)
 }
@@ -1234,21 +1205,20 @@ function buildSummarizerPrompt(item: HNItem, articleText: string, itemType: Item
   const content = (articleText || item.text || '(no article text available)').slice(0, 6000)
   // effort → how much the summary says. 'med' reproduces today's ask exactly.
   const ask = effort === 'low'
-    ? '产出一句精简的 TL;DR + 最多 3 个最关键的重点（宁缺勿滥）。'
+    ? 'Produce one terse TL;DR plus at most 3 of the most important key points (fewer is better than padded).'
     : effort === 'high'
-      ? '产出一句 TL;DR + 5-7 个重点，涵盖更多面向与细节。'
-      : '产出一句 TL;DR + 3-4 个重点。'
-  return `你是 小摘，精简的中文摘要员。
-${relayBlock(extraContext)}
-标题：${item.title}
-类型：${itemType}
-内容：
+      ? 'Produce one TL;DR plus 5-7 key points, covering more angles and detail.'
+      : 'Produce one TL;DR plus 3-4 key points.'
+  return `You are the Summariser, a concise summarising agent.
+${relayBlock(extraContext)}Title: ${item.title}
+Type: ${itemType}
+Content:
 ${content}
 
-${ask}若内容不足，从标题推测并注明不确定。全部只用简体中文。${audienceDirective(audience, 'sum')}
+${ask} If the content is too thin, infer from the title and say that you are unsure. Write everything in British English.${audienceDirective(audience, 'sum')}
 
-只返回这个 JSON（不要 markdown；字符串值里不要用 " 字元，用 ' 或「」）：
-{"tldr":{"zh":"..."},"key_points":[{"zh":"..."}]}`
+Return only this JSON (no markdown; never use the " character inside string values — use ' instead):
+{"tldr":"...","key_points":["..."]}`
 }
 
 // A short relay-context block to prepend to a prompt when a previous relay
@@ -1262,44 +1232,43 @@ function buildJargonPrompt(
   part: { i: number; n: number }, known: string[], candidates: string[] = [],
   extraContext?: string, effort: Effort = 'med', audience?: Audience
 ): string {
-  const where = part.n > 1 ? `（文章第 ${part.i + 1}/${part.n} 段）` : ''
-  // effort → per-window term target. 'med' keeps today's "10-16" ask verbatim.
+  const where = part.n > 1 ? ` (part ${part.i + 1}/${part.n} of the article)` : ''
+  // effort → per-window term target. 'med' keeps the "10-16" ask.
   const target = effort === 'low' ? '4-6' : effort === 'high' ? '12-16' : '10-16'
   const knownLine = known.length
-    ? `\n读者「已经会」这些词，请务必【跳过】，把预算花在真正新的/较不显而易见的词上：\n${known.join('、')}\n`
+    ? `\nThe reader ALREADY KNOWS these terms. Skip them, and spend the budget on genuinely new or less obvious ones:\n${known.join(', ')}\n`
     : ''
   const candLine = candidates.length
-    ? `\n以下是程序从全文扫出的候选词（可能有杂讯）。请逐一检视、把属于本文技术领域且读者可能不懂的收进来，其余忽略；也要补上你自己扫到、清单漏掉的词：\n${candidates.join('、')}\n`
+    ? `\nBelow are candidate terms a script scanned out of the full text (it is noisy). Review them one by one, keep the ones that belong to this article's technical field and that the reader may not know, ignore the rest; also add terms you spotted yourself that the list missed:\n${candidates.join(', ')}\n`
     : ''
-  return `你是 小词，给 HN 读者的中文术语白话解说员。
-${relayBlock(extraContext)}
-文章标题：${item.title}
+  return `You are the Jargon agent, explaining technical terms in plain language for Hacker News readers.
+${relayBlock(extraContext)}Article title: ${item.title}
 
-文章内文${where}（仔细读，从整段挑词，不要只挑开头）：
+Article body${where} (read it carefully and pick terms from the whole passage, not just the opening):
 ${articleChunk || '(no article text available)'}
-${commentSample ? `\nHN 留言取样（这里出现的词 seen_in 标 "comments"）：\n${commentSample}` : ''}
+${commentSample ? `\nSample of the HN comments (mark terms that appear here with seen_in "comments"):\n${commentSample}` : ''}
 ${candLine}${knownLine}
-第一步：先判定「这篇文章的核心技术领域」（例如 AI/机器学习、Agent/LLM、数据库、分散式系统、前端、密码学…）。
-第二步：把【属于这个技术领域、且一个「会写程序但非此子领域」的人不会马上懂】的术语都挑出来 — 这段尽量挑 ${target} 个，宁可多收也不要漏。
-※ 务必涵盖【文章标题点名的核心概念／方法】，以及反复出现的自创术语，即使是多字词（例如 'loop engineering'、'context engineering'、'reward model'、'agent loop'）。
-目标：缩写、函数库/产品/演算法/模型名称、领域行话与方法（例如 RLHF、PPO、reward model、eval、rubric、grader、rollout、distillation 这类）、不直观的技术指标、非正式技术新造词。扫过中段与结尾。
+Step one: work out this article's core technical field (for example AI/machine learning, agents/LLMs, databases, distributed systems, frontend, cryptography…).
+Step two: pull out the terms that belong to that field AND that someone who can code but does not work in this sub-field would not immediately understand — aim for ${target} in this passage, and prefer including one too many over missing one.
+Be sure to cover the core concept or method named in the article title, along with any coined terms that recur, even multi-word ones (for example 'loop engineering', 'context engineering', 'reward model', 'agent loop').
+Targets: acronyms, library/product/algorithm/model names, field jargon and methods (RLHF, PPO, reward model, eval, rubric, grader, rollout, distillation and the like), non-obvious technical metrics, and informal technical coinages. Scan the middle and the end too.
 
-【判断收录的标准】：只要「出了这个子领域的人不会马上懂」就收。
-【只在这些情况才跳过】：
-- 真正人人都懂的通用词（如 HTTP、JSON、API、CPU、URL）
-- 跟核心技术主题无关的专有名词（人名、地名、与技术无关的公司名）
-- 内文已自我清楚定义的词，以及上面「已经会」清单里的词
+Bar for inclusion: include it if someone outside this sub-field would not immediately understand it.
+Only skip a term when it is:
+- genuinely universal (HTTP, JSON, API, CPU, URL)
+- a proper noun unrelated to the core technical topic (people, places, non-technical company names)
+- clearly defined in the body itself, or already on the "reader knows this" list above
 
-每个词要自评：
-- on_topic：true=属于本文技术领域且相关；false=离题或非技术（会被丢掉）
-- difficulty：1-5，「会写程序但非此领域」的人理解难度
-- blocking：true=不懂这个词就会卡住对本文的理解
+Rate every term:
+- on_topic: true = belongs to this article's technical field and is relevant; false = off-topic or non-technical (it will be dropped)
+- difficulty: 1-5, how hard it is for someone who codes but not in this field
+- blocking: true = not knowing this term blocks understanding of the article
 
-解说风格（只用简体中文）：1-2 句、不要循环定义、不要用行话解释行话、适时用具体比喻。${audienceDirective(audience, 'jargon')}
-zh_term：标准简体中文名称或描述性中文标签；seen_in："article"/"comments"/"both"；appeared_as：出现的原句片段。
+Explanation style (British English): 1-2 sentences, never circular, never jargon explained with jargon, and use a concrete analogy where it earns its place.${audienceDirective(audience, 'jargon')}
+seen_in: "article" / "comments" / "both". appeared_as: the source phrase it appeared in.
 
-只返回这个 JSON 数组（不要 markdown；字符串值里不要用 " 字元，用 ' 或「」）：
-[{"term":"...","zh_term":"...","explain":{"zh":"..."},"seen_in":"article","appeared_as":"source phrase","on_topic":true,"difficulty":3,"blocking":true}]`
+Return only this JSON array (no markdown; never use the " character inside string values — use ' instead):
+[{"term":"...","explain":"...","seen_in":"article","appeared_as":"source phrase","on_topic":true,"difficulty":3,"blocking":true}]`
 }
 
 async function runJargon(
@@ -1324,7 +1293,7 @@ async function runJargon(
     const prompts = windows.length === 0
       ? [buildJargonPrompt(item, '', commentSample, { i: 0, n: 1 }, known, candidates, extraContext, effort, audience)]
       : windows.map((w, i) => buildJargonPrompt(item, w, i === 0 ? commentSample : '', { i, n: windows.length }, known, candidates, i === 0 ? extraContext : undefined, effort, audience))
-    if (prompts.length > 1 && !quiet) emit({ event: 'step', agent: 'jargon', label: bi(`通读全文 ${prompts.length} 段…`, `Reading the full article in ${prompts.length} passes…`) })
+    if (prompts.length > 1 && !quiet) emit({ event: 'step', agent: 'jargon', label: `Reading the full article in ${prompts.length} passes…` })
     // Run windows independently — a slow/failed window must NOT zero the rest.
     const settled = await Promise.allSettled(prompts.map(p =>
       callAgent(env, env.AGENT_JARGON, p, 'jargon', emit, { timeoutMs, attempts: 2 })))
@@ -1342,7 +1311,7 @@ async function runJargon(
       return Array.isArray(parsed) || Boolean(parsed && Array.isArray((parsed as { jargon?: unknown }).jargon))
     })
     if (!usable.length) {
-      // The peers answered; their output was unusable. 小词 has the longest
+      // The peers answered; their output was unusable. Jargon has the longest
       // structured output of any role, so a cut-off response is its most likely
       // non-transport failure — and it must not be reported as a timeout.
       throw new UnparseableOutputError(
@@ -1355,15 +1324,12 @@ async function runJargon(
     const knownSet = new Set(known.map(k => k.trim().toLowerCase()))
     merged = merged.filter(t => !knownSet.has((t.term || '').trim().toLowerCase()))
     if (!quiet) {
-      emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'real', label: bi(`找到 ${merged.length} 个词!`, `Found ${merged.length} terms!`) })
+      emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'real', label: `Found ${merged.length} terms!` })
       emit({ event: 'section', agent: 'jargon', data: merged })
     }
     if (agentSources) agentSources.jargon = {
       mode: 'real',
-      reason: bi(
-        `小词实际分析文章术语；本次最多等待 ${Math.round(timeoutMs / 1000)} 秒。`,
-        `Jargon actually analysed the article's terms; this run waited up to ${Math.round(timeoutMs / 1000)}s.`
-      ),
+      reason: `Jargon actually analysed the article's terms; this run waited up to ${Math.round(timeoutMs / 1000)}s.`,
     }
     return merged
   } catch (e) {
@@ -1371,7 +1337,7 @@ async function runJargon(
     noteBudgetLimit(emit, 'jargon', e)
     const sandboxReason = emitAgentFailure('jargon', e, emit)
     if (!quiet) {
-      emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'fallback', label: bi('术语用备援内容', 'Jargon used fallback content') })
+      emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'fallback', label: 'Jargon used fallback content' })
       emit({ event: 'section', agent: 'jargon', data: [] })
     }
     if (agentSources) agentSources.jargon = {
@@ -1379,26 +1345,14 @@ async function runJargon(
       budget_limited: isBudgetExhaustedError(e) || undefined,
       output_unparseable: isUnparseableOutputError(e) ? e.classification : undefined,
       reason: sandboxReason
-        ? bi(
-            `小词的 sandbox/runtime 不在线，为避免整篇卡住，先不显示术语。原因：${sandboxReason}`,
-            `Jargon's sandbox/runtime is offline, so the jargon list is skipped for now to avoid stalling the whole run. Reason: ${sandboxReason}`
-          )
-        // A cut-off or non-JSON answer is NOT a timeout: 小词 replied, and saying
+        ? `Jargon's sandbox/runtime is offline, so the jargon list is skipped for now to avoid stalling the whole run. Reason: ${sandboxReason}`
+        // A cut-off or non-JSON answer is NOT a timeout: Jargon replied, and saying
         // it "did not respond in time" sends the next fix at the wrong target.
         : isUnparseableOutputError(e)
           ? e.classification === 'truncated'
-            ? bi(
-                `小词回复了，但术语清单写到一半就被截断，无法解析，所以这次不显示术语。它要写的条目最多，最容易超出输出长度上限。`,
-                `Jargon did reply, but its term list was cut off mid-answer and could not be parsed, so no terms are shown. It has the longest output of any role, so it is the likeliest to exceed the output cap.`
-              )
-            : bi(
-                `小词回复了，但内容不是可解析的 JSON，所以这次不显示术语。原因：${shortErr(e)}`,
-                `Jargon did reply, but the content was not parseable JSON, so no terms are shown. Reason: ${shortErr(e)}`
-              )
-          : bi(
-              `小词最多等待 ${Math.round(timeoutMs / 1000)} 秒；这次没有及时回复，为避免整篇卡住，先不显示术语。原因：${shortErr(e)}`,
-              `Jargon waits up to ${Math.round(timeoutMs / 1000)}s; it did not respond in time this run, so the jargon list is skipped to avoid stalling the whole run. Reason: ${shortErr(e)}`
-            ),
+            ? `Jargon did reply, but its term list was cut off mid-answer and could not be parsed, so no terms are shown. It has the longest output of any role, so it is the likeliest to exceed the output cap.`
+            : `Jargon did reply, but the content was not parseable JSON, so no terms are shown. Reason: ${shortErr(e)}`
+          : `Jargon waits up to ${Math.round(timeoutMs / 1000)}s; it did not respond in time this run, so the jargon list is skipped to avoid stalling the whole run. Reason: ${shortErr(e)}`,
     }
     return []
   } finally {
@@ -1412,9 +1366,9 @@ async function skipJargon(
   agentSources?: NonNullable<HNLensResult['flags']['agent_sources']>
 ): Promise<JargonTerm[]> {
   skippedAgents.add('jargon')
-  emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'skipped', label: bi('非技术文，略过术语', 'Not technical, skipping jargon') })
+  emit({ event: 'status', agent: 'jargon', state: 'done', mode: 'skipped', label: 'Not technical, skipping jargon' })
   emit({ event: 'section', agent: 'jargon', data: [] })
-  if (agentSources) agentSources.jargon = { mode: 'skipped', reason: bi('队长判断内容太短或不像技术文，没有调用小词。', 'The captain judged the content too short or not technical, so Jargon was not called.') }
+  if (agentSources) agentSources.jargon = { mode: 'skipped', reason: 'The captain judged the content too short or not technical, so Jargon was not called.' }
   return []
 }
 
@@ -1450,23 +1404,13 @@ function emitAgentFailure(agent: AgentName, e: unknown, emit: (event: SSEEvent) 
   return sandboxReason
 }
 
-function fallbackReason(agent: WorkerAgent, e: unknown, sandboxReason: string | null, fallbackText: BiStr): BiStr {
-  const zhName = agentZh(agent)
-  const enName = agentEn(agent)
+function fallbackReason(agent: WorkerAgent, e: unknown, sandboxReason: string | null, fallbackText: string): string {
+  const name = agentEn(agent)
   if (isBudgetExhaustedError(e))
-    return bi(
-      `这一轮分给 ${zhName} 的时间用完了（后面的角色要留时间），${fallbackText.zh}；整篇不会因此重跑。`,
-      `${enName} ran out of the time this round allotted it (later roles keep a reserve), so ${fallbackText.en}; the whole run is not retried for this.`
-    )
+    return `${name} ran out of the time this round allotted it (later roles keep a reserve), so ${fallbackText}; the whole run is not retried for this.`
   if (sandboxReason)
-    return bi(
-      `${zhName} 的 sandbox/runtime 不在线，${fallbackText.zh}。原因：${sandboxReason}`,
-      `${enName}'s sandbox/runtime is offline, so ${fallbackText.en}. Reason: ${sandboxReason}`
-    )
-  return bi(
-    `${zhName}未能顺利回复，${fallbackText.zh}。原因：${shortErr(e)}`,
-    `${enName} did not respond successfully, so ${fallbackText.en}. Reason: ${shortErr(e)}`
-  )
+    return `${name}'s sandbox/runtime is offline, so ${fallbackText}. Reason: ${sandboxReason}`
+  return `${name} did not respond successfully, so ${fallbackText}. Reason: ${shortErr(e)}`
 }
 
 function chunkText(text: string, size: number, maxWindows: number): string[] {
@@ -1505,13 +1449,13 @@ function mergeJargon(outputs: string[]): JargonTerm[] {
       if (!t || typeof t.term !== 'string' || !t.term.trim()) continue
       // Domain gate: drop off-topic / non-technical terms the agent flagged.
       if (t.on_topic === false) continue
-      t.explain = toBi(t.explain)
+      t.explain = toText(t.explain)
       const key = normTerm(t.term)                 // merge case / spacing / singular-plural
       const prev = byTerm.get(key)
       if (!prev) { byTerm.set(key, t); continue }
       if (prev.seen_in !== t.seen_in) prev.seen_in = 'both'
-      const prevLen = (prev.explain?.zh?.length ?? 0)
-      const curLen = (t.explain?.zh?.length ?? 0)
+      const prevLen = prev.explain?.length ?? 0
+      const curLen = t.explain?.length ?? 0
       if (curLen > prevLen) { t.seen_in = prev.seen_in; byTerm.set(key, t) }
     }
   }
@@ -1521,7 +1465,7 @@ function mergeJargon(outputs: string[]): JargonTerm[] {
     (t.blocking ? 100 : 0) +
     (typeof t.difficulty === 'number' ? t.difficulty * 10 : 20) +
     (t.seen_in === 'both' ? 8 : 0) +
-    Math.min(6, (t.explain?.zh?.length ?? 0) / 20)
+    Math.min(6, (t.explain?.length ?? 0) / 20)
   const sorted = [...byTerm.values()].sort((a, b) => score(b) - score(a))
   // Second pass: drop near-duplicates (e.g. "hill climbing" vs "hill climbing
   // loop"). Keep the higher-scored one already in `kept`.
@@ -1556,24 +1500,24 @@ function mergeJargonReplicas(lists: JargonTerm[][]): JargonTerm[] {
 // summary: pick the BEST non-empty result — most key_points, tie → longest
 // tldr. If every replica is empty, return the first (keeps empty as today).
 function bestSummary(cands: HNLensResult['summary'][]): HNLensResult['summary'] {
-  const nonEmpty = cands.filter(s => s && (s.key_points?.length || s.tldr?.zh))
+  const nonEmpty = cands.filter(s => s && (s.key_points?.length || s.tldr))
   if (!nonEmpty.length) return cands[0]
   return nonEmpty.reduce((best, s) => {
     const bk = best.key_points?.length ?? 0, sk = s.key_points?.length ?? 0
     if (sk !== bk) return sk > bk ? s : best
-    return (s.tldr?.zh?.length ?? 0) > (best.tldr?.zh?.length ?? 0) ? s : best
+    return (s.tldr?.length ?? 0) > (best.tldr?.length ?? 0) ? s : best
   })
 }
 
 // comments: pick the BEST non-empty digest — most camps, tie → longest
 // overview. If every replica is empty, return the first (keeps empty as today).
 function bestDigest(cands: HNLensResult['comment_digest'][]): HNLensResult['comment_digest'] {
-  const nonEmpty = cands.filter(c => c && (c.camps?.length || c.overview?.zh))
+  const nonEmpty = cands.filter(c => c && (c.camps?.length || c.overview))
   if (!nonEmpty.length) return cands[0]
   return nonEmpty.reduce((best, c) => {
     const bc = best.camps?.length ?? 0, cc = c.camps?.length ?? 0
     if (cc !== bc) return cc > bc ? c : best
-    return (c.overview?.zh?.length ?? 0) > (best.overview?.zh?.length ?? 0) ? c : best
+    return (c.overview?.length ?? 0) > (best.overview?.length ?? 0) ? c : best
   })
 }
 
@@ -1618,64 +1562,64 @@ function extractCandidates(text: string, known: string[]): string[] {
     .slice(0, 30)
 }
 
-// A compact reading-accessibility line derived from 小词's jargon list: how many
-// blocking / hard terms there are. Empty string when 小词 didn't run (so the
-// prompt stays as before), so 小导 only weighs density when it actually exists.
+// A compact reading-accessibility line derived from Jargon's term list: how many
+// blocking / hard terms there are. Empty string when Jargon didn't run (so the
+// prompt stays as before), so Context only weighs density when it actually exists.
 function jargonAccessibilityLine(jargon: JargonTerm[]): string {
   const n = jargon?.length ?? 0
   if (!n) return ''
   const blocking = jargon.filter(t => t.blocking).length
   const hard = jargon.filter(t => (t.difficulty ?? 0) >= 4).length
-  const names = jargon.slice(0, 6).map(t => t.zh_term || t.term).filter(Boolean).join('、')
-  return `术语密度（小词盘点）：${n} 个关键术语，其中 ${blocking} 个不懂会卡住理解、${hard} 个偏难${names ? `（如：${names}）` : ''}。术语越多、越硬，阅读门槛越高。\n`
+  const names = jargon.slice(0, 6).map(t => t.term).filter(Boolean).join(', ')
+  return `Term density (from the Jargon agent): ${n} key terms, of which ${blocking} block understanding if unknown and ${hard} are on the hard side${names ? ` (for example: ${names})` : ''}. The more terms, and the harder they are, the higher the reading bar.\n`
 }
 
-// Shared content block for every 小导 prompt (single verdict + debate sides +
+// Shared content block for every Context prompt (single verdict + debate sides +
 // adjudication), so all of them judge the exact same material.
 function verdictContext(
   item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'], jargon: JargonTerm[]
 ): { isHN: boolean; subject: string; block: string; jargonLine: string } {
-  const kp = (summary.key_points ?? []).map(k => `- ${k.zh}`).join('\n')
+  const kp = (summary.key_points ?? []).map(k => `- ${toText(k)}`).join('\n')
   // Source-aware: only an actual HN thread gets the "front page / points" framing.
   const isHN = (item.points ?? 0) > 0 || (item.children?.length ?? 0) > 0
-  const subject = isHN ? '一篇 Hacker News 贴文' : '一篇文章／一段内容'
-  const metaLine = isHN ? `分数：${item.points} · 留言数：${item.children?.length ?? 0}\n` : ''
-  const discussion = isHN ? `\n留言整体轮廓：${cd.overview?.zh || '(无讨论)'}\n` : ''
+  const subject = isHN ? 'a Hacker News post' : 'an article or passage of content'
+  const metaLine = isHN ? `Points: ${item.points} · Comments: ${item.children?.length ?? 0}\n` : ''
+  const discussion = isHN ? `\nOverall shape of the comments: ${toText(cd.overview) || '(no discussion)'}\n` : ''
   const jargonLine = jargonAccessibilityLine(jargon)
-  const block = `标题：${item.title}
-${metaLine}文章摘要 TL;DR：${summary.tldr?.zh || '(无)'}
-重点：
-${kp || '(无)'}
+  const block = `Title: ${item.title}
+${metaLine}Article TL;DR: ${toText(summary.tldr) || '(none)'}
+Key points:
+${kp || '(none)'}
 ${discussion}${jargonLine}`
   return { isHN, subject, block, jargonLine }
 }
 
-const VERDICT_JSON = '只返回这个 JSON（不要 markdown；字符串值里不要用 " 字元，用 \' 或「」）：\n{"worth_reading":"high","why_frontpage":{"zh":"..."},"tier":"deep"}'
+const VERDICT_JSON = 'Return only this JSON (no markdown; never use the " character inside string values — use \' instead):\n{"worth_reading":"high","why_frontpage":"...","tier":"deep"}'
 
 function buildContextPrompt(
   item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'], jargon: JargonTerm[] = [], audience?: Audience
 ): string {
   const { isHN, subject, block, jargonLine } = verdictContext(item, summary, cd, jargon)
   const whyQ = isHN
-    ? 'why_frontpage：为什么值得读 / 为何会上 HN 首页？1-2 句，反映上面的实际内容'
-    : 'why_frontpage：这篇为什么值得读、重点价值是什么？1-2 句，反映实际内容（不要提「首页」或分数）'
-  // Only ask 小导 to weigh accessibility when 小词 actually supplied density data.
+    ? 'why_frontpage: why is it worth reading, and why did it reach the HN front page? 1-2 sentences that reflect the actual content above'
+    : 'why_frontpage: why is this worth reading, and what is the core value? 1-2 sentences that reflect the actual content (do not mention the front page or points)'
+  // Only ask Context to weigh accessibility when Jargon actually supplied density data.
   const accessibilityNote = jargonLine
-    ? '\n评估时一并考量「阅读门槛」（上面的术语密度）：术语多且硬 → tier 偏 "deep"；门槛低、好懂 → 偏 "10s"/"1min"。若门槛偏高，why_frontpage 可点出「需要一些领域背景」。'
+    ? '\nWeigh the reading bar too (the term density above): many hard terms → tier leans "deep"; low bar and easy going → leans "10s"/"1min". If the bar is high, why_frontpage may note that some domain background is needed.'
     : ''
-  return `你是 小导，评估${subject}。请根据「实际内容」判断${isHN ? '，不要只看分数' : ''}。
+  return `You are the Context agent, assessing ${subject}. Judge from the actual content${isHN ? ', not just the score' : ''}.
 
 ${block}
-回答三件事（只用简体中文）：
-1. worth_reading："high"（必读）、"medium"（有趣）或 "low"（可略过）
+Answer three things, in British English:
+1. worth_reading: "high" (must read), "medium" (interesting) or "low" (skippable)
 2. ${whyQ}
-3. tier："10s"、"1min" 或 "deep"${accessibilityNote}${audienceDirective(audience, 'ctx')}
+3. tier: "10s", "1min" or "deep"${accessibilityNote}${audienceDirective(audience, 'ctx')}
 
 ${VERDICT_JSON}`
 }
 
-// One debate side: the SAME material, argued from a fixed stance. 正方(pro) makes
-// the strongest case it's worth reading; 反方(con) the strongest case to skip it.
+// One debate side: the SAME material, argued from a fixed stance. The pro side
+// makes the strongest case it's worth reading; the con side the case to skip it.
 // Each still returns the standard verdict JSON, but leaning to its side.
 function buildDebatePrompt(
   item: HNItem, summary: HNLensResult['summary'], cd: HNLensResult['comment_digest'],
@@ -1683,15 +1627,15 @@ function buildDebatePrompt(
 ): string {
   const { subject, block } = verdictContext(item, summary, cd, jargon)
   const stance = side === 'pro'
-    ? '你是辩论中的【正方】，任务是提出最有力的理由，主张这篇「值得读」（倾向 high/medium）。找出真正的亮点与价值。'
-    : '你是辩论中的【反方】，任务是提出最有力的理由，主张这篇「可以略过」（倾向 low/medium）。点出它薄弱、老调、门槛过高或性价比低之处。'
-  return `你正在对${subject}进行一场辩论式评估。${stance}只根据下面的实际内容，不要虚构。
+    ? 'You are arguing FOR the motion: make the strongest case that this is worth reading (lean high/medium). Find the genuine highlights and value.'
+    : 'You are arguing AGAINST the motion: make the strongest case that this can be skipped (lean low/medium). Point out where it is thin, rehashed, too high a bar, or poor value for the time.'
+  return `You are taking part in a debate-style assessment of ${subject}. ${stance} Work only from the actual content below; invent nothing.
 
 ${block}
-用你这一方的立场，回答（只用简体中文）：
-1. worth_reading："high" / "medium" / "low"
-2. why_frontpage：你这一方最有力的一句理由
-3. tier："10s" / "1min" / "deep"${audienceDirective(audience, 'ctx')}
+Answer from your side of the debate, in British English:
+1. worth_reading: "high" / "medium" / "low"
+2. why_frontpage: your side's single strongest reason
+3. tier: "10s" / "1min" / "deep"${audienceDirective(audience, 'ctx')}
 
 ${VERDICT_JSON}`
 }
@@ -1699,13 +1643,13 @@ ${VERDICT_JSON}`
 // Adjudication: a neutral chief judge weighs both sides into ONE balanced verdict.
 function buildDebateMergePrompt(item: HNItem, pro: HNLensResult['verdict'] | null, con: HNLensResult['verdict'] | null): string {
   const side = (v: HNLensResult['verdict'] | null) =>
-    v ? `worth_reading=${v.worth_reading}、tier=${v.tier}，理由：${v.why_frontpage?.zh || '(无)'}` : '(这一方未能提出)'
-  return `你是首席裁判 小导。刚才正反两方针对「${item.title}」是否值得读进行了辩论：
+    v ? `worth_reading=${v.worth_reading}, tier=${v.tier}, reason: ${toText(v.why_frontpage) || '(none)'}` : '(this side did not manage to argue)'
+  return `You are the head judge. Two sides have just debated whether '${item.title}' is worth reading:
 
-【正方 · 主张值得读】${side(pro)}
-【反方 · 主张可略过】${side(con)}
+FOR, arguing it is worth reading: ${side(pro)}
+AGAINST, arguing it can be skipped: ${side(con)}
 
-请综合双方最合理的论点，做出最终「平衡裁定」。worth_reading 取双方之间最诚实的判断；why_frontpage 要反映双方都成立的地方（可用「虽然…但…」的口吻），一句话；tier 反映真正需要的投入。只用简体中文。
+Weigh the soundest arguments from both sides into one final balanced verdict. Take the most honest worth_reading between them; why_frontpage should reflect what holds true on both sides (an 'although… it still…' shape works well), in one sentence; tier should reflect the effort the piece genuinely needs. Write in British English.
 
 ${VERDICT_JSON}`
 }
@@ -1717,16 +1661,15 @@ function buildCommentReducePrompt(
   const summaries = subtreeSummaries.filter(Boolean).join('\n\n---\n\n').slice(0, params.reduceCap)
   // effort's camps directive (empty at 'med' → prompt stays byte-for-byte today's).
   const campsLine = params.campsHint ? `${params.campsHint}\n` : ''
-  return `你是 小潜，分析「${item.title}」的 Hacker News 讨论。
-${relayBlock(extraContext)}
-总留言数：${item.children?.length ?? 0}
+  return `You are the Comments agent, analysing the Hacker News discussion of '${item.title}'.
+${relayBlock(extraContext)}Total comments: ${item.children?.length ?? 0}
 
-各串摘要：
+Per-thread summaries:
 ${summaries}
 
-找出讨论的结构：主要派别（majority/vocal-minority/fringe）、共识、主要争论、对文章的专家纠错（若有）、最精彩/最辣的一则。
-${campsLine}尽量带上 comment_id 让读者能找到原留言。只用简体中文。
+Find the structure of the discussion: the main camps (majority / vocal-minority / fringe), the consensus, the main disputes, any expert corrections to the article, and the most striking or spiciest single take.
+${campsLine}Carry comment_id wherever you can so the reader can find the original comment. Write in British English.
 
-只返回这个 JSON（不要 markdown；字符串值里不要用 " 字元，用 ' 或「」）：
-{"overview":{"zh":"..."},"camps":[{"label":{"zh":"..."},"stance":{"zh":"..."},"weight":"majority","quote":"verbatim excerpt","comment_id":0}],"consensus":{"zh":"..."},"disputes":[{"zh":"..."}],"expert_corrections":[{"correction":{"zh":"..."},"comment_id":0}],"spicy":[{"quote":"...","zh":"...","comment_id":0}]}`
+Return only this JSON (no markdown; never use the " character inside string values — use ' instead):
+{"overview":"...","camps":[{"label":"...","stance":"...","weight":"majority","quote":"verbatim excerpt","comment_id":0}],"consensus":"...","disputes":["..."],"expert_corrections":[{"correction":"...","comment_id":0}],"spicy":[{"quote":"...","note":"...","comment_id":0}]}`
 }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-phase="input" data-lang="en">
+<html lang="en-GB" data-phase="input">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -61,11 +61,6 @@
     /* Results-only controls hide by default */
     .phase-results-only { display: none !important; }
     html[data-phase=results] .phase-results-only { display: inline-flex !important; }
-
-    /* ── Language Toggle Rules ───────────────────────────────────────────── */
-    html[data-lang=zh] .bi-en { display: none; }
-    html[data-lang=en] .bi-zh { display: none; }
-    /* bilingual: both visible (default) */
 
     /* ── Focus Rings ─────────────────────────────────────────────────────── */
     :focus-visible {
@@ -357,7 +352,7 @@
       color: #fff;
       font-weight: 800;
     }
-    /* 受众语气 (reader level) — a smaller, secondary segmented control that sits
+    /* Audience tone (reader level) — a smaller, secondary segmented control that sits
        under the preset row. Orthogonal to the depth preset. */
     .audience-picker { align-items: center; }
     .audience-picker .preset-btn { font-size: 11px; padding: 3px 9px; }
@@ -416,7 +411,7 @@
       color: #fff;
     }
     /* While editing, frame the office and show a grab cursor; the pod boxes,
-       mode badges ("平行"/"接力") and the 休息区/bench strip are drawn on the
+       mode badges ("Parallel"/"Relay") and the rest-area/bench strip are drawn on the
        canvas itself by pixel.js. */
     html[data-editmode=on] .pixel-stage-wrap {
       outline: 2px dashed rgba(255,102,0,.55);
@@ -510,8 +505,7 @@
     .office-hit:focus-visible { outline: none; border-color: var(--accent); background: rgba(255,102,0,.12); }
     /* Regions map to the office's logical 320×192 grid (% of the 5:3 stage). */
     #kb-hit   { left: 4%;  top: 1.5%; width: 27%; height: 12%; }   /* bookshelf */
-    #lang-hit { left: 49%; top: 1.5%; width: 9%;  height: 8.5%; }  /* wall sign by HN LENS */
-    #wb-hit   { left: 59%; top: 15%;  width: 8%;  height: 18%; }   /* whiteboard easel by 队长 */
+    #wb-hit   { left: 59%; top: 15%;  width: 8%;  height: 18%; }   /* whiteboard easel by the Orchestrator */
     .whiteboard-verdict {
       position: absolute;
       left: 58.5%;
@@ -551,7 +545,7 @@
     .whiteboard-verdict[data-worth=high] .wbv-main { color: var(--green); }
     .whiteboard-verdict[data-worth=medium] .wbv-main { color: #B45309; }
     .whiteboard-verdict[data-worth=low] .wbv-main { color: var(--red); }
-    /* Two lines is deliberate: the full reason is on 小导's card and in the verdict
+    /* Two lines is deliberate: the full reason is on the Context card and in the verdict
        bar, so this is a teaser. A max-height cut the sentence dead with nothing to
        show more was coming, which read as broken rather than as abridged. Clamping
        to the same two lines ends them in an ellipsis instead. */
@@ -564,7 +558,7 @@
       margin-top: 2px;
     }
 
-    /* Structured briefing/context rows (队长 / 小导) */
+    /* Structured briefing/context rows (Orchestrator / Context) */
     .brief-title { font-size: 15px; font-weight: 700; color: var(--ink); margin: 0 0 2px; line-height: 1.4; }
     .brief-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 8px 0; }
     /* Wide enough that "Why on the front page" wraps to two lines, not three. */
@@ -572,7 +566,7 @@
     .brief-v { flex: 1; min-width: 160px; font-size: 14px; line-height: 1.55; color: var(--ink); }
     .brief-index { margin-top: 12px; padding-top: 8px; border-top: 1px dashed var(--border); }
 
-    /* 队长's overall report: the verdict up top, then one synopsis block per
+    /* The Orchestrator's overall report: the verdict up top, then one synopsis block per
        teammate who found something. Each block is an opener plus a way into that
        teammate's own card, so the report doubles as the table of contents. */
     .synopsis-who {
@@ -639,14 +633,14 @@
     .synopsis-more > .synopsis-lines { margin-top: 5px; }
     .synopsis-empty { font-size: 12.5px; color: var(--muted); }
 
-    /* 合成's editing record: what the curation pass cut, per section. */
+    /* The Synthesiser's editing record: what the curation pass cut, per section. */
     .edit-log { display: flex; flex-direction: column; gap: 7px; margin: 12px 0; }
     .edit-log-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
     .edit-log-k { flex: 0 0 76px; font-size: 11px; color: var(--muted); }
     .edit-log-v { font-size: 13.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
     .edit-log-cut { color: #B45309; font-weight: 700; }
     .edit-log-kept { color: var(--muted); }
-    /* Who the verdict belongs to, on the verdict row itself: it is 小导's finding,
+    /* Who the verdict belongs to, on the verdict row itself: it is the Context agent's finding,
        and this is the only teammate whose work has no synopsis block of its own. */
     .verdict-owner {
       border: none;
@@ -1923,7 +1917,7 @@
       align-items: center;
       gap: 8px;
     }
-    .section-title-en {
+    .section-title-agent {
       font-size: 13px;
       font-weight: 400;
       color: var(--muted);
@@ -1952,7 +1946,6 @@
       border-top: 1px dashed var(--border);
       font-style: italic;
     }
-    .editor-note.bi-en { margin-top: 2px; padding-top: 0; border-top: none; }
 
     /* ── Badges ──────────────────────────────────────────────────────────── */
     .badge {
@@ -2012,10 +2005,6 @@
       font-size: 14px;
       font-weight: 700;
       color: var(--accent);
-    }
-    .term-zh {
-      font-size: 13px;
-      color: var(--muted);
     }
     .term-quote {
       font-style: italic;
@@ -2138,7 +2127,6 @@
     }
     .jpill-term { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--accent); }
     .jpill.known .jpill-term { color: var(--muted); }
-    .jpill-zh { font-size: 12px; color: var(--muted); }
     .jpill-tag { font-family: var(--mono); font-size: 9px; font-weight: 700; color: var(--muted);
       border: 1px solid var(--border); border-radius: 99px; padding: 1px 6px; margin-left: 2px; }
     .jpill-caret { margin-left: auto; color: var(--muted); font-size: 11px; transition: transform 0.15s; }
@@ -2153,7 +2141,7 @@
     .jpill-body .term-quote { font-style: italic; font-size: 12px; color: var(--muted);
       border-left: 3px solid var(--border); padding-left: 10px; margin: 8px 0 0; line-height: 1.5; }
 
-    /* ── Ask 小词 ─────────────────────────────────────────────────────────── */
+    /* ── Ask Jargon ─────────────────────────────────────────────────────────── */
     .ask-xici {
       border-top: 1px solid var(--border);
       padding-top: 18px;
@@ -2224,10 +2212,6 @@
       color: var(--accent);
       font-weight: 700;
     }
-    /* Deliberately no `.key-points li .bi-*` rules: the pair that lived here set
-       `display: block`, which outranked the html[data-lang] toggle and printed
-       every key point in both languages at once. The li's own type styles apply. */
-
     /* Prose in a card that is now as wide as the office. Repeated items keep the
        full width; sentences do not. */
     .tldr p,
@@ -2350,22 +2334,7 @@
       padding-top: 10px;
       border-top: 1px solid var(--border);
     }
-    .digest-item .bi-en { color: var(--muted); font-size: 12.5px; }
     .digest-item blockquote { font-style: italic; color: var(--ink); }
-    /* Two short items sit side by side once the card is as wide as the office. */
-    @media (min-width: 900px) {
-      .digest-fold-body.digest-pair {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 18px;
-        max-width: none;
-      }
-      .digest-fold-body.digest-pair .digest-item + .digest-item {
-        margin-top: 0;
-        padding-top: 0;
-        border-top: none;
-      }
-    }
     .hn-link {
       display: inline-flex;
       align-items: center;
@@ -2556,10 +2525,6 @@
       color: var(--ink);
       overflow-wrap: anywhere;
     }
-    .term-zh {
-      font-size: 12px;
-      overflow-wrap: anywhere;
-    }
     .kb-remove {
       background: none;
       border: none;
@@ -2747,7 +2712,7 @@
         margin-bottom: 14px;
         font-size: 15px;
       }
-      .section-title-en {
+      .section-title-agent {
         width: 100%;
         font-size: 11px;
       }
@@ -2969,77 +2934,46 @@
   <div class="topbar-left">
     <a class="logo" href="/">HN Lens <span class="accent">📰</span></a>
     <button id="access-lock" class="access-lock" type="button" data-tip="Lock Article Lens"
-      data-zh-tip="锁定 Article Lens" data-en-tip="Lock Article Lens"
-      aria-label="Lock Article Lens" data-zh-aria="锁定 Article Lens" data-en-aria="Lock Article Lens">🔒</button>
+      aria-label="Lock Article Lens">🔒</button>
   </div>
   <div class="topbar-right">
     <div class="preset-col">
-      <div id="preset-picker" class="preset-picker" role="group" aria-label="Task preset" data-zh-aria="任务预设" data-en-aria="Task preset"
-        data-zh-aria="任务模式" data-en-aria="Task preset">
+      <div id="preset-picker" class="preset-picker" role="group" aria-label="Task preset">
         <button class="preset-btn" data-preset="quick" type="button"
-          data-desc-zh="只跑摘要＋判读，最快最省 · 先看值不值得读"
-          data-desc-en="Summary + verdict only, fastest &amp; cheapest · see if it's worth reading first"
-          data-tip="Quick Scan: summary(low)+verdict only, saves tokens"
-          data-zh-tip="⚡ 快速扫描：只跑摘要(低)+判读，省 token"
-          data-en-tip="Quick Scan: summary(low)+verdict only, saves tokens"><span class="bi-zh">⚡ 快速扫描</span><span class="bi-en">⚡ Quick Scan</span></button>
+          data-desc="Summary + verdict only, fastest &amp; cheapest · see if it's worth reading first"
+          data-tip="Quick Scan: summary(low)+verdict only, saves tokens">⚡ Quick Scan</button>
         <button class="preset-btn active" data-preset="standard" type="button"
-          data-desc-zh="全员并行 · 完整报告（摘要／术语／留言／判读）"
-          data-desc-en="Everyone runs in parallel · full report (summary / jargon / comments / verdict)"
-          data-tip="Standard: everyone at medium effort, full report (default)"
-          data-zh-tip="📄 标准：全员中档，完整报告（默认）"
-          data-en-tip="Standard: everyone at medium effort, full report (default)"><span class="bi-zh">📄 标准</span><span class="bi-en">📄 Standard</span></button>
+          data-desc="Everyone runs in parallel · full report (summary / jargon / comments / verdict)"
+          data-tip="Standard: everyone at medium effort, full report (default)">📄 Standard</button>
         <button class="preset-btn" data-preset="jargon" type="button"
-          data-desc-zh="术语火力全开＋跑两份不漏、关掉留言 · 专攻看懂术语"
-          data-desc-en="Jargon at full power, run twice for coverage, comments off · focused on understanding terms"
-          data-tip="Jargon Drill: jargon(high, 2x vote)+verdict, summary(low), comments off"
-          data-zh-tip="🎯 术语特训：术语(高，跑2次投票)+判读，摘要(低)，关掉留言"
-          data-en-tip="Jargon Drill: jargon(high, 2x vote)+verdict, summary(low), comments off"><span class="bi-zh">🎯 术语特训</span><span class="bi-en">🎯 Jargon Drill</span></button>
+          data-desc="Jargon at full power, run twice for coverage, comments off · focused on understanding terms"
+          data-tip="Jargon Drill: jargon(high, 2x vote)+verdict, summary(low), comments off">🎯 Jargon Drill</button>
         <button class="preset-btn" data-preset="reliable" type="button"
-          data-desc-zh="每位读者跑两份投票合并 · 尽量不漏（约 2× token）"
-          data-desc-en="Every reader runs twice and votes to merge · aims for full coverage (~2x tokens)"
-          data-tip="Reliable: everyone at medium effort, runs twice and merges, most stable (~2x tokens)"
-          data-zh-tip="🛡️ 可靠：全员中档、各跑2次再合并，最稳定（约2倍 token）"
-          data-en-tip="Reliable: everyone at medium effort, runs twice and merges, most stable (~2x tokens)"><span class="bi-zh">🛡️ 可靠</span><span class="bi-en">🛡️ Reliable</span></button>
+          data-desc="Every reader runs twice and votes to merge · aims for full coverage (~2x tokens)"
+          data-tip="Reliable: everyone at medium effort, runs twice and merges, most stable (~2x tokens)">🛡️ Reliable</button>
         <button class="preset-btn" data-preset="deep" type="button"
-          data-desc-zh="全员高强度 · 最完整周全（较慢较贵）"
-          data-desc-en="Everyone at high intensity · most thorough (slower &amp; pricier)"
-          data-tip="Deep Read: everyone at high effort, most complete"
-          data-zh-tip="🔬 深度精读：全员高档，最完整"
-          data-en-tip="Deep Read: everyone at high effort, most complete"><span class="bi-zh">🔬 深度精读</span><span class="bi-en">🔬 Deep Read</span></button>
+          data-desc="Everyone at high intensity · most thorough (slower &amp; pricier)"
+          data-tip="Deep Read: everyone at high effort, most complete">🔬 Deep Read</button>
         <button class="preset-btn" data-preset="thrifty" type="button"
-          data-desc-zh="先摘要＋判读，值得读才叫醒术语＋留言 · 最省 token"
-          data-desc-en="Summary + verdict first, wakes jargon + comments only if worth reading · cheapest on tokens"
-          data-zh-tip="💸 省钱渐进：先跑摘要+判读，值得读才叫醒术语+留言（待命中），最省 token"
-          data-en-tip="Thrifty Progressive: run summary+verdict first, wake jargon+comments only if worth it (on standby), cheapest on tokens"
-          data-tip="Thrifty Progressive: run summary+verdict first, wake jargon+comments only if worth it (on standby), cheapest on tokens"><span class="bi-zh">💸 省钱渐进</span><span class="bi-en">💸 Thrifty Progressive</span></button>
+          data-desc="Summary + verdict first, wakes jargon + comments only if worth reading · cheapest on tokens"
+          data-tip="Thrifty Progressive: run summary+verdict first, wake jargon+comments only if worth it (on standby), cheapest on tokens">💸 Thrifty Progressive</button>
         <button class="preset-btn" data-preset="debate" type="button"
-          data-desc-zh="小导分正方／反方辩论后合议 · 判读更平衡（约 3× 判读 token）"
-          data-desc-en="Context argues both sides then settles on a verdict · more balanced (~3× verdict tokens)"
-          data-zh-tip="🥊 辩论裁定：小导跑正方(主张值得读)+反方(主张可略过)，再由首席裁判合议出平衡裁定"
-          data-en-tip="Debate Verdict: Context argues pro (worth reading) + con (can skip), then a head judge settles a balanced verdict"
-          data-tip="Debate Verdict: Context argues pro (worth reading) + con (can skip), then a head judge settles a balanced verdict"><span class="bi-zh">🥊 辩论裁定</span><span class="bi-en">🥊 Debate Verdict</span></button>
+          data-desc="Context argues both sides then settles on a verdict · more balanced (~3× verdict tokens)"
+          data-tip="Debate Verdict: Context argues pro (worth reading) + con (can skip), then a head judge settles a balanced verdict">🥊 Debate Verdict</button>
       </div>
-      <div id="audience-picker" class="preset-picker audience-picker" role="group" aria-label="Reader level" data-zh-aria="受众语气" data-en-aria="Reader level" style="display:none"><!-- hidden from users for now -->
-        <span class="audience-label"><span class="bi-zh">受众</span><span class="bi-en">Audience</span></span>
+      <div id="audience-picker" class="preset-picker audience-picker" role="group" aria-label="Reader level" style="display:none"><!-- hidden from users for now -->
+        <span class="audience-label">Audience</span>
         <button class="preset-btn" data-audience="beginner" type="button"
-          data-zh-tip="🐣 新手：更白话、少术语、多解释、多比喻"
-          data-en-tip="🐣 Beginner: plainer language, fewer jargon terms, more explanations and analogies"
-          data-tip="🐣 Beginner: plainer language, fewer jargon terms, more explanations and analogies"><span class="bi-zh">🐣 新手</span><span class="bi-en">🐣 Beginner</span></button>
+          data-tip="🐣 Beginner: plainer language, fewer jargon terms, more explanations and analogies">🐣 Beginner</button>
         <button class="preset-btn active" data-audience="" type="button"
-          data-zh-tip="🙂 默认：会写程序但非此领域的专家（默认语气）"
-          data-en-tip="🙂 Default: a developer who isn't a specialist in this field (default tone)"
-          data-tip="🙂 Default: a developer who isn't a specialist in this field (default tone)"><span class="bi-zh">🙂 默认</span><span class="bi-en">🙂 Default</span></button>
+          data-tip="🙂 Default: a developer who isn't a specialist in this field (default tone)">🙂 Default</button>
         <button class="preset-btn" data-audience="expert" type="button"
-          data-zh-tip="🧠 老手：假设懂基础、更精简、只收进阶术语"
-          data-en-tip="🧠 Expert: assumes the basics, terser, only surfaces advanced terms"
-          data-tip="🧠 Expert: assumes the basics, terser, only surfaces advanced terms"><span class="bi-zh">🧠 老手</span><span class="bi-en">🧠 Expert</span></button>
+          data-tip="🧠 Expert: assumes the basics, terser, only surfaces advanced terms">🧠 Expert</button>
       </div>
       <div id="preset-caption" class="preset-caption" aria-live="polite"></div>
     </div>
     <button id="edit-toggle" class="edit-toggle" type="button" aria-pressed="false" style="display:none"
-      data-tip="Arrange the office: drag teammates into groups, set collaboration mode, disable"
-      data-zh-tip="编排办公室：拖曳小帮手分组、设定协作模式、停用 / Arrange the office"
-      data-en-tip="Arrange the office: drag teammates into groups, set collaboration mode, disable">🛠️ 编排办公室</button>
+      data-tip="Arrange the office: drag teammates into groups, set collaboration mode, disable">🛠️ Arrange office</button>
   </div>
 </header>
 
@@ -3052,62 +2986,52 @@
   <div id="whiteboard-verdict" class="whiteboard-verdict" data-worth=""></div>
   <div id="office-hits">
     <button id="kb-hit" class="office-hit" data-tip="📚 Knowledge base"
-      data-zh-tip="📚 知识库" data-en-tip="📚 Knowledge base"
-      aria-label="Open knowledge base" data-zh-aria="打开生词本" data-en-aria="Open knowledge base"
-      data-zh-aria="开启知识库" data-en-aria="Open knowledge base"></button>
-    <button id="lang-hit" class="office-hit" data-tip="Switch language (中/EN)"
-      data-zh-tip="切换语言（中/EN）" data-en-tip="Switch language (中/EN)"
-      aria-label="Switch language (中/EN)" data-zh-aria="切换语言（中／EN）" data-en-aria="Switch language (中/EN)"
-      data-zh-aria="切换语言（中/EN）" data-en-aria="Switch language (中/EN)"></button>
+      aria-label="Open knowledge base"></button>
     <button id="wb-hit" class="office-hit" data-tip="📋 Briefing"
-      data-zh-tip="📋 报告总览" data-en-tip="📋 Briefing"
-      aria-label="Open the briefing" data-zh-aria="打开任务简报" data-en-aria="Open the briefing"
-      data-zh-aria="看队长的报告总览" data-en-aria="Open the briefing"></button>
+      aria-label="Open the briefing"></button>
   </div>
   <div id="agent-tooltip" class="agent-tooltip" hidden></div>
 
   <!-- Edit-mode legend: only visible while arranging the office (data-editmode=on).
        Non-interactive; explains the drag / bench / effort / vote / mode affordances. -->
   <aside id="edit-legend" aria-hidden="true">
-    <span class="el-title"><span class="bi-zh">🛠️ 编排说明</span><span class="bi-en">🛠️ Layout Legend</span></span>
+    <span class="el-title">🛠️ Layout Legend</span>
     <ul>
-      <li><span class="bi-zh"><b>拖角色</b> = 移动（拖开=脱离群组）</span><span class="bi-en"><b>Drag a teammate</b> = move (drag away = leave group)</span></li>
-      <li><span class="bi-zh"><b>拖到一起</b> = 一起做（合桌）</span><span class="bi-en"><b>Drag together</b> = work as a group (share a desk)</span></li>
-      <li><span class="bi-zh"><b>拖 平行/接力 标签</b> = 整组移动；点它=切换模式</span><span class="bi-en"><b>Drag the Parallel/Relay tag</b> = move whole group; click it = switch mode</span></li>
-      <li><span class="bi-zh"><b>拖到休息区</b> = 停用</span><span class="bi-en"><b>Drag to the bench</b> = disable</span></li>
-      <li><span class="bi-zh"><b>●/●●/●●●</b> = 用力度　<b>⧉×N</b> = 投票</span><span class="bi-en"><b>●/●●/●●●</b> = effort level　<b>⧉×N</b> = vote count</span></li>
+      <li><b>Drag a teammate</b> = move (drag away = leave group)</li>
+      <li><b>Drag together</b> = work as a group (share a desk)</li>
+      <li><b>Drag the Parallel/Relay tag</b> = move whole group; click it = switch mode</li>
+      <li><b>Drag to the bench</b> = disable</li>
+      <li><b>●/●●/●●●</b> = effort level &nbsp; <b>⧉×N</b> = vote count</li>
     </ul>
   </aside>
 </div>
 
 <!-- BOTTOM WORKBENCH: one compact home for Analyze, Workflow and Activity. -->
-<section id="workbench" class="workbench" aria-label="Analysis console" data-zh-aria="分析控制台" data-en-aria="Analysis console">
+<section id="workbench" class="workbench" aria-label="Analysis console">
   <header class="workbench-head">
     <span class="workbench-heading">
-      <span class="bi-zh">分析控制台</span>
-      <span class="bi-en">Analysis console</span>
+      Analysis console
     </span>
     <span id="workbench-context" class="workbench-context">Ready</span>
     <!-- One row of real tabs. These used to be three inert labels while every
          panel stayed open at once, with a second tab row nested inside Workflow. -->
-    <div class="workbench-tabs" role="tablist" aria-label="Console view" data-zh-aria="控制台视图" data-en-aria="Console view">
-      <button class="workbench-tab" type="button" role="tab" data-workbench-view="graph"><span class="bi-zh">图</span><span class="bi-en">Graph</span></button>
-      <button class="workbench-tab" type="button" role="tab" data-workbench-view="timeline"><span class="bi-zh">时间轴</span><span class="bi-en">Timeline</span></button>
-      <button class="workbench-tab" type="button" role="tab" data-workbench-view="assignments"><span class="bi-zh">分派</span><span class="bi-en">Assignments</span></button>
+    <div class="workbench-tabs" role="tablist" aria-label="Console view">
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="graph">Graph</button>
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="timeline">Timeline</button>
+      <button class="workbench-tab" type="button" role="tab" data-workbench-view="assignments">Assignments</button>
       <button class="workbench-tab" type="button" role="tab" data-workbench-view="activity">
-        <span class="bi-zh">活动</span><span class="bi-en">Activity</span>
+        Activity
         <span id="workbench-activity-count" class="workbench-tab-count">0</span>
       </button>
     </div>
     <button id="workbench-collapse" class="workbench-collapse" type="button"
-      aria-expanded="true" data-tip="Collapse analysis console"
-      data-zh-tip="收起分析控制台" data-en-tip="Collapse analysis console">⌄</button>
+      aria-expanded="true" data-tip="Collapse analysis console">⌄</button>
   </header>
 
-<section id="workflow-inspector" class="workflow-inspector" aria-label="Workflow inspector" data-zh-aria="工作流检视器" data-en-aria="Workflow inspector"
+<section id="workflow-inspector" class="workflow-inspector" aria-label="Workflow inspector"
   data-workbench-panel="workflow" hidden>
   <header class="workflow-inspector-head">
-    <span class="workflow-inspector-title"><span class="bi-zh">Workflow · 执行检视</span><span class="bi-en">Workflow · Inspector</span></span>
+    <span class="workflow-inspector-title">Workflow · Inspector</span>
     <span class="workflow-overall" data-workflow-status>Queued</span>
     <span class="workflow-summary-chip" data-workflow-attempt>Attempt 0/1</span>
     <span class="workflow-summary-chip" data-workflow-duration>—</span>
@@ -3119,19 +3043,18 @@
   <div class="workflow-error-banner" data-workflow-error role="alert" hidden></div>
   <div class="workflow-view workflow-graph" data-workflow-view="graph" data-workflow-graph></div>
   <div class="workflow-view workflow-timeline" data-workflow-view="timeline" data-workflow-timeline hidden></div>
-  <!-- 队长's division of labour: who was told to run, skip or reuse, and why. This
+  <!-- The Orchestrator's division of labour: who was told to run, skip or reuse, and why. This
        answers "how did they do it", so it lives here rather than on the report card.
        WorkflowInspector only shows/hides this view; app.js fills it. -->
   <div class="workflow-view workflow-assignments" data-workflow-view="assignments" data-workflow-assignments hidden></div>
 </section>
 
-<section id="activity-panel" class="activity-panel" aria-label="Agent activity log" data-zh-aria="Agent 活动记录" data-en-aria="Agent activity log"
+<section id="activity-panel" class="activity-panel" aria-label="Agent activity log"
   data-workbench-panel="activity" hidden>
   <div class="activity-toolbar">
     <div class="activity-title">
       <span class="activity-live-dot" aria-hidden="true"></span>
-      <span class="bi-zh">Activity · Agent 行为日志</span>
-      <span class="bi-en">Activity · Agent event log</span>
+      Activity · Agent event log
       <span id="activity-count" class="activity-count">0</span>
     </div>
     <div class="activity-controls">
@@ -3139,42 +3062,42 @@
            `value` / `checked` property and the bubbling `change` event. -->
       <div id="activity-agent-filter" class="ui-select activity-select" data-ui-select data-value="all">
         <button class="ui-select-button" type="button" data-ui-select-button aria-haspopup="listbox" aria-expanded="false"
-          aria-label="Filter by agent" data-zh-aria="按 Agent 筛选" data-en-aria="Filter by agent">
+          aria-label="Filter by agent">
           <span class="ui-select-value" data-ui-select-label></span>
           <span class="ui-select-caret" aria-hidden="true"></span>
         </button>
-        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Filter by agent" data-zh-aria="按 Agent 筛选" data-en-aria="Filter by agent" hidden>
-          <button type="button" role="option" data-value="all" data-zh="全部 Agent" data-en="All agents">All agents</button>
-          <button type="button" role="option" data-value="system" data-zh="系统" data-en="System">System</button>
-          <button type="button" role="option" data-value="orch" data-zh="队长" data-en="Captain">Captain</button>
-          <button type="button" role="option" data-value="jargon" data-zh="小词" data-en="Jargon">Jargon</button>
-          <button type="button" role="option" data-value="sum" data-zh="小摘" data-en="Summary">Summary</button>
-          <button type="button" role="option" data-value="comments" data-zh="小潜" data-en="Comments">Comments</button>
-          <button type="button" role="option" data-value="ctx" data-zh="小导" data-en="Context">Context</button>
-          <button type="button" role="option" data-value="synth" data-zh="合成" data-en="Synthesis">Synthesis</button>
+        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Filter by agent" hidden>
+          <button type="button" role="option" data-value="all">All agents</button>
+          <button type="button" role="option" data-value="system">System</button>
+          <button type="button" role="option" data-value="orch">Captain</button>
+          <button type="button" role="option" data-value="jargon">Jargon</button>
+          <button type="button" role="option" data-value="sum">Summary</button>
+          <button type="button" role="option" data-value="comments">Comments</button>
+          <button type="button" role="option" data-value="ctx">Context</button>
+          <button type="button" role="option" data-value="synth">Synthesis</button>
         </div>
       </div>
       <div id="activity-kind-filter" class="ui-select activity-select" data-ui-select data-value="all">
         <button class="ui-select-button" type="button" data-ui-select-button aria-haspopup="listbox" aria-expanded="false"
-          aria-label="Filter by event type" data-zh-aria="按事件类型筛选" data-en-aria="Filter by event type">
+          aria-label="Filter by event type">
           <span class="ui-select-value" data-ui-select-label></span>
           <span class="ui-select-caret" aria-hidden="true"></span>
         </button>
-        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Filter by event type" data-zh-aria="按事件类型筛选" data-en-aria="Filter by event type" hidden>
-          <button type="button" role="option" data-value="all" data-zh="全部事件" data-en="All events">All events</button>
-          <button type="button" role="option" data-value="errors" data-zh="只看错误" data-en="Errors only">Errors only</button>
-          <button type="button" role="option" data-value="calls" data-zh="Agent 调用" data-en="Agent calls">Agent calls</button>
-          <button type="button" role="option" data-value="results" data-zh="输出与结果" data-en="Outputs &amp; results">Outputs &amp; results</button>
-          <button type="button" role="option" data-value="workflow" data-zh="工作流事件" data-en="Workflow events">Workflow events</button>
+        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Filter by event type" hidden>
+          <button type="button" role="option" data-value="all">All events</button>
+          <button type="button" role="option" data-value="errors">Errors only</button>
+          <button type="button" role="option" data-value="calls">Agent calls</button>
+          <button type="button" role="option" data-value="results">Outputs &amp; results</button>
+          <button type="button" role="option" data-value="workflow">Workflow events</button>
         </div>
       </div>
       <button id="activity-autoscroll" class="ui-switch activity-autoscroll" type="button" role="switch"
         data-ui-switch data-checked="true" aria-checked="true">
         <span class="ui-switch-box" aria-hidden="true"></span>
-        <span class="bi-zh">自动卷动</span><span class="bi-en">Auto-scroll</span>
+        Auto-scroll
       </button>
       <button id="activity-clear" class="activity-button" type="button">
-        <span class="bi-zh">清空</span><span class="bi-en">Clear</span>
+        Clear
       </button>
       <button id="activity-collapse" class="activity-button" type="button" aria-expanded="true">Collapse</button>
     </div>
@@ -3184,28 +3107,25 @@
 
 <!-- PHASE: INPUT — a compact chat dock under the office -->
 <section id="workbench-analyze" class="phase-input" aria-label="Analyse"
-  data-zh-aria="分析" data-en-aria="Analyse"
   data-workbench-panel="analyze">
   <header class="analyze-panel-head">
-    <span class="analyze-panel-title"><span class="bi-zh">分析 · 输入</span><span class="bi-en">Analyse · Input</span></span>
+    <span class="analyze-panel-title">Analyse · Input</span>
     <span id="analyze-panel-state" class="analyze-panel-state">Paste a link or text to begin</span>
   </header>
   <div class="chat-dock">
     <div class="chat-row">
       <input id="hn-input" class="hn-input" type="text"
         placeholder="Drop in an HN link, article URL, or paste some text… they'll get to work 📥"
-        data-zh-ph="丢进 HN 链接、文章网址，或贴一段文字… 他们就开工 📥"
-        data-en-ph="Drop in an HN link, article URL, or paste some text… they'll get to work 📥"
-        autocomplete="off" spellcheck="false" aria-label="HN link, article URL, or text" data-zh-aria="HN 链接、文章网址或文字" data-en-aria="HN link, article URL, or text">
-      <button id="analyze-btn" class="btn-primary"><span class="bi-zh">分析</span><span class="bi-en">Analyse</span></button>
+        autocomplete="off" spellcheck="false" aria-label="HN link, article URL, or text">
+      <button id="analyze-btn" class="btn-primary">Analyse</button>
     </div>
     <div id="error-msg" class="error-msg" hidden></div>
     <div class="chat-chips">
-      <span class="muted small mono"><span class="bi-zh">试试 Try:</span><span class="bi-en">Try:</span></span>
+      <span class="muted small mono">Try:</span>
       <button class="chip" data-url="https://news.ycombinator.com/item?id=45798479">pgvector</button>
       <button class="chip" data-url="https://news.ycombinator.com/item?id=31976407">Ask HN</button>
-      <button class="chip" data-url="https://simonwillison.net/2025/Jan/24/anthropics-new-citations-api/"><span class="bi-zh">任意文章网址</span><span class="bi-en">Any article URL</span></button>
-      <button id="fp-toggle" class="chip chip-ghost" type="button">今日精选 ▾</button>
+      <button class="chip" data-url="https://simonwillison.net/2025/Jan/24/anthropics-new-citations-api/">Any article URL</button>
+      <button id="fp-toggle" class="chip chip-ghost" type="button">Today's Picks ▾</button>
     </div>
     <div id="frontpage-section" class="frontpage-section" hidden>
       <div id="frontpage-list" class="frontpage-list"></div>
@@ -3218,64 +3138,63 @@
 <!-- PHASE: RESULTS -->
 <main class="phase-results">
   <div class="results-nav">
-    <button id="back-btn" class="btn-back"><span class="bi-zh">← 返回</span><span class="bi-en">← Back</span></button>
+    <button id="back-btn" class="btn-back">← Back</button>
     <div id="meta-bar" class="meta-bar"></div>
   </div>
 
   <!-- Slim, always-visible verdict bar (between the office and the panels) -->
   <div id="verdict-bar" class="verdict-bar" data-worth=""></div>
 
-  <div class="panel-hint muted small mono"><span class="bi-zh">👆 点上面的小帮手，看他负责的那块</span><span class="bi-en">👆 Click a teammate above</span></div>
+  <div class="panel-hint muted small mono">👆 Click a teammate above</div>
 
   <!-- Panels: only one open at a time, chosen by clicking a worker in the office -->
-  <!-- 小词 → jargon (default open) -->
+  <!-- Jargon → jargon (default open) -->
   <section id="jargon-section" class="card jargon-card result-panel" data-agent="jargon">
-    <h2 class="section-title"><span class="bi-zh">💡 白话术语</span><span class="bi-en">💡 Plain Language</span> <span class="section-title-en">Plain Language · 小词</span></h2>
-    <p class="panel-duty"><span class="bi-zh">挑出本文的核心术语，用白话解释给你听。</span><span class="bi-en">Picks out the article's core jargon and explains each one in plain words.</span></p>
+    <h2 class="section-title">💡 Plain Language <span class="section-title-agent">Jargon</span></h2>
+    <p class="panel-duty">Picks out the article's core jargon and explains each one in plain words.</p>
     <div id="jargon-list" class="jargon-list"></div>
     <div class="ask-xici">
-      <div class="ask-xici-label muted small"><span class="bi-zh">还有不懂的词？问小词</span><span class="bi-en">Still confused about a term? Ask 小词</span></div>
+      <div class="ask-xici-label muted small">Still confused about a term? Ask Jargon</div>
       <div class="ask-xici-row">
-        <input id="ask-term" class="ask-input" type="text" placeholder="Enter a term…"
-          data-zh-ph="输入术语…" data-en-ph="Enter a term…">
-        <button id="ask-btn" class="btn-secondary"><span class="bi-zh">问 Ask</span><span class="bi-en">Ask</span></button>
+        <input id="ask-term" class="ask-input" type="text" placeholder="Enter a term…">
+        <button id="ask-btn" class="btn-secondary">Ask</button>
       </div>
       <div id="ask-result"></div>
     </div>
   </section>
 
-  <!-- 小摘 → summary -->
+  <!-- Summariser → summary -->
   <section id="summary-section" class="card result-panel" data-agent="sum">
-    <h2 class="section-title"><span class="bi-zh">📝 文章摘要</span><span class="bi-en">📝 Summary</span> <span class="section-title-en">Summary · 小摘</span></h2>
-    <p class="panel-duty"><span class="bi-zh">读完全文，压成一句话结论和几条重点。</span><span class="bi-en">Reads the whole article, then compresses it into one line and a few key points.</span></p>
+    <h2 class="section-title">📝 Summary <span class="section-title-agent">Summariser</span></h2>
+    <p class="panel-duty">Reads the whole article, then compresses it into one line and a few key points.</p>
     <div id="summary-content"></div>
   </section>
 
-  <!-- 小潜 → comment digest -->
+  <!-- Comments → comment digest -->
   <section id="comments-section" class="card result-panel" data-agent="comments">
-    <h2 class="section-title"><span class="bi-zh">💬 留言精华</span><span class="bi-en">💬 Comment Digest</span> <span class="section-title-en">Comment Digest · 小潜</span></h2>
-    <p class="panel-duty"><span class="bi-zh">潜进留言区，把吵成一团的意见整理成几个派别。</span><span class="bi-en">Dives into the comment thread and sorts the noise into a handful of camps.</span></p>
+    <h2 class="section-title">💬 Comment Digest <span class="section-title-agent">Comments</span></h2>
+    <p class="panel-duty">Dives into the comment thread and sorts the noise into a handful of camps.</p>
     <div id="comments-content"></div>
   </section>
 
-  <!-- 小导 → context / verdict -->
+  <!-- Context → context / verdict -->
   <section id="context-section" class="card result-panel" data-agent="ctx">
-    <h2 class="section-title"><span class="bi-zh">🧭 该不该读</span><span class="bi-en">🧭 Should You Read It</span> <span class="section-title-en">Verdict &amp; Context · 小导</span></h2>
-    <p class="panel-duty"><span class="bi-zh">判断这篇该略读、速读还是深读，并说明为什么。</span><span class="bi-en">Decides whether to skim, skip or dive deep, and says why.</span></p>
+    <h2 class="section-title">🧭 Should You Read It <span class="section-title-agent">Context</span></h2>
+    <p class="panel-duty">Decides whether to skim, skip or dive deep, and says why.</p>
     <div id="context-content"></div>
   </section>
 
-  <!-- 队长 → the overall report (also opened by clicking the whiteboard) -->
+  <!-- Orchestrator → the overall report (also opened by clicking the whiteboard) -->
   <section id="briefing-section" class="card result-panel" data-agent="orch">
-    <h2 class="section-title"><span class="bi-zh">📋 综合报告</span><span class="bi-en">📋 Overall Report</span> <span class="section-title-en">Overall Report · 队长</span></h2>
-    <p class="panel-duty"><span class="bi-zh">分派任务给五位组员，最后把大家的发现收成一份总览。</span><span class="bi-en">Assigns the work to five teammates, then gathers what they found into one overview.</span></p>
+    <h2 class="section-title">📋 Overall Report <span class="section-title-agent">Orchestrator</span></h2>
+    <p class="panel-duty">Assigns the work to five teammates, then gathers what they found into one overview.</p>
     <div id="briefing-content"></div>
   </section>
 
-  <!-- 合成 → the editing record: what the curation pass cut -->
+  <!-- Synthesiser → the editing record: what the curation pass cut -->
   <section id="synth-section" class="card result-panel" data-agent="synth">
-    <h2 class="section-title"><span class="bi-zh">🧩 编辑纪录</span><span class="bi-en">🧩 Editing Record</span> <span class="section-title-en">Editing Record · 合成</span></h2>
-    <p class="panel-duty"><span class="bi-zh">检查五位组员交上来的东西，删掉重复、离题和杂讯。</span><span class="bi-en">Reviews what the five teammates handed in, then cuts duplication, off-topic entries and noise.</span></p>
+    <h2 class="section-title">🧩 Editing Record <span class="section-title-agent">Synthesiser</span></h2>
+    <p class="panel-duty">Reviews what the five teammates handed in, then cuts duplication, off-topic entries and noise.</p>
     <div id="synth-content"></div>
   </section>
 </main>
@@ -3283,39 +3202,38 @@
 
 <!-- KB DRAWER -->
 <div id="kb-overlay" class="kb-overlay" hidden></div>
-<aside id="kb-drawer" class="kb-drawer" hidden aria-label="Knowledge base" data-zh-aria="生词本" data-en-aria="Knowledge base">
+<aside id="kb-drawer" class="kb-drawer" hidden aria-label="Knowledge base">
   <div class="kb-header">
     <span class="kb-title">
-      <span class="kb-title-main"><span class="bi-zh">📚 我的生词本</span><span class="bi-en">📚 My Glossary</span></span>
-      <span class="kb-title-sub"><span id="kb-visible">0</span> / <span id="kb-total">0</span> <span class="bi-zh">个词</span><span class="bi-en">words</span></span>
+      <span class="kb-title-main">📚 My Glossary</span>
+      <span class="kb-title-sub"><span id="kb-visible">0</span> / <span id="kb-total">0</span> words</span>
     </span>
-    <button id="kb-close" class="kb-close" aria-label="Close" data-zh-aria="关闭" data-en-aria="Close">✕</button>
+    <button id="kb-close" class="kb-close" aria-label="Close">✕</button>
   </div>
   <div class="kb-tools">
-    <input id="kb-search" class="kb-search" type="search" placeholder="Search English, Chinese, or definitions"
-      data-zh-ph="搜索英文、中文或解释" data-en-ph="Search English, Chinese, or definitions" autocomplete="off">
-    <div class="kb-filter-row" aria-label="Glossary filters" data-zh-aria="生词本筛选" data-en-aria="Glossary filters">
-      <button class="kb-filter active" data-filter="all"><span class="bi-zh">全部</span><span class="bi-en">All</span></button>
-      <button class="kb-filter" data-filter="new"><span class="bi-zh">新词</span><span class="bi-en">New</span></button>
-      <button class="kb-filter" data-filter="learning"><span class="bi-zh">复习中</span><span class="bi-en">Learning</span></button>
-      <button class="kb-filter" data-filter="known"><span class="bi-zh">已会</span><span class="bi-en">Known</span></button>
+    <input id="kb-search" class="kb-search" type="search" placeholder="Search English, Chinese, or definitions" autocomplete="off">
+    <div class="kb-filter-row" aria-label="Glossary filters">
+      <button class="kb-filter active" data-filter="all">All</button>
+      <button class="kb-filter" data-filter="new">New</button>
+      <button class="kb-filter" data-filter="learning">Learning</button>
+      <button class="kb-filter" data-filter="known">Known</button>
     </div>
     <div class="kb-organize-row">
       <div id="kb-sort" class="ui-select kb-sort" data-ui-select data-value="recent">
         <button class="ui-select-button" type="button" data-ui-select-button aria-haspopup="listbox" aria-expanded="false"
-          aria-label="Sort glossary" data-zh-aria="排序生词" data-en-aria="Sort glossary">
+          aria-label="Sort glossary">
           <span class="ui-select-value" data-ui-select-label></span>
           <span class="ui-select-caret" aria-hidden="true"></span>
         </button>
-        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Sort glossary" data-zh-aria="排序生词" data-en-aria="Sort glossary" hidden>
-          <button type="button" role="option" data-value="recent" data-zh="最近出现" data-en="Most recent">Most recent</button>
-          <button type="button" role="option" data-value="frequent" data-zh="最常见" data-en="Most frequent">Most frequent</button>
-          <button type="button" role="option" data-value="az" data-zh="A-Z" data-en="A-Z">A-Z</button>
+        <div class="ui-select-list" role="listbox" data-ui-select-list aria-label="Sort glossary" hidden>
+          <button type="button" role="option" data-value="recent">Most recent</button>
+          <button type="button" role="option" data-value="frequent">Most frequent</button>
+          <button type="button" role="option" data-value="az">A-Z</button>
         </div>
       </div>
       <div class="kb-actions">
-        <button id="kb-export" class="kb-mini-btn"><span class="bi-zh">导出</span><span class="bi-en">Export</span></button>
-        <button id="kb-import" class="kb-mini-btn"><span class="bi-zh">导入</span><span class="bi-en">Import</span></button>
+        <button id="kb-export" class="kb-mini-btn">Export</button>
+        <button id="kb-import" class="kb-mini-btn">Import</button>
         <input id="kb-import-file" type="file" accept="application/json,.json" hidden>
       </div>
     </div>
@@ -3327,14 +3245,14 @@
 
 <!-- AGENT DETAIL PANEL (opens when you click a character) -->
 <div id="agent-panel-overlay" class="agent-panel-overlay" hidden></div>
-<aside id="agent-panel" class="agent-panel" hidden aria-label="Agent detail" data-zh-aria="Agent 详情" data-en-aria="Agent detail">
+<aside id="agent-panel" class="agent-panel" hidden aria-label="Agent detail">
   <div class="agent-panel-head">
     <span id="agent-panel-swatch" class="agent-panel-swatch"></span>
     <span>
       <span id="agent-panel-title" class="agent-panel-title"></span>
       <span id="agent-panel-role" class="agent-panel-role"></span>
     </span>
-    <button id="agent-panel-close" class="agent-panel-close" aria-label="Close" data-zh-aria="关闭" data-en-aria="Close">✕</button>
+    <button id="agent-panel-close" class="agent-panel-close" aria-label="Close">✕</button>
   </div>
   <div id="agent-panel-status" class="agent-panel-status"></div>
   <div id="agent-panel-body" class="agent-panel-body"></div>

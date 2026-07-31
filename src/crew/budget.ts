@@ -2,23 +2,23 @@
 // One orchestration attempt shares an absolute deadline (see
 // ORCHESTRATION_BUDGET_MS). Handing that whole deadline to every call lets an
 // early stage spend it all: stage 1 fans out three roles, each with a 240s
-// per-attempt timeout and one retry, so 小导 and 统整 could be left with a few
+// per-attempt timeout and one retry, so Context and Synthesiser could be left with a few
 // seconds and fail on arrival. Both are then reported as failures even though
 // the peers were never really asked.
 //
 // Instead each stage stops early enough to leave the reservations the later
 // stages need. Reservations are floors, not allocations: when stage 1 finishes
-// quickly, 小导 and 统整 still get their full per-call timeout, because their
+// quickly, Context and Synthesiser still get their full per-call timeout, because their
 // own deadline is the run deadline minus only what still comes after them.
 
 export type Stage = 'stage1' | 'ctx' | 'synth'
 
-// One 小导 call plus room for a transient retry.
+// One Context call plus room for a transient retry.
 const CTX_RESERVE_MS = 150_000
-// 辩论裁定 runs 正方/反方 in parallel and then adjudicates, so it needs a
+// Debate Verdict runs pro/con in parallel and then adjudicates, so it needs a
 // second sequential round.
 const CTX_DEBATE_RESERVE_MS = 330_000
-// 统整 is a single call that legitimately runs long, but it only prunes an
+// Synthesiser is a single call that legitimately runs long, but it only prunes an
 // otherwise complete report, so it reserves the least.
 const SYNTH_RESERVE_MS = 90_000
 

@@ -1,6 +1,5 @@
 import type {
   AgentName,
-  BiStr,
   Effort,
   GraphConfig,
   SSEWorkflowPlan,
@@ -18,10 +17,6 @@ export interface NormalizedGraph {
 }
 
 export const STAGE1: Stage1Agent[] = ['sum', 'jargon', 'comments']
-
-function bi(zh: string, en: string): BiStr {
-  return { zh, en }
-}
 
 function isStage1(value: string): value is Stage1Agent {
   return value === 'sum' || value === 'jargon' || value === 'comments'
@@ -72,14 +67,14 @@ export function normalizeGraph(config: GraphConfig | null | undefined): Normaliz
   return { enabled, effort, replicas, groups }
 }
 
-const LABELS: Record<WorkflowNodeId, BiStr> = {
-  input: bi('输入', 'Input'),
-  sum: bi('小摘', 'Summariser'),
-  jargon: bi('小词', 'Jargon'),
-  comments: bi('小潜', 'Comments'),
-  ctx: bi('小导', 'Context'),
-  synth: bi('合成', 'Synthesiser'),
-  report: bi('报告', 'Report'),
+const LABELS: Record<WorkflowNodeId, string> = {
+  input: 'Input',
+  sum: 'Summariser',
+  jargon: 'Jargon',
+  comments: 'Comments',
+  ctx: 'Context',
+  synth: 'Synthesiser',
+  report: 'Report',
 }
 
 export function buildWorkflowPlan(
@@ -122,14 +117,14 @@ export function buildWorkflowPlan(
     from: WorkflowNodeId,
     to: WorkflowNodeId,
     kind: SSEWorkflowPlan['edges'][number]['kind'],
-    label?: BiStr,
+    label?: string,
   ) => edges.push({ id: `${kind}:${from}:${to}`, from, to, kind, label })
 
   if (config?.escalate) {
     addEdge('input', 'sum', 'dependency')
     addEdge('sum', 'ctx', 'dependency')
-    addEdge('ctx', 'jargon', 'conditional', bi('升级 go/stop', 'Escalate go/stop'))
-    addEdge('ctx', 'comments', 'conditional', bi('升级 go/stop', 'Escalate go/stop'))
+    addEdge('ctx', 'jargon', 'conditional', 'Escalate go/stop')
+    addEdge('ctx', 'comments', 'conditional', 'Escalate go/stop')
   } else {
     const grouped = new Set<Stage1Agent>()
     for (const group of graph?.groups ?? []) {
@@ -137,7 +132,7 @@ export function buildWorkflowPlan(
       if (group.mode === 'relay') {
         if (group.members[0]) addEdge('input', group.members[0], 'dependency')
         for (let index = 1; index < group.members.length; index += 1) {
-          addEdge(group.members[index - 1], group.members[index], 'relay', bi('接力', 'Relay'))
+          addEdge(group.members[index - 1], group.members[index], 'relay', 'Relay')
         }
       } else {
         group.members.forEach(agent => addEdge('input', agent, 'dependency'))
