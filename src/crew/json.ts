@@ -2,8 +2,8 @@ import type { UnparseableKind } from '../schema'
 
 // ── Lenient JSON parsing for LLM output ───────────────────────────
 // Small models frequently emit JSON wrapped in ```fences``` and — worst of
-// all — unescaped ASCII double-quotes *inside* string values, especially in
-// Chinese text like 与"开源"有别. Strict JSON.parse throws on those. We try a
+// all — unescaped ASCII double-quotes *inside* string values, which is why the
+// prompts ask for ' instead. Strict JSON.parse throws on those, so we try a
 // strict parse first, then a targeted repair, before giving up.
 
 export function extractJSON(text: string): string {
@@ -14,12 +14,39 @@ export function extractJSON(text: string): string {
   return (m ? m[0] : body).trim()
 }
 
-// Escape any ASCII double-quote that sits *between* two word/CJK characters —
-// these are almost always stray inner quotes, not string delimiters. A real
-// delimiter is adjacent to structural context (`:`, `,`, `{`, `[`, `}`, `]`,
-// whitespace, or string end), never letter-to-letter.
+// Escape stray ASCII double-quotes inside string values. This decides by JSON
+// structure rather than by the characters either side, because the two are not
+// equivalent: the previous rule only escaped a quote sitting letter-to-letter,
+// which is how a language without inter-word spaces quotes a phrase, but not how
+// English does it — English puts a space before the opening quote, so a
+// space-adjacent quote went unescaped and the repair did nothing at all.
+//
+// A quote inside a value closes it only when the next non-space character is
+// structural (`:` `,` `}` `]`) or the input ends. Anything else means the model
+// left a quote in the middle of its own sentence.
 function repairInnerQuotes(s: string): string {
-  return s.replace(/(?<=[\p{L}\p{N}）)】」』])"(?=[\p{L}\p{N}（(【「『])/gu, '\\"')
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (escaped) { out += ch; escaped = false; continue }
+    if (ch === '\\') { out += ch; escaped = true; continue }
+    if (!inString) {
+      out += ch
+      if (ch === '"') inString = true
+      continue
+    }
+    if (ch !== '"') { out += ch; continue }
+    const next = /^\s*(\S)/.exec(s.slice(i + 1))?.[1]
+    if (next === undefined || next === ':' || next === ',' || next === '}' || next === ']') {
+      out += ch
+      inString = false
+    } else {
+      out += '\\"'
+    }
+  }
+  return out
 }
 
 export function parseLoose<T>(text: string): T | null {

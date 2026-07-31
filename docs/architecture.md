@@ -1,7 +1,7 @@
 # Article Lens — architecture
 
 This is the current reference for the Article Lens Worker. Article Lens is a
-bilingual, Chinese-first article companion whose Manyfold A2A crew produces a
+English article companion whose Manyfold A2A crew produces a
 summary, jargon guide, verdict, and comment digest.
 
 **Live:** https://mf-article-lens.netmind-ai.workers.dev
@@ -50,7 +50,6 @@ src/
     analyze.ts         input resolution, job APIs, and cache orchestration
     frontpage.ts       GET /api/frontpage
     define.ts          POST /api/define
-    translate.ts       POST /api/translate
     health.ts          GET /api/health and on-demand peer checks
   crew/
     orchestrator.ts    application-owned multi-agent DAG
@@ -73,8 +72,35 @@ public/
   settings.*           admin configuration page
 ```
 
-Every user-facing localized string uses `BiStr = {en, zh}`. Agents fill Chinese
-first; English is requested lazily through `/api/translate`.
+Every user-facing string is plain English. The roles are prompted in English and
+answer in English, so the result carries one language and no section can render
+blank or half-translated while a translation is in flight.
+
+This replaced a `BiStr = {en, zh}` field on every string, which the roles filled
+Chinese-first while the browser fetched English lazily from `/api/translate`. That
+arrangement had two visible failure modes and they were the same bug seen through
+two different renderers: a value read through the JS `L()` helper fell back to the
+Chinese side, so the report read as mixed language, while a value rendered as a
+paired `.bi-zh`/`.bi-en` span had no fallback at all and rendered *blank* — which
+is what the TL;DR and the key points did, for as long as the translate call took.
+Both corrected themselves seconds later, when the round trip returned and the
+report re-rendered, which made the report look like it was still loading after it
+had finished.
+
+`/api/translate` is gone with it. It was not a lookup: it called the Summariser
+peer over A2A, so every uncached article paid a second hosted-agent round trip
+before the reader could read the report in English. Two further faults died with
+it — the request capped at 80 strings with no chunking, so a long report silently
+left the overflow untranslated, and the response was accepted all-or-nothing, so
+one length mismatch from the model left the entire report in Chinese.
+
+`scripts/validate-repository.mjs` fails the build on non-Latin text in `src/`,
+`public/`, `scripts/` and `docs/`, because one prompt asking for Chinese output is
+enough to put mixed-language text back on the report. A line that genuinely needs
+non-Latin characters — the sentence splitter has to recognise a CJK full stop,
+since an article can be in any language — opts out with an `allow-non-english`
+marker. `tests/` is exempt so a non-Latin fixture can prove the extractor and the
+JSON repair survive an article that is not in English.
 
 ## Workflow behavior and recovery
 
@@ -94,7 +120,7 @@ first; English is requested lazily through `/api/translate`.
   verdict and synthesis reserves, the verdict stops at the deadline minus the
   synthesis reserve, and synthesis owns the remainder. Reserves are floors, not
   allocations, so when stage 1 finishes early the later stages still get their
-  full per-call timeout. 辯論裁定 widens the verdict reserve, because it needs a
+  full per-call timeout. Debate Verdict widens the verdict reserve, because it needs a
   second sequential round.
 - Durable state and the alarm are written before Queue publication. A temporary
   Queue error therefore does not lose an accepted analysis.
@@ -197,7 +223,6 @@ Other endpoints:
 
 - `GET /api/frontpage`
 - `GET /api/health`
-- `POST /api/translate`
 - `POST /api/define`
 - `GET /access` — six-digit application access gate
 - `POST /api/access/login` and `/logout` — visitor session management
@@ -214,7 +239,7 @@ endpoint incrementally. The compatibility SSE route remains available for
 existing integrations.
 
 During a run and on the result page, the embedded Workflow Inspector renders
-the backend-provided role-level DAG, an A2A-call timeline, and 队长's division of
+the backend-provided role-level DAG, an A2A-call timeline, and the Orchestrator's division of
 labour. Agent prompts, progress, raw output, and exact errors remain in the Agent
 Detail drawer; Activity remains the complete raw event log. The graph is
 read-only—the pixel office remains the orchestration editor.
@@ -229,7 +254,7 @@ appears on both:
 - the Workbench (Workflow plus Activity) answers **how they found it**.
 
 That is why the division of labour lives in the Workflow Inspector's Assignments
-view rather than on 队长's card, and why 队长's card is an overall report: the
+view rather than on the Orchestrator's card, and why that card is an overall report: the
 verdict, then one synopsis per teammate, each linking to that teammate's own card.
 The card is deliberately an outline rather than the full text — it is the first
 card the reveal opens, so it has to stay scannable and leave the other five cards
@@ -249,21 +274,21 @@ margin opts it out of stretching, so without it the column sizes to its content 
 the cap never applies. Prose does not inherit the card's new width — `--prose-measure`
 keeps a paragraph to a line a reader can track back.
 
-Inside 小潜's card the camps are a deck, not five tinted blocks. The camps are the
+Inside the Comments card the camps are a deck, not five tinted blocks. The camps are the
 role's primary finding, so they stay on the page as labelled strips that overlap by
 5px, one open at a time, with the majority camp open by default; each closed strip
 carries its name, its weight and one clipped line of its stance. Disputes, expert
 corrections and spicy takes are secondary, and as four full-width tinted blocks with
 one card per item they cost more height than the camps and the overview together.
 Each is now one `<details>` row carrying its item count, because a collapsed row that
-only says 争议点 reads as an empty section while 争议点 2 does not. Collapsing the camps
+only says Disputes reads as an empty section while Disputes 2 does not. Collapsing the camps
 too is shorter still and was rejected for the same reason the cards state their
 agent's job: the first thing a reader or a demo audience sees would be nothing the
 crew found.
 
 The Assignments view holds two facts that arrive at different times, so it shows
 two columns rather than one status chip. `briefing.assignments[].action` is the
-order 队长 gave and is known the moment the briefing arrives, while
+order the Orchestrator gave and is known the moment the briefing arrives, while
 `flags.agent_sources[].mode` is what the section turned out to be and exists only
 on the finished result. One chip could only guess the second, so mid-run every row
 claimed a real analysis while the route line above it said cache. An unknown fact
@@ -276,7 +301,7 @@ cards and in the office hover detail.
 column serialized onto one line, in a second vocabulary whose `running` and
 `from cache` read as live state rather than as an order. The view carries no title
 either, because the active tab already names it and neither Graph nor Timeline
-titles itself. The same reasoning removed the division-of-labour list from 队长's
+titles itself. The same reasoning removed the division-of-labour list from the Orchestrator's
 click-to-inspect panel: that panel is office-side, so it keeps the job description
 and the output counts and nothing else.
 
@@ -303,11 +328,11 @@ overrides; declaring them on the control itself would beat the context's value.
 Disclosure triangles, scrollbars, text selection, and Chrome's autofill wash are
 overridden in `index.html` for the same reason.
 
-`flags.curation` records what 合成's pass cut, per section, measured off the arrays
-rather than inferred from the curator's keep-indices. 合成's card reports the cut
+`flags.curation` records what the Synthesiser's pass cut, per section, measured off the arrays
+rather than inferred from the curator's keep-indices. That card reports the cut
 rather than what survived: the other four cards already are what survived, so a
 kept-count says nothing about the work this role did. The field is absent on
-results cached before it existed and whenever 合成 fell back, and the card then
+results cached before it existed and whenever the Synthesiser fell back, and the card then
 says so instead of claiming that nothing was cut.
 
 The current `analysis_id` is stored in the URL as `?analysis=...`. Reloading the

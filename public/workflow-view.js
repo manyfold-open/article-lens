@@ -41,21 +41,6 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  function lang() {
-    return options.getLang ? options.getLang() : 'en';
-  }
-
-  function localize(value) {
-    if (value == null) return '';
-    if (typeof value === 'string') return value;
-    const current = lang();
-    return value[current] || value.zh || value.en || '';
-  }
-
-  function tr(zh, en) {
-    return lang() === 'zh' ? zh : en;
-  }
-
   function parseTime(value) {
     const parsed = Date.parse(value || '');
     return Number.isFinite(parsed) ? parsed : 0;
@@ -72,18 +57,18 @@
 
   function stateLabel(value) {
     return ({
-      pending: tr('等待', 'Pending'),
-      running: tr('执行中', 'Running'),
-      success: tr('成功', 'Success'),
-      cache: tr('缓存', 'Cache'),
-      skipped: tr('略过', 'Skipped'),
-      fallback: tr('备援', 'Fallback'),
-      retrying: tr('重试中', 'Retrying'),
-      error: tr('失败', 'Error'),
-      queued: tr('排队中', 'Queued'),
-      retry_wait: tr('等待重试', 'Retry wait'),
-      done: tr('完成', 'Done'),
-    })[value] || value || tr('等待', 'Pending');
+      pending: 'Pending',
+      running: 'Running',
+      success: 'Success',
+      cache: 'Cache',
+      skipped: 'Skipped',
+      fallback: 'Fallback',
+      retrying: 'Retrying',
+      error: 'Error',
+      queued: 'Queued',
+      retry_wait: 'Retry wait',
+      done: 'Done',
+    })[value] || value || 'Pending';
   }
 
   function init(config) {
@@ -107,26 +92,23 @@
     if (status) {
       status.className = `workflow-overall status-${esc(state.phase || 'queued')}`;
       status.textContent = state.reconnecting
-        ? tr('重连中…', 'Reconnecting…')
+        ? 'Reconnecting…'
         : stateLabel(state.phase);
     }
     const attemptEl = root.querySelector('[data-workflow-attempt]');
-    if (attemptEl) attemptEl.textContent = tr(
-      `第 ${state.activeAttempt || 0}/${state.maxAttempts || 1} 轮`,
-      `Attempt ${state.activeAttempt || 0}/${state.maxAttempts || 1}`,
-    );
+    if (attemptEl) attemptEl.textContent = `Attempt ${state.activeAttempt || 0}/${state.maxAttempts || 1}`;
     const durationEl = root.querySelector('[data-workflow-duration]');
     if (durationEl) durationEl.textContent = attempt?.startedAt
       ? duration(attempt.startedAt, attempt.endedAt)
       : '—';
     const tokenEl = root.querySelector('[data-workflow-tokens]');
     const tokenTotal = attempt?.usage?.total || 0;
-    if (tokenEl) tokenEl.textContent = tr(`${tokenTotal} 个 token`, `${tokenTotal} tokens`);
+    if (tokenEl) tokenEl.textContent = `${tokenTotal} tokens`;
     const errorBanner = root.querySelector('[data-workflow-error]');
     if (errorBanner) {
       const reason = state.error || attempt?.error || '';
       errorBanner.hidden = !reason;
-      errorBanner.textContent = reason ? `${state.phase === 'error' ? tr('失败原因', 'Failure reason') : tr('重试原因', 'Retry reason')}: ${reason}` : '';
+      errorBanner.textContent = reason ? `${state.phase === 'error' ? 'Failure reason' : 'Retry reason'}: ${reason}` : '';
     }
     root.querySelectorAll('[data-workflow-view]').forEach(view => {
       view.hidden = view.dataset.workflowView !== activeTab;
@@ -141,7 +123,7 @@
   function graphHtml(state, attempt) {
     const plan = attempt?.plan;
     if (!plan) {
-      return `<div class="workflow-empty">${esc(tr('等待后端送出真实执行拓扑…', 'Waiting for the backend execution graph…'))}</div>`;
+      return `<div class="workflow-empty">${esc('Waiting for the backend execution graph…')}</div>`;
     }
     const positions = graphPositions(plan);
     const marker = `<defs>
@@ -172,13 +154,13 @@
       const decision = edge.kind === 'conditional' && attempt.escalateDecision
         ? ` · ${attempt.escalateDecision.decision}`
         : '';
-      const summary = `${localize(plan.nodes.find(node => node.id === edge.from)?.label) || edge.from} → ${localize(plan.nodes.find(node => node.id === edge.to)?.label) || edge.to} · ${edge.kind}${decision}`;
+      const summary = `${plan.nodes.find(node => node.id === edge.from)?.label || edge.from} → ${plan.nodes.find(node => node.id === edge.to)?.label || edge.to} · ${edge.kind}${decision}`;
       const labelX = (x1 + x2) / 2;
       const labelY = (y1 + y2) / 2 - 7;
       return `<g class="workflow-edge edge-${esc(edge.kind)}" data-tip="${esc(summary)}">
         <path d="${esc(d)}" marker-end="url(#wf-arrow)"></path>
         ${edge.kind !== 'dependency'
-          ? `<text x="${labelX}" y="${labelY}">${esc(edge.kind === 'relay' ? tr('接力', 'relay') : (attempt.escalateDecision?.decision || tr('条件', 'condition')))}</text>`
+          ? `<text x="${labelX}" y="${labelY}">${esc(edge.kind === 'relay' ? 'relay' : (attempt.escalateDecision?.decision || 'condition'))}</text>`
           : ''}
       </g>`;
     }).join('');
@@ -189,20 +171,20 @@
       const metadata = [
         config.effort ? config.effort : '',
         config.replicas > 1 ? `×${config.replicas}` : '',
-        config.debate ? tr('辩论', 'debate') : '',
+        config.debate ? 'debate' : '',
       ].filter(Boolean).join(' · ');
       const metrics = [
         duration(node.startedAt, node.endedAt),
         node.tokens ? `${node.tokens}t` : '',
-        calls ? tr(`${calls} 次调用`, `${calls} call${calls === 1 ? '' : 's'}`) : '',
+        calls ? `${calls} call${calls === 1 ? '' : 's'}` : '',
       ].filter(Boolean).join(' · ');
       const clickable = config.kind === 'agent';
       return `<button type="button"
         class="workflow-node state-${esc(node.state || 'pending')} ${config.enabled ? '' : 'disabled'}"
         style="left:${position[0]}px;top:${position[1]}px"
         ${clickable ? `data-workflow-agent="${esc(config.id)}"` : 'disabled'}
-        aria-label="${esc(`${localize(config.label)} · ${stateLabel(node.state)}`)}">
-        <span class="workflow-node-title">${esc(localize(config.label))}</span>
+        aria-label="${esc(`${config.label} · ${stateLabel(node.state)}`)}">
+        <span class="workflow-node-title">${esc(config.label)}</span>
         <span class="workflow-node-state">${esc(stateLabel(node.state))}</span>
         ${metadata ? `<span class="workflow-node-meta">${esc(metadata)}</span>` : ''}
         ${metrics ? `<span class="workflow-node-metrics">${esc(metrics)}</span>` : ''}
@@ -211,10 +193,10 @@
     const accessibleEdges = (plan.edges || []).map(edge => {
       const from = plan.nodes.find(node => node.id === edge.from);
       const to = plan.nodes.find(node => node.id === edge.to);
-      return `<li>${esc(`${localize(from?.label) || edge.from} → ${localize(to?.label) || edge.to} (${edge.kind})`)}</li>`;
+      return `<li>${esc(`${from?.label || edge.from} → ${to?.label || edge.to} (${edge.kind})`)}</li>`;
     }).join('');
     return `<div class="workflow-graph-canvas">
-      <svg class="workflow-edges" width="1088" height="390" viewBox="0 0 1088 390" role="img" aria-label="${esc(tr('Agent 工作流依赖图', 'Agent workflow dependency graph'))}">
+      <svg class="workflow-edges" width="1088" height="390" viewBox="0 0 1088 390" role="img" aria-label="${esc('Agent workflow dependency graph')}">
         ${marker}${edgeSvg}
       </svg>
       ${nodeHtml}
@@ -225,7 +207,7 @@
   function timelineHtml(state) {
     const attempts = Object.keys(state.attempts).map(Number).sort((a, b) => a - b);
     if (!attempts.length) {
-      return `<div class="workflow-empty">${esc(tr('等待执行事件…', 'Waiting for execution events…'))}</div>`;
+      return `<div class="workflow-empty">${esc('Waiting for execution events…')}</div>`;
     }
     return attempts.map(number => {
       const attempt = state.attempts[number];
@@ -263,20 +245,20 @@
         return `<button type="button" class="workflow-timeline-row" data-workflow-agent="${esc(call.agent)}"
           aria-label="${esc(`${call.agent} ${call.callId} ${stateLabel(call.state)}`)}">
           <span class="workflow-timeline-label">
-            <strong>${esc(localize(options.agentNames?.[call.agent]) || call.agent)}</strong>
+            <strong>${esc(options.agentNames?.[call.agent] || call.agent)}</strong>
             <small>${esc(call.callId.slice(0, 8))}${call.transportAttempts > 1 ? ` · A2A ×${call.transportAttempts}` : ''}</small>
           </span>
           <span class="workflow-timeline-track">
             <span class="workflow-timeline-bar state-${esc(call.state)}" style="left:${left.toFixed(2)}%;width:${Math.min(100 - left, width).toFixed(2)}%"></span>
             ${segments}
-            ${retries ? `<span class="workflow-timeline-badge retry">${esc(tr(`重试 ${retries}`, `${retries} retry`))}</span>` : ''}
-            ${errors ? `<span class="workflow-timeline-badge error">${esc(tr('错误', 'error'))}</span>` : ''}
+            ${retries ? `<span class="workflow-timeline-badge retry">${esc(`${retries} retry`)}</span>` : ''}
+            ${errors ? `<span class="workflow-timeline-badge error">${esc('error')}</span>` : ''}
           </span>
         </button>`;
-      }).join('') : `<div class="workflow-empty small">${esc(tr('本轮尚未开始 A2A 调用', 'No A2A calls in this attempt yet'))}</div>`;
+      }).join('') : `<div class="workflow-empty small">${esc('No A2A calls in this attempt yet')}</div>`;
       return `<section class="workflow-attempt">
         <header>
-          <strong>${esc(tr(`第 ${number} 轮`, `Attempt ${number}`))}</strong>
+          <strong>${esc(`Attempt ${number}`)}</strong>
           <span class="state-${esc(attempt.state)}">${esc(stateLabel(attempt.state))}</span>
           <time>${esc(duration(attempt.startedAt, attempt.endedAt) || '—')}</time>
           ${attempt.error ? `<span class="workflow-attempt-error" data-tip="${esc(attempt.error)}">${esc(attempt.error)}</span>` : ''}

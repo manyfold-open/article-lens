@@ -34,7 +34,7 @@ login=$(printf '{"passcode":"%s"}' "$ACCESS_PASSCODE" \
   | curl -sS --max-time 30 -c "$cookie_jar" -H 'Content-Type: application/json' --data-binary @- "$BASE/api/access/login")
 echo "$login" | grep -q '"authenticated":true' && pass "access: passcode login" || fail "access: login failed"
 
-# 1. analyze (pasted technical text, >220 chars so the captain runs 小词) —
+# 1. analyze (pasted technical text, >220 chars so the captain runs Jargon) —
 #    expect plan + result, ≥1 jargon term, no fatal error
 TXT="Modern LLM agents run an event-driven loop: the model calls tools, observes results, and iterates until done. Retrieval-augmented generation (RAG) fetches context from a vector database using HNSW approximate nearest-neighbour search, and int8 quantization shrinks the KV cache. Reward models and RLHF fine-tune behaviour, while an LLM-as-a-judge grades outputs against a rubric before deployment."
 out=$(curl -s -N --max-time 170 -b "$cookie_jar" "$BASE/api/analyze" --data-urlencode "text=$TXT" -G)
@@ -44,15 +44,11 @@ terms=$(echo "$out" | grep -oE '"term":"[^"]+"' | sort -u | wc -l | tr -d ' ')
 [ "${terms:-0}" -ge 1 ] && pass "analyze: jargon terms ($terms)" || fail "analyze: 0 jargon terms"
 echo "$out" | grep -q '"event":"error","message"' && fail "analyze: fatal error event" || pass "analyze: no fatal error"
 
-# 2. translate (zh -> en)
-tr=$(curl -s --max-time 60 -b "$cookie_jar" -X POST "$BASE/api/translate" -H 'Content-Type: application/json' -d '{"zh":["向量数据库"]}')
-echo "$tr" | grep -q '"en":\["' && pass "translate: returns en" || fail "translate: bad ($tr)"
-
-# 3. define (Ask 小词)
+# 2. define (Ask Jargon)
 df=$(curl -s --max-time 60 -b "$cookie_jar" -X POST "$BASE/api/define" -H 'Content-Type: application/json' -d '{"term":"HNSW"}')
 echo "$df" | grep -q '"explain"' && pass "define: returns explain" || fail "define: bad ($df)"
 
-# 4. health snapshot
+# 3. health snapshot
 hb=$(curl -s --max-time 90 -b "$cookie_jar" "$BASE/api/health")
 up=$(echo "$hb" | grep -oE '"up":[0-9]+' | grep -oE '[0-9]+' | head -1)
 total=$(echo "$hb" | grep -oE '"total":[0-9]+' | grep -oE '[0-9]+' | head -1)

@@ -1,6 +1,6 @@
 # Article Lens 📰
 
-A bilingual (中-first / EN-on-demand) article reading companion,
+An English article reading companion,
 deployed as a single Cloudflare Worker. Paste a HN link, any article URL, or some
 text → a pixel-art "office" of agents reads it and produces a verdict, plain-language
 jargon, a summary, and (for HN threads) a comment digest.
@@ -72,7 +72,7 @@ KV entries are not reused.
 ## Endpoints
 
 `GET /api/analyze?id=|url=|text=` (SSE) · `POST /api/analyses` ·
-`GET /api/analyses/:id/status` · `POST /api/translate` · `POST /api/define` ·
+`GET /api/analyses/:id/status` · `POST /api/define` ·
 `GET /api/frontpage` · `GET /api/health` (agent up/down + latency). Application
 and API routes require the access session created by `POST /api/access/login`.
 

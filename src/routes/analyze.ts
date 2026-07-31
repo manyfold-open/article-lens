@@ -46,10 +46,7 @@ function markLocalFallback(result: HNLensResult, reason: string): void {
     agent,
     {
       mode: 'fallback' as const,
-      reason: {
-        zh: `Manyfold 编排未能完成，使用本地备援结果。原因：${reason}`,
-        en: `Manyfold orchestration did not complete; using the local fallback result. Reason: ${reason}`,
-      },
+      reason: `Manyfold orchestration did not complete; using the local fallback result. Reason: ${reason}`,
     },
   ]))
 }
@@ -264,11 +261,11 @@ async function replayResult(result: HNLensResult, emit: (event: SSEEvent) => voi
     ['ctx', result.verdict],
   ]
   for (const [agent, data] of sections) {
-    emit({ event: 'status', agent, state: 'done', mode: 'cache', label: { zh: '已完成 (缓存)', en: 'Done (cached)' } })
+    emit({ event: 'status', agent, state: 'done', mode: 'cache', label: 'Done (cached)' })
     emit({ event: 'section', agent, data })
     await sleep(50)
   }
-  emit({ event: 'status', agent: 'synth', state: 'done', mode: 'cache', label: { zh: '已完成 (缓存)', en: 'Done (cached)' } })
+  emit({ event: 'status', agent: 'synth', state: 'done', mode: 'cache', label: 'Done (cached)' })
   if (result.usage) {
     for (const [agent, tokens] of Object.entries(result.usage.byAgent)) {
       emit({ event: 'usage', agent, tokens })

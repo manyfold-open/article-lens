@@ -24,34 +24,43 @@ test('extracts JSON from fenced model output and surrounding commentary', () => 
   });
 });
 
-test('repairs unescaped inner quotes commonly returned in Chinese text', () => {
-  const output = '{"tldr":{"zh":"这与"开源"有别"},"key_points":[]}';
+test('repairs unescaped inner quotes, which roles emit despite being asked not to', () => {
+  const output = '{"tldr":"this is "open source" but not as you know it","key_points":[]}';
   assert.deepEqual(json.parseLoose(output), {
-    tldr: { zh: '这与"开源"有别' },
+    tldr: 'this is "open source" but not as you know it',
     key_points: [],
   });
 });
 
+// The repair decides by JSON structure, not by the characters either side, so a
+// quote the model leaves in a verbatim excerpt is escaped whatever the source
+// article is written in. The earlier rule keyed off letter-to-letter adjacency
+// and so only ever fired on the second of these two.
+test('repairs an inner quote whether or not it is space-separated', () => {
+  assert.deepEqual(json.parseLoose('{"quote":"he said "no" twice"}'), { quote: 'he said "no" twice' });
+  assert.deepEqual(json.parseLoose('{"quote":"a"b"c"}'), { quote: 'a"b"c' });
+});
+
 test('parses arrays and keeps braces that belong to string values', () => {
-  const output = 'prefix [{"term":"RAG","explain":{"zh":"检索 {文档} 后生成"}}] suffix';
+  const output = 'prefix [{"term":"RAG","explain":"retrieves {documents} then generates"}] suffix';
   assert.deepEqual(json.parseLoose(output), [
-    { term: 'RAG', explain: { zh: '检索 {文档} 后生成' } },
+    { term: 'RAG', explain: 'retrieves {documents} then generates' },
   ]);
 });
 
 test('returns null for truncated or non-JSON agent output', () => {
-  assert.equal(json.parseLoose('{"summary":{"zh":"unfinished'), null);
+  assert.equal(json.parseLoose('{"summary":"unfinished'), null);
   assert.equal(json.parseLoose('gemini exited 1: no JSON output'), null);
   assert.equal(json.parseLoose(''), null);
 });
 
 // parseLoose collapses every failure to null, but the fixes differ: a cut-off
 // response means the role wrote too much for its output cap, while prose means
-// the prompt or format is not landing. 小词 has the longest structured output
+// the prompt or format is not landing. Jargon has the longest structured output
 // of any role, so it is the one that needs the two told apart.
 test('classifies a cut-off response as truncated, not as a format failure', () => {
-  assert.equal(json.classifyUnparseable('{"summary":{"zh":"unfinished'), 'truncated');
-  assert.equal(json.classifyUnparseable('[{"term":"RAG","explain":{"zh":"检索后生'), 'truncated');
+  assert.equal(json.classifyUnparseable('{"summary":"unfinished'), 'truncated');
+  assert.equal(json.classifyUnparseable('[{"term":"RAG","explain":"retrieves then gen'), 'truncated');
   // A fence the model never closed is still a cut-off response.
   assert.equal(json.classifyUnparseable('```json\n[{"term":"RAG"'), 'truncated');
 });

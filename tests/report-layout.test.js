@@ -35,7 +35,7 @@ test('the verdict reason owns its own row', () => {
   assert.match(page, /\.verdict-bar \{[^}]*align-items:\s*flex-start/s)
 })
 
-// 小潜's camps are the section's primary finding, so they stay visible as a deck
+// Comments's camps are the section's primary finding, so they stay visible as a deck
 // of labelled strips. The four secondary groups collapse behind a count, because
 // a collapsed row that says nothing reads as an empty section.
 test('the comment digest renders camps as a deck and folds the secondary groups', () => {

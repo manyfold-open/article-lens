@@ -1,5 +1,4 @@
 // ── Bilingual string ──────────────────────────────────────────────
-export interface BiStr { en: string; zh: string }
 
 // ── Core types ────────────────────────────────────────────────────
 // Why a completed agent call's output could not be parsed. 'truncated' means the
@@ -14,11 +13,10 @@ export type SeenIn       = 'article' | 'comments' | 'both'
 
 export interface JargonTerm {
   term: string
-  zh_term: string
-  explain: BiStr
+  explain: string
   seen_in: SeenIn
   appeared_as?: string
-  // Selection signals (set by 小词): whether the term belongs to the article's
+  // Selection signals (set by Jargon): whether the term belongs to the article's
   // technical domain, how hard it is (1-5), and whether not knowing it blocks
   // comprehension. Used to rank + filter which terms are worth recording.
   on_topic?: boolean
@@ -27,27 +25,30 @@ export interface JargonTerm {
 }
 
 export interface Camp {
-  label: BiStr
-  stance: BiStr
+  label: string
+  stance: string
   weight: CampWeight
   quote: string
   comment_id: number
 }
 
-// One section's size before and after 合成 pruned it. Always measured off the
+// One section's size before and after Synthesiser pruned it. Always measured off the
 // arrays themselves rather than derived from the curator's keep-indices, because
 // `keepByIndex` deliberately keeps the original array when those indices are
 // unusable: only measuring reports what the reader actually ends up with.
 export interface CurationTrim { before: number; after: number }
 
 export interface ExpertCorrection {
-  correction: BiStr
+  correction: string
   comment_id: number
 }
 
 export interface SpicyTake {
   quote: string
-  zh: string
+  // The crew's line about the quote. It was named `zh` when the note was written
+  // in Chinese and the quote stayed in its original English; both are English
+  // now, so the name describes what it is.
+  note: string
   comment_id: number
 }
 
@@ -56,17 +57,17 @@ export interface HNLensResult {
   item_id: number
   spec_version: number
   type: ItemType
-  title: BiStr
+  title: string
   url: string
   meta: { points: number; comments: number; author: string; age: string }
-  verdict: { worth_reading: WorthReading; why_frontpage: BiStr; tier: ReadingTier }
+  verdict: { worth_reading: WorthReading; why_frontpage: string; tier: ReadingTier }
   jargon: JargonTerm[]
-  summary: { tldr: BiStr; key_points: BiStr[] }
+  summary: { tldr: string; key_points: string[] }
   comment_digest: {
-    overview: BiStr
+    overview: string
     camps: Camp[]
-    consensus: BiStr
-    disputes: BiStr[]
+    consensus: string
+    disputes: string[]
     expert_corrections: ExpertCorrection[]
     spicy: SpicyTake[]
   }
@@ -81,7 +82,7 @@ export interface HNLensResult {
     // retry would reach the same wall.
     agent_sources?: Partial<Record<AgentName, {
       mode: 'real' | 'cache' | 'fallback' | 'skipped'
-      reason: BiStr
+      reason: string
       budget_limited?: boolean
       // `output_unparseable` marks a fallback where the peer DID answer but the
       // output could not be parsed. Separate from both budget_limited and a
@@ -90,7 +91,7 @@ export interface HNLensResult {
       // or format is not landing.
       output_unparseable?: UnparseableKind
     }>>
-    // What 合成's curation pass actually removed, per section. Absent on results
+    // What Synthesiser's curation pass actually removed, per section. Absent on results
     // written before this field existed and whenever synth fell back, so the
     // reader is told "not pruned this time" instead of a fabricated zero.
     curation?: {
@@ -100,11 +101,11 @@ export interface HNLensResult {
     }
   }
   briefing?: {
-    route: BiStr
-    assignments: { agent: AgentName; action: 'run' | 'skip' | 'reuse'; reason: BiStr }[]
+    route: string
+    assignments: { agent: AgentName; action: 'run' | 'skip' | 'reuse'; reason: string }[]
   }
-  // Optional editor's note from the 统整/Synthesizer curation pass.
-  editor_note?: BiStr
+  // Optional editor's note from the Synthesiser/Synthesizer curation pass.
+  editor_note?: string
   // Where the input came from: an HN thread, a bare article URL, or pasted text.
   source?: 'hn' | 'article' | 'text'
   // Token meter: estimated tokens spent this run (input+output), total + per agent.
@@ -139,21 +140,21 @@ export interface GraphConfig {
   // v1 legacy skip map (kept working; superseded by `nodes` when both present).
   enabled?: Partial<Record<'sum' | 'jargon' | 'comments' | 'ctx', boolean>>
   groups?: { members: string[]; mode: 'parallel' | 'relay' }[]
-  // Conditional "escalate" mode (省钱渐进): when true, run a cheap phase first
+  // Conditional "escalate" mode (Thrifty Progressive): when true, run a cheap phase first
   // (only sum + ctx verdict). If the verdict says the item is worth reading,
   // escalate ("go") and run jargon + comments + synth; otherwise stop and skip
   // jargon + comments. Falsy/absent → today's full flow, byte-for-byte.
   escalate?: boolean
-  // "Debate" verdict (辩论裁定): when true, 小导 runs TWICE with opposing framings
-  // (正方 argues worth-reading / 反方 argues skippable) and a third adjudication
+  // "Debate" verdict (Debate Verdict): when true, Context runs TWICE with opposing framings
+  // (pro argues worth-reading / con argues skippable) and a third adjudication
   // pass merges them into one balanced verdict. This is the one spot where
   // multi-agent genuinely changes the OUTPUT (opposing prompts, not identical
   // runs). Falsy/absent → single ctx call (= today). Costs ~3× ctx tokens.
   debate?: boolean
-  // Reader level (受众语气): shifts the tone/depth of 小摘/小词/小导/统整.
+  // Reader level (Audience tone): shifts the tone/depth of Summariser/Jargon/Context/Synthesiser.
   // 'beginner' → plainer, more analogies, explain more terms, higher accessibility
-  // bar; 'expert' → terser, skip basics, only advanced jargon. Absent → today's
-  // default ("会写程序但非此领域专家", byte-for-byte). Same tokens, different prompt.
+  // bar; 'expert' → terser, skip basics, only advanced jargon. Absent → the
+  // default (a reader who codes but is not a specialist). Same tokens, different prompt.
   audience?: 'beginner' | 'expert'
 }
 
@@ -165,8 +166,8 @@ export type WorkflowNodeId = 'input' | AgentName | 'report'
 export type WorkflowNodeState = 'queued' | 'running' | 'retry_wait' | 'done' | 'error'
 
 export interface SSEPlan   { event: 'plan';   agents: AgentName[] }
-export interface SSEStatus { event: 'status'; agent: AgentName; state: AgentState; label: BiStr; mode?: AgentRunMode }
-export interface SSEStep   { event: 'step';   agent: AgentName; label: BiStr }
+export interface SSEStatus { event: 'status'; agent: AgentName; state: AgentState; label: string; mode?: AgentRunMode }
+export interface SSEStep   { event: 'step';   agent: AgentName; label: string }
 export interface SSEResult { event: 'result'; data: HNLensResult }
 export interface SSEError  {
   event: 'error'
@@ -179,7 +180,7 @@ export interface SSEAgentTrace {
   agent: AgentName
   call_id: string
   phase: 'input' | 'progress' | 'output' | 'error'
-  label: BiStr
+  label: string
   at: string
   attempt?: number
   // A failed transport attempt can be recoverable. Consumers must not mark the
@@ -209,7 +210,7 @@ export interface SSERetry {
 export interface WorkflowPlanNode {
   id: WorkflowNodeId
   kind: 'source' | 'agent' | 'sink'
-  label: BiStr
+  label: string
   enabled: boolean
   effort?: Effort
   replicas?: number
@@ -220,7 +221,7 @@ export interface WorkflowPlanEdge {
   from: WorkflowNodeId
   to: WorkflowNodeId
   kind: 'dependency' | 'relay' | 'conditional'
-  label?: BiStr
+  label?: string
 }
 export interface SSEWorkflowPlan {
   event: 'workflow_plan'

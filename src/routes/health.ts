@@ -8,12 +8,12 @@ const HEALTH_CACHE_KEY = 'health:latest'
 
 function healthAgents(env: Env): Array<{ name: string; id: string }> {
   return [
-    { name: '小摘 sum', id: env.AGENT_SUMMARIZER },
-    { name: '小词 jargon', id: env.AGENT_JARGON },
-    { name: '小潜-map', id: env.AGENT_COMMENT_MAP },
-    { name: '小潜-reduce', id: env.AGENT_COMMENT_REDUCE },
-    { name: '小导 ctx', id: env.AGENT_CONTEXT },
-    { name: '合成 synth', id: env.AGENT_SYNTHESIZER },
+    { name: 'Summariser', id: env.AGENT_SUMMARIZER },
+    { name: 'Jargon', id: env.AGENT_JARGON },
+    { name: 'Comments-map', id: env.AGENT_COMMENT_MAP },
+    { name: 'Comments-reduce', id: env.AGENT_COMMENT_REDUCE },
+    { name: 'Context', id: env.AGENT_CONTEXT },
+    { name: 'Synthesiser', id: env.AGENT_SYNTHESIZER },
   ]
 }
 
