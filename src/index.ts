@@ -39,8 +39,9 @@ export default {
     }
     let runtimeEnv = env
     if (isArticleAccessProtectedPath(url.pathname)) {
+      // TEMPORARY: access-code gate disabled. Restore by re-adding
+      // if (access.response) return access.response below.
       const access = await guardArticleAccess(request, env)
-      if (access.response) return access.response
       runtimeEnv = access.runtimeEnv
     } else if (url.pathname.startsWith('/api/')) {
       runtimeEnv = await resolveRuntimeEnv(env)
