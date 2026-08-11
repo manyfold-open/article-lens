@@ -1,4 +1,7 @@
 import type { Env } from '../schema'
+// Explicit .ts extension: the test runner loads these modules through Node's
+// ESM resolver, which does not probe extensions the way the bundler does.
+import { base64UrlToBytes, bytesToBase64Url, deriveBytes, safeEqual, seal, sign, unseal } from '../crypto.ts'
 
 type RuntimeValues = Record<string, string>
 
@@ -120,87 +123,8 @@ const FIELDS: SettingsField[] = [
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
-}
-
-function base64UrlToBytes(value: string): Uint8Array {
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
-  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4)
-  const binary = atob(padded)
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
-}
-
-async function deriveBytes(password: string, purpose: string): Promise<ArrayBuffer> {
-  return crypto.subtle.digest('SHA-256', textEncoder.encode(`${PROJECT_ID}:${purpose}:${password}`))
-}
-
-async function sign(value: string, password: string, purpose = 'session'): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    await deriveBytes(password, purpose),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign('HMAC', key, textEncoder.encode(value))))
-}
-
-async function safeEqual(left: string, right: string): Promise<boolean> {
-  const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest('SHA-256', textEncoder.encode(left)),
-    crypto.subtle.digest('SHA-256', textEncoder.encode(right)),
-  ])
-  const leftBytes = new Uint8Array(leftHash)
-  const rightBytes = new Uint8Array(rightHash)
-  let difference = leftBytes.length ^ rightBytes.length
-  for (let index = 0; index < leftBytes.length; index += 1) {
-    difference |= leftBytes[index] ^ (rightBytes[index] ?? 0)
-  }
-  return difference === 0
-}
-
-async function encryptSettings(settings: StoredSettings, password: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    await deriveBytes(password, 'settings'),
-    'AES-GCM',
-    false,
-    ['encrypt'],
-  )
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    textEncoder.encode(JSON.stringify(settings)),
-  )
-  return JSON.stringify({
-    v: 1,
-    iv: bytesToBase64Url(iv),
-    ciphertext: bytesToBase64Url(new Uint8Array(encrypted)),
-  })
-}
-
 async function decryptSettings(raw: string, password: string): Promise<StoredSettings> {
-  const envelope = JSON.parse(raw) as { v?: number; iv?: string; ciphertext?: string }
-  if (envelope.v !== 1 || !envelope.iv || !envelope.ciphertext) {
-    throw new Error('unsupported settings format')
-  }
-  const key = await crypto.subtle.importKey(
-    'raw',
-    await deriveBytes(password, 'settings'),
-    'AES-GCM',
-    false,
-    ['decrypt'],
-  )
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64UrlToBytes(envelope.iv) },
-    key,
-    base64UrlToBytes(envelope.ciphertext),
-  )
-  const parsed = JSON.parse(textDecoder.decode(decrypted)) as StoredSettings
+  const parsed = await unseal<StoredSettings>(raw, password, 'settings')
   if (!parsed || typeof parsed.values !== 'object' || Array.isArray(parsed.values)) {
     throw new Error('invalid settings payload')
   }
@@ -436,7 +360,7 @@ export async function handleAdminSettings(request: Request, env: Env): Promise<R
   if (errors.length) return adminJson({ error: 'validation failed', details: [...new Set(errors)] }, 400)
 
   const saved: StoredSettings = { updatedAt: new Date().toISOString(), values: next }
-  await env.CACHE.put(SETTINGS_KEY, await encryptSettings(saved, password))
+  await env.CACHE.put(SETTINGS_KEY, await seal(saved, password, 'settings'))
   return adminJson({ saved: true, updated_at: saved.updatedAt })
 }
 
