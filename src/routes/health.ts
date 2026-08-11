@@ -10,7 +10,7 @@ function healthAgents(env: Env): Array<{ name: string; id: string }> {
   return [
     { name: 'Summariser', id: env.AGENT_SUMMARIZER },
     { name: 'Jargon', id: env.AGENT_JARGON },
-    { name: 'Comments-map', id: env.AGENT_COMMENT_MAP },
+    { name: 'Comments-map', id: env.AGENT_COMMENT_MAP ?? '' },
     { name: 'Comments-reduce', id: env.AGENT_COMMENT_REDUCE },
     { name: 'Context', id: env.AGENT_CONTEXT },
     { name: 'Synthesiser', id: env.AGENT_SYNTHESIZER },

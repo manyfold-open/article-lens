@@ -183,7 +183,8 @@ function cookieValue(request: Request, cookieName = COOKIE_NAME): string | null 
   return null
 }
 
-async function isAuthenticated(request: Request, password: string): Promise<boolean> {
+/** Exported so the connect routes reuse this gate instead of adding a second one. */
+export async function isAdminAuthenticated(request: Request, password: string): Promise<boolean> {
   const token = cookieValue(request)
   if (!token) return false
   const separator = token.lastIndexOf('.')
@@ -208,7 +209,7 @@ async function makeSession(password: string): Promise<string> {
   return `${payload}.${await sign(payload, password)}`
 }
 
-function adminJson(body: unknown, status = 200, headers?: HeadersInit): Response {
+export function adminJson(body: unknown, status = 200, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers)
   responseHeaders.set('Content-Type', 'application/json; charset=utf-8')
   responseHeaders.set('Cache-Control', 'no-store')
@@ -216,7 +217,7 @@ function adminJson(body: unknown, status = 200, headers?: HeadersInit): Response
   return new Response(JSON.stringify(body), { status, headers: responseHeaders })
 }
 
-function sameOrigin(request: Request): boolean {
+export function sameOrigin(request: Request): boolean {
   const fetchSite = request.headers.get('sec-fetch-site')
   if (fetchSite === 'cross-site') return false
   const origin = request.headers.get('origin')
@@ -288,7 +289,7 @@ export async function handleAdminSettings(request: Request, env: Env): Promise<R
     )
   }
 
-  if (!await isAuthenticated(request, password)) {
+  if (!await isAdminAuthenticated(request, password)) {
     return adminJson({ error: 'authentication required' }, 401)
   }
 
