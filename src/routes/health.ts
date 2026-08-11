@@ -1,5 +1,5 @@
 import { cacheGet, cachePut } from '../cache'
-import { checkMfPeerAccess } from '../crew/mf'
+import { checkMfAgentAccess } from '../crew/mf'
 import { jsonResponse } from '../http'
 import type { Env } from '../schema'
 import { parseFreshHealthSnapshot } from './health-snapshot'
@@ -29,7 +29,7 @@ export async function checkAgentHealth(env: Env): Promise<unknown> {
   const agents = await Promise.all(healthAgents(env).map(async ({ name, id }) => {
     const startedAt = Date.now()
     try {
-      await checkMfPeerAccess(env, id)
+      await checkMfAgentAccess(env, id)
       return { name, id, ok: true, ms: Date.now() - startedAt, check: 'peer_access' }
     } catch (error) {
       return { name, id, ok: false, ms: Date.now() - startedAt, check: 'peer_access', error: shortError(error) }

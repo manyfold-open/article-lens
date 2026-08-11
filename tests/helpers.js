@@ -46,4 +46,40 @@ function responseCookie(response, name) {
   return cookie;
 }
 
-module.exports = { memoryCache, request, responseCookie };
+/**
+ * Stands in for the A2ARuntime that resolveRuntimeEnv attaches to env.
+ *
+ * Each entry needs agentId/name/rpcUrl/token; expiresAt is epoch ms or null.
+ * Keeps mf.ts tests free of the whole connect handshake, which has its own
+ * suite in connect.test.js.
+ */
+function fakeRuntime(entries = []) {
+  const agents = entries.map(entry => ({
+    agentId: entry.agentId,
+    name: entry.name ?? entry.agentId,
+    description: entry.description ?? '',
+    rpcUrl: entry.rpcUrl,
+    expiresAt: entry.expiresAt ? new Date(entry.expiresAt).toISOString() : null,
+    verified: entry.verified ?? true,
+    warning: null,
+    connectedAt: '2026-08-11T00:00:00.000Z',
+  }));
+  const credentials = new Map(entries.map(entry => [entry.agentId, {
+    agentId: entry.agentId,
+    rpcUrl: entry.rpcUrl,
+    token: entry.token,
+    label: entry.name ?? entry.agentId,
+    expiresAt: entry.expiresAt ?? null,
+  }]));
+  return {
+    mode: entries.length ? 'live' : 'mock',
+    roles: { sum: null, ctx: null, synth: null, jargon: null, comments: null },
+    agents,
+    credential: agentId => credentials.get(agentId) ?? null,
+    soonestExpiryAt: null,
+    distinctAgentCount: entries.length,
+    toJSON: () => '[a2a-runtime]',
+  };
+}
+
+module.exports = { memoryCache, request, responseCookie, fakeRuntime };
