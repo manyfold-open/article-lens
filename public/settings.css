@@ -10,6 +10,20 @@
   --accent-ink: #1d0d06;
   --danger: #ff8278;
   --success: #8fd6a4;
+
+  /* Maps this page's palette onto the shared control structure in
+     /controls.css. Declared on :root rather than on .ui-select because a
+     variable set on the control itself would not reach the option list, which
+     is a child of the same host but painted from these values. */
+  --ui-control-border: var(--line);
+  --ui-control-bg: var(--panel-2);
+  --ui-control-ink: var(--text);
+  --ui-control-muted: var(--muted);
+  --ui-control-hover: var(--accent);
+  --ui-control-focus: var(--accent);
+  --ui-control-menu: var(--panel);
+  --ui-control-active-bg: var(--panel-2);
+  --ui-control-on: var(--accent);
 }
 
 * { box-sizing: border-box; }
