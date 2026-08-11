@@ -54,6 +54,15 @@ up=$(echo "$hb" | grep -oE '"up":[0-9]+' | grep -oE '[0-9]+' | head -1)
 total=$(echo "$hb" | grep -oE '"total":[0-9]+' | grep -oE '[0-9]+' | head -1)
 echo "  health: up=${up:-?}/${total:-?}"
 [ -n "${up:-}" ] && pass "health: endpoint ok" || fail "health: bad ($hb)"
+# total=0 means no agents are connected, so the app is serving local mock
+# results. The analyze and define checks above pass against mock output, so
+# without this gate a deploy with no connected agents looks entirely healthy.
+if [ "${total:-0}" -eq 0 ]; then
+  fail "health: no agents connected — the app is in mock mode, connect one on /settings"
+else
+  [ "${up:-0}" -eq "${total:-0}" ] && pass "health: all connected agents reachable" \
+    || fail "health: only ${up:-0}/${total} agents reachable"
+fi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "SMOKE PASS"; else echo "SMOKE FAIL ($fails)"; fi

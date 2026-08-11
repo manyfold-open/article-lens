@@ -173,7 +173,7 @@ export interface SSEError  {
   event: 'error'
   agent?: AgentName
   message: string
-  kind?: 'sandbox_unavailable' | 'agent_error' | 'orchestration_error'
+  kind?: 'sandbox_unavailable' | 'agent_error' | 'orchestration_error' | 'reconnect_required'
 }
 export interface SSEAgentTrace {
   event: 'agent_trace'
@@ -288,14 +288,22 @@ export interface Env {
   ANALYSIS_TASK_QUEUE: Queue<import('./workflow/analysis-job').AnalysisQueueMessage>
   ADMIN_SETTINGS_PASSWORD?: string
   ACCESS_PASSCODE?: string
-  MF_API_TOKEN?: string
-  MF_API_URL: string
-  MF_AGENT_ID?: string
+  /** Manyfold API origin, without the /api path prefix the connect routes add. */
+  MANYFOLD_API_BASE_URL?: string
+  /** 'production' turns on the https-only and private-address checks in validateA2AUrl. */
+  ENVIRONMENT?: string
   SPEC_VERSION: string
+  // Agent ids resolved from the connect role map by resolveRuntimeEnv. They are
+  // plain strings so the orchestrator keeps reading env.AGENT_* unchanged; only
+  // their provenance changed, from wrangler.toml vars to connected agents.
   AGENT_SUMMARIZER: string
   AGENT_CONTEXT: string
   AGENT_SYNTHESIZER: string
-  AGENT_COMMENT_MAP: string
   AGENT_JARGON: string
   AGENT_COMMENT_REDUCE: string
+  /**
+   * Connected agents and their credentials for this invocation. Attached by
+   * resolveRuntimeEnv; absent means mock mode. Never serialize it.
+   */
+  A2A?: import('./connect.ts').A2ARuntime
 }

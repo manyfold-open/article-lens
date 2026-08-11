@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HN Lens 📰</title>
+  <link rel="stylesheet" href="/controls.css">
   <style>
     /* ── Design Tokens ──────────────────────────────────────────────────── */
     :root {
@@ -86,106 +87,9 @@
       --ui-control-active-bg: var(--bg);
       --ui-control-on: var(--accent);
     }
-    .ui-select { position: relative; display: inline-block; }
-    .ui-select-button,
-    .ui-switch {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      width: 100%;
-      height: 28px;
-      padding: 0 8px;
-      border: 1px solid var(--ui-control-border);
-      border-radius: 6px;
-      background: var(--ui-control-bg);
-      color: var(--ui-control-ink);
-      font: inherit;
-      cursor: pointer;
-    }
-    .ui-select-button:hover,
-    .ui-switch:hover { border-color: var(--ui-control-hover); }
-    .ui-select-button:focus-visible,
-    .ui-switch:focus-visible,
-    .ui-select-list [role=option]:focus-visible {
-      outline: 2px solid var(--ui-control-focus);
-      outline-offset: 1px;
-    }
-    .ui-select-value {
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      text-align: left;
-    }
-    /* Drawn, not a glyph: an arrow character would change shape with the font. */
-    .ui-select-caret {
-      flex: none;
-      width: 7px;
-      height: 7px;
-      margin-left: 2px;
-      border-right: 1.5px solid var(--ui-control-muted);
-      border-bottom: 1.5px solid var(--ui-control-muted);
-      transform: translateY(-2px) rotate(45deg);
-    }
-    .ui-select.open .ui-select-caret { transform: translateY(1px) rotate(225deg); }
-    .ui-select-list {
-      position: absolute;
-      z-index: 30;
-      top: calc(100% + 4px);
-      right: 0;
-      min-width: 100%;
-      max-height: 248px;
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      padding: 4px;
-      border: 1px solid var(--ui-control-border);
-      border-radius: 8px;
-      background: var(--ui-control-menu);
-      box-shadow: 0 10px 24px rgba(15, 23, 42, .28);
-    }
-    .ui-select-list [role=option] {
-      display: block;
-      width: 100%;
-      padding: 6px 8px;
-      border: 0;
-      border-radius: 5px;
-      background: none;
-      color: var(--ui-control-ink);
-      font: inherit;
-      text-align: left;
-      white-space: nowrap;
-      cursor: pointer;
-    }
-    .ui-select-list [role=option]:hover { background: var(--ui-control-active-bg); }
-    .ui-select-list [role=option].selected {
-      background: var(--ui-control-active-bg);
-      font-weight: 800;
-    }
-    .ui-switch { width: auto; user-select: none; }
-    .ui-switch-box {
-      flex: none;
-      position: relative;
-      width: 13px;
-      height: 13px;
-      border: 1px solid var(--ui-control-muted);
-      border-radius: 3px;
-    }
-    .ui-switch.on .ui-switch-box {
-      border-color: var(--ui-control-on);
-      background: var(--ui-control-on);
-    }
-    /* The tick is two borders rotated, so it scales with the box and needs no font. */
-    .ui-switch.on .ui-switch-box::after {
-      content: '';
-      position: absolute;
-      left: 3px;
-      top: 0;
-      width: 4px;
-      height: 7px;
-      border-right: 2px solid var(--ui-control-menu);
-      border-bottom: 2px solid var(--ui-control-menu);
-      transform: rotate(45deg);
-    }
+    /* .ui-select / .ui-switch structure lives in /controls.css, shared with
+       the settings page. The --ui-control-* mapping above stays here because
+       it is this page's palette. */
 
     /* Disclosure triangles are drawn by the browser and differ per platform, so
        every <details> here hides the native marker and draws its own caret. */

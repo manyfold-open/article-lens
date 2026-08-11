@@ -15,16 +15,7 @@ function environment(overrides = {}) {
     CACHE: memoryCache(),
     ADMIN_SETTINGS_PASSWORD: 'admin-password-with-enough-entropy',
     ACCESS_PASSCODE: '246810',
-    MF_API_URL: 'https://api.manyfold.ai/api',
-    MF_AGENT_ID: 'agt_source',
-    MF_API_TOKEN: 'environment-token',
     SPEC_VERSION: '13',
-    AGENT_SUMMARIZER: 'agt_sum',
-    AGENT_CONTEXT: 'agt_ctx',
-    AGENT_SYNTHESIZER: 'agt_synth',
-    AGENT_COMMENT_MAP: 'agt_comment_map',
-    AGENT_JARGON: 'agt_jargon',
-    AGENT_COMMENT_REDUCE: 'agt_comment_reduce',
     ANALYSIS_JOBS: {},
     ANALYSIS_TASK_QUEUE: {},
     ASSETS: {},
@@ -72,21 +63,22 @@ test('authenticates settings and never returns secret values', async () => {
   }), env);
   assert.equal(response.status, 200);
   const body = await response.json();
-  const token = body.fields.find(field => field.key === 'MF_API_TOKEN');
   const passcode = body.fields.find(field => field.key === 'ACCESS_PASSCODE');
   assert.deepEqual(
-    { value: token.value, configured: token.configured, source: token.source },
+    { value: passcode.value, configured: passcode.configured, source: passcode.source },
     { value: '', configured: true, source: 'environment' },
   );
-  assert.equal(passcode.value, '');
+  // Manyfold configuration is no longer a settings field: agents arrive
+  // through the connect handshake, not as pasted ids and a pasted token.
+  assert.deepEqual(body.fields.map(field => field.key), ['ACCESS_PASSCODE', 'SPEC_VERSION']);
   assert.deepEqual(
     body.infrastructure.map(binding => binding.name),
     ['CACHE', 'ANALYSIS_JOBS', 'ANALYSIS_TASK_QUEUE', 'ASSETS'],
   );
 });
 
-test('validates passcode, URL, number, and required fields together', async () => {
-  const env = environment({ AGENT_CONTEXT: '' });
+test('validates passcode and number fields together', async () => {
+  const env = environment();
   const { cookie } = await login(env);
   const response = await settings.handleAdminSettings(request('/api/admin/settings', {
     method: 'PUT',
@@ -94,7 +86,6 @@ test('validates passcode, URL, number, and required fields together', async () =
     body: JSON.stringify({
       values: {
         ACCESS_PASSCODE: '123',
-        MF_API_URL: 'ftp://api.test',
         SPEC_VERSION: '0',
       },
     }),
@@ -103,9 +94,7 @@ test('validates passcode, URL, number, and required fields together', async () =
   const body = await response.json();
   assert.equal(body.error, 'validation failed');
   assert.ok(body.details.some(detail => detail.includes('exactly 6 digits')));
-  assert.ok(body.details.some(detail => detail.includes('HTTP or HTTPS')));
   assert.ok(body.details.some(detail => detail.includes('positive integer')));
-  assert.ok(body.details.some(detail => detail.includes('Context agent is required')));
 });
 
 test('encrypts saved overrides and resolves them without exposing secrets', async () => {
@@ -117,7 +106,6 @@ test('encrypts saved overrides and resolves them without exposing secrets', asyn
     body: JSON.stringify({
       values: {
         ACCESS_PASSCODE: '654321',
-        MF_API_TOKEN: 'saved-token',
         SPEC_VERSION: '14',
       },
     }),
@@ -126,52 +114,57 @@ test('encrypts saved overrides and resolves them without exposing secrets', asyn
 
   const stored = env.CACHE.values.get('__admin:runtime-settings:v1');
   assert.equal(typeof stored, 'string');
-  assert.doesNotMatch(stored, /saved-token|654321/);
+  assert.doesNotMatch(stored, /654321/);
 
   const runtime = await settings.resolveRuntimeEnv(env);
   assert.equal(runtime.ACCESS_PASSCODE, '654321');
-  assert.equal(runtime.MF_API_TOKEN, 'saved-token');
   assert.equal(runtime.SPEC_VERSION, '14');
 
   const read = await settings.handleAdminSettings(request('/api/admin/settings', {
     headers: { cookie },
   }), env);
   const body = await read.json();
-  const token = body.fields.find(field => field.key === 'MF_API_TOKEN');
+  const passcode = body.fields.find(field => field.key === 'ACCESS_PASSCODE');
   assert.deepEqual(
-    { value: token.value, configured: token.configured, source: token.source },
+    { value: passcode.value, configured: passcode.configured, source: passcode.source },
     { value: '', configured: true, source: 'settings' },
   );
 });
 
-test('migrates saved legacy Gemini routing IDs to the deployed Codex bindings', async () => {
+test('prunes peer-mint settings so they cannot outrank the connect role map', async () => {
   const env = environment();
   const { cookie } = await login(env);
-  const response = await settings.handleAdminSettings(request('/api/admin/settings', {
-    method: 'PUT',
+  // Simulate a blob written before the cutover, when these were real fields.
+  const stale = {
+    updatedAt: new Date().toISOString(),
+    values: {
+      SPEC_VERSION: '14',
+      MF_API_TOKEN: 'stale-token',
+      MF_AGENT_ID: 'agt_stale_source',
+      AGENT_SUMMARIZER: 'agt_stale_sum',
+      AGENT_CONTEXT: 'agt_stale_ctx',
+    },
+  };
+  const crypto = await import('../src/crypto.ts');
+  env.CACHE.values.set(
+    '__admin:runtime-settings:v1',
+    await crypto.seal(stale, env.ADMIN_SETTINGS_PASSWORD, 'settings'),
+  );
+
+  const read = await settings.handleAdminSettings(request('/api/admin/settings', {
     headers: { cookie },
-    body: JSON.stringify({
-      values: {
-        MF_AGENT_ID: 'agt_agpzmem6af5rrbztanib4gxfkm',
-        AGENT_SUMMARIZER: 'agt_agpzmenybn42znpqy4izl7lwou',
-        AGENT_CONTEXT: 'agt_agpzmeozpvzvfdc7ejvwk7ix2u',
-        AGENT_SYNTHESIZER: 'agt_agpzmepvgf4ghjs2awkl2zv5jq',
-        AGENT_COMMENT_MAP: 'agt_agpzmeqnlf6qlex4vnwtlnm3gu',
-        AGENT_JARGON: 'agt_agpzmerdrn65lfptmniusgt3jy',
-        AGENT_COMMENT_REDUCE: 'agt_agpzmer57f3blmw2ewnqivcxfy',
-      },
-    }),
   }), env);
-  assert.equal(response.status, 200);
+  assert.equal(read.status, 200);
 
   const runtime = await settings.resolveRuntimeEnv(env);
-  assert.equal(runtime.MF_AGENT_ID, 'agt_source');
-  assert.equal(runtime.AGENT_SUMMARIZER, 'agt_sum');
-  assert.equal(runtime.AGENT_CONTEXT, 'agt_ctx');
-  assert.equal(runtime.AGENT_SYNTHESIZER, 'agt_synth');
-  assert.equal(runtime.AGENT_COMMENT_MAP, 'agt_comment_map');
-  assert.equal(runtime.AGENT_JARGON, 'agt_jargon');
-  assert.equal(runtime.AGENT_COMMENT_REDUCE, 'agt_comment_reduce');
+  assert.equal(runtime.SPEC_VERSION, '14', 'a still-valid field must survive the prune');
+  // A stale AGENT_* spread over env would route a role at an agent nobody
+  // connected, and would beat the connect mapping because it is applied later.
+  assert.equal(runtime.AGENT_SUMMARIZER, '');
+  assert.equal(runtime.AGENT_CONTEXT, '');
+  assert.equal(runtime.MF_API_TOKEN, undefined);
+  assert.equal(runtime.MF_AGENT_ID, undefined);
+  assert.equal(runtime.A2A.mode, 'mock');
 });
 
 test('reports encrypted settings that cannot be read after password rotation', async () => {

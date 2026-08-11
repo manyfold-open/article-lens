@@ -1,16 +1,20 @@
 import { cacheGet, cachePut } from '../cache'
-import { checkMfPeerAccess } from '../crew/mf'
+import { checkMfAgentAccess } from '../crew/mf'
+import { isMockMode } from '../connect'
 import { jsonResponse } from '../http'
 import type { Env } from '../schema'
 import { parseFreshHealthSnapshot } from './health-snapshot'
 
 const HEALTH_CACHE_KEY = 'health:latest'
 
+// Five roles, not six. AGENT_COMMENT_MAP was configured, required and health
+// checked but never actually invoked: the comment map/reduce fan-out was
+// replaced by local ranking plus a single reduce call, and the binding was
+// left behind.
 function healthAgents(env: Env): Array<{ name: string; id: string }> {
   return [
     { name: 'Summariser', id: env.AGENT_SUMMARIZER },
     { name: 'Jargon', id: env.AGENT_JARGON },
-    { name: 'Comments-map', id: env.AGENT_COMMENT_MAP },
     { name: 'Comments-reduce', id: env.AGENT_COMMENT_REDUCE },
     { name: 'Context', id: env.AGENT_CONTEXT },
     { name: 'Synthesiser', id: env.AGENT_SYNTHESIZER },
@@ -22,17 +26,23 @@ function shortError(error: unknown): string {
 }
 
 export async function checkAgentHealth(env: Env): Promise<unknown> {
-  if (!env.MF_API_TOKEN) {
-    return { checkedAt: new Date().toISOString(), up: 0, total: 0, agents: [], note: 'no MF_API_TOKEN' }
+  if (isMockMode(env)) {
+    return {
+      checkedAt: new Date().toISOString(),
+      up: 0,
+      total: 0,
+      agents: [],
+      note: 'no Manyfold agents are connected',
+    }
   }
 
   const agents = await Promise.all(healthAgents(env).map(async ({ name, id }) => {
     const startedAt = Date.now()
     try {
-      await checkMfPeerAccess(env, id)
-      return { name, id, ok: true, ms: Date.now() - startedAt, check: 'peer_access' }
+      await checkMfAgentAccess(env, id)
+      return { name, id, ok: true, ms: Date.now() - startedAt, check: 'agent_access' }
     } catch (error) {
-      return { name, id, ok: false, ms: Date.now() - startedAt, check: 'peer_access', error: shortError(error) }
+      return { name, id, ok: false, ms: Date.now() - startedAt, check: 'agent_access', error: shortError(error) }
     }
   }))
   const snapshot = {
@@ -40,7 +50,7 @@ export async function checkAgentHealth(env: Env): Promise<unknown> {
     up: agents.filter(agent => agent.ok).length,
     total: agents.length,
     agents,
-    note: 'Checks Manyfold peer credential access; does not start paid model turns.',
+    note: 'Probes each connected agent with tasks/get; does not start paid model turns.',
   }
   await cachePut(env, HEALTH_CACHE_KEY, JSON.stringify(snapshot))
   return snapshot

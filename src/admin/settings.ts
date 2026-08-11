@@ -1,4 +1,8 @@
 import type { Env } from '../schema'
+// Explicit .ts extension: the test runner loads these modules through Node's
+// ESM resolver, which does not probe extensions the way the bundler does.
+import { base64UrlToBytes, bytesToBase64Url, deriveBytes, safeEqual, seal, sign, unseal } from '../crypto.ts'
+import { loadA2ARuntime } from '../connect.ts'
 
 type RuntimeValues = Record<string, string>
 
@@ -24,24 +28,6 @@ const SESSION_TTL_SECONDS = 8 * 60 * 60
 const ACCESS_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 const ACCESS_RATE_LIMIT_ATTEMPTS = 5
 const ACCESS_RATE_LIMIT_SECONDS = 10 * 60
-const AGENT_ROUTING_KEYS = [
-  'MF_AGENT_ID',
-  'AGENT_SUMMARIZER',
-  'AGENT_CONTEXT',
-  'AGENT_SYNTHESIZER',
-  'AGENT_COMMENT_MAP',
-  'AGENT_JARGON',
-  'AGENT_COMMENT_REDUCE',
-] as const
-const LEGACY_GEMINI_AGENT_IDS = new Set([
-  'agt_agpzmem6af5rrbztanib4gxfkm',
-  'agt_agpzmenybn42znpqy4izl7lwou',
-  'agt_agpzmeozpvzvfdc7ejvwk7ix2u',
-  'agt_agpzmepvgf4ghjs2awkl2zv5jq',
-  'agt_agpzmeqnlf6qlex4vnwtlnm3gu',
-  'agt_agpzmerdrn65lfptmniusgt3jy',
-  'agt_agpzmer57f3blmw2ewnqivcxfy',
-])
 
 const FIELDS: SettingsField[] = [
   {
@@ -53,154 +39,19 @@ const FIELDS: SettingsField[] = [
     kind: 'passcode',
   },
   {
-    key: 'MF_API_URL',
-    label: 'Manyfold API URL',
-    description: 'Manyfold REST API base URL.',
-    required: true,
-    kind: 'url',
-  },
-  {
-    key: 'MF_AGENT_ID',
-    label: 'Manyfold source agent',
-    description: 'Agent identity used when minting peer A2A tokens.',
-    required: true,
-  },
-  {
-    key: 'MF_API_TOKEN',
-    label: 'Manyfold API token',
-    description: 'Secret token for the source agent. Leave blank to keep the current value.',
-    secret: true,
-    required: true,
-  },
-  {
     key: 'SPEC_VERSION',
     label: 'Result spec version',
     description: 'Positive integer included in cache keys and analysis results.',
     required: true,
     kind: 'number',
   },
-  {
-    key: 'AGENT_SUMMARIZER',
-    label: 'Summariser agent',
-    description: 'Peer used by the article summary stage.',
-    required: true,
-  },
-  {
-    key: 'AGENT_CONTEXT',
-    label: 'Context agent',
-    description: 'Peer used for reading guidance and debate.',
-    required: true,
-  },
-  {
-    key: 'AGENT_SYNTHESIZER',
-    label: 'Synthesiser agent',
-    description: 'Peer used to assemble the final analysis.',
-    required: true,
-  },
-  {
-    key: 'AGENT_COMMENT_MAP',
-    label: 'Comment map agent',
-    description: 'Peer used to process comment batches.',
-    required: true,
-  },
-  {
-    key: 'AGENT_JARGON',
-    label: 'Jargon agent',
-    description: 'Peer used to identify and explain technical terms.',
-    required: true,
-  },
-  {
-    key: 'AGENT_COMMENT_REDUCE',
-    label: 'Comment reduce agent',
-    description: 'Peer used to combine comment batch results.',
-    required: true,
-  },
 ]
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
-}
-
-function base64UrlToBytes(value: string): Uint8Array {
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
-  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4)
-  const binary = atob(padded)
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
-}
-
-async function deriveBytes(password: string, purpose: string): Promise<ArrayBuffer> {
-  return crypto.subtle.digest('SHA-256', textEncoder.encode(`${PROJECT_ID}:${purpose}:${password}`))
-}
-
-async function sign(value: string, password: string, purpose = 'session'): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    await deriveBytes(password, purpose),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign('HMAC', key, textEncoder.encode(value))))
-}
-
-async function safeEqual(left: string, right: string): Promise<boolean> {
-  const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest('SHA-256', textEncoder.encode(left)),
-    crypto.subtle.digest('SHA-256', textEncoder.encode(right)),
-  ])
-  const leftBytes = new Uint8Array(leftHash)
-  const rightBytes = new Uint8Array(rightHash)
-  let difference = leftBytes.length ^ rightBytes.length
-  for (let index = 0; index < leftBytes.length; index += 1) {
-    difference |= leftBytes[index] ^ (rightBytes[index] ?? 0)
-  }
-  return difference === 0
-}
-
-async function encryptSettings(settings: StoredSettings, password: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    await deriveBytes(password, 'settings'),
-    'AES-GCM',
-    false,
-    ['encrypt'],
-  )
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    textEncoder.encode(JSON.stringify(settings)),
-  )
-  return JSON.stringify({
-    v: 1,
-    iv: bytesToBase64Url(iv),
-    ciphertext: bytesToBase64Url(new Uint8Array(encrypted)),
-  })
-}
-
 async function decryptSettings(raw: string, password: string): Promise<StoredSettings> {
-  const envelope = JSON.parse(raw) as { v?: number; iv?: string; ciphertext?: string }
-  if (envelope.v !== 1 || !envelope.iv || !envelope.ciphertext) {
-    throw new Error('unsupported settings format')
-  }
-  const key = await crypto.subtle.importKey(
-    'raw',
-    await deriveBytes(password, 'settings'),
-    'AES-GCM',
-    false,
-    ['decrypt'],
-  )
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64UrlToBytes(envelope.iv) },
-    key,
-    base64UrlToBytes(envelope.ciphertext),
-  )
-  const parsed = JSON.parse(textDecoder.decode(decrypted)) as StoredSettings
+  const parsed = await unseal<StoredSettings>(raw, password, 'settings')
   if (!parsed || typeof parsed.values !== 'object' || Array.isArray(parsed.values)) {
     throw new Error('invalid settings payload')
   }
@@ -214,7 +65,7 @@ async function readStoredSettings(env: Env): Promise<{ settings: StoredSettings;
   if (!raw) return { settings: empty }
   try {
     const settings = await decryptSettings(raw, env.ADMIN_SETTINGS_PASSWORD)
-    settings.values = migrateLegacyAgentSettings(env, settings.values)
+    settings.values = pruneUnknownValues(settings.values)
     return { settings }
   } catch {
     return {
@@ -229,25 +80,50 @@ function envValue(env: Env, key: string): string {
   return typeof value === 'string' ? value : ''
 }
 
-function migrateLegacyAgentSettings(env: Env, values: RuntimeValues): RuntimeValues {
-  const migrated = { ...values }
-  for (const key of AGENT_ROUTING_KEYS) {
-    const saved = migrated[key]
-    if (!saved || !LEGACY_GEMINI_AGENT_IDS.has(saved)) continue
-    const replacement = envValue(env, key)
-    if (replacement && !LEGACY_GEMINI_AGENT_IDS.has(replacement)) migrated[key] = replacement
-  }
-  return migrated
+/**
+ * Drop saved keys no field owns any more.
+ *
+ * Peer-mint configuration (MF_API_TOKEN, MF_AGENT_ID, the agt_* routing keys)
+ * lingers in blobs written before the connect cutover. Left in place it would
+ * be spread over env by resolveRuntimeEnv and outrank the connect role map, so
+ * it is dropped on read and disappears from storage on the next save.
+ */
+function pruneUnknownValues(values: RuntimeValues): RuntimeValues {
+  const known = new Set(FIELDS.map(field => field.key))
+  return Object.fromEntries(Object.entries(values).filter(([key]) => known.has(key)))
 }
 
 function effectiveValue(env: Env, values: RuntimeValues, key: string): string {
   return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : envValue(env, key)
 }
 
+/**
+ * Build the env one request or queue invocation actually runs against.
+ *
+ * The connect role map is flattened back onto env.AGENT_* so
+ * src/crew/orchestrator.ts keeps reading the same fields it always did; only
+ * their provenance changed, from wrangler.toml vars to connected agents.
+ *
+ * Order matters. Saved settings are spread first and the role map applied
+ * after, because a stale AGENT_* left in an old settings blob would otherwise
+ * outrank the connect mapping and route a role at an agent nobody connected.
+ * readStoredSettings already prunes unknown keys; this ordering is the second
+ * line of defence.
+ */
 export async function resolveRuntimeEnv(env: Env): Promise<Env> {
   if (!env.ADMIN_SETTINGS_PASSWORD) return env
   const { settings } = await readStoredSettings(env)
-  return { ...env, ...settings.values } as Env
+  const merged = { ...env, ...settings.values } as Env
+  const runtime = await loadA2ARuntime(merged)
+  return {
+    ...merged,
+    A2A: runtime,
+    AGENT_SUMMARIZER: runtime.roles.sum ?? '',
+    AGENT_CONTEXT: runtime.roles.ctx ?? '',
+    AGENT_SYNTHESIZER: runtime.roles.synth ?? '',
+    AGENT_JARGON: runtime.roles.jargon ?? '',
+    AGENT_COMMENT_REDUCE: runtime.roles.comments ?? '',
+  } as Env
 }
 
 function cookieValue(request: Request, cookieName = COOKIE_NAME): string | null {
@@ -259,7 +135,8 @@ function cookieValue(request: Request, cookieName = COOKIE_NAME): string | null 
   return null
 }
 
-async function isAuthenticated(request: Request, password: string): Promise<boolean> {
+/** Exported so the connect routes reuse this gate instead of adding a second one. */
+export async function isAdminAuthenticated(request: Request, password: string): Promise<boolean> {
   const token = cookieValue(request)
   if (!token) return false
   const separator = token.lastIndexOf('.')
@@ -284,7 +161,7 @@ async function makeSession(password: string): Promise<string> {
   return `${payload}.${await sign(payload, password)}`
 }
 
-function adminJson(body: unknown, status = 200, headers?: HeadersInit): Response {
+export function adminJson(body: unknown, status = 200, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers)
   responseHeaders.set('Content-Type', 'application/json; charset=utf-8')
   responseHeaders.set('Cache-Control', 'no-store')
@@ -292,7 +169,7 @@ function adminJson(body: unknown, status = 200, headers?: HeadersInit): Response
   return new Response(JSON.stringify(body), { status, headers: responseHeaders })
 }
 
-function sameOrigin(request: Request): boolean {
+export function sameOrigin(request: Request): boolean {
   const fetchSite = request.headers.get('sec-fetch-site')
   if (fetchSite === 'cross-site') return false
   const origin = request.headers.get('origin')
@@ -364,7 +241,7 @@ export async function handleAdminSettings(request: Request, env: Env): Promise<R
     )
   }
 
-  if (!await isAuthenticated(request, password)) {
+  if (!await isAdminAuthenticated(request, password)) {
     return adminJson({ error: 'authentication required' }, 401)
   }
 
@@ -436,7 +313,7 @@ export async function handleAdminSettings(request: Request, env: Env): Promise<R
   if (errors.length) return adminJson({ error: 'validation failed', details: [...new Set(errors)] }, 400)
 
   const saved: StoredSettings = { updatedAt: new Date().toISOString(), values: next }
-  await env.CACHE.put(SETTINGS_KEY, await encryptSettings(saved, password))
+  await env.CACHE.put(SETTINGS_KEY, await seal(saved, password, 'settings'))
   return adminJson({ saved: true, updated_at: saved.updatedAt })
 }
 

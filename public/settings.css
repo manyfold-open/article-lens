@@ -10,6 +10,20 @@
   --accent-ink: #1d0d06;
   --danger: #ff8278;
   --success: #8fd6a4;
+
+  /* Maps this page's palette onto the shared control structure in
+     /controls.css. Declared on :root rather than on .ui-select because a
+     variable set on the control itself would not reach the option list, which
+     is a child of the same host but painted from these values. */
+  --ui-control-border: var(--line);
+  --ui-control-bg: var(--panel-2);
+  --ui-control-ink: var(--text);
+  --ui-control-muted: var(--muted);
+  --ui-control-hover: var(--accent);
+  --ui-control-focus: var(--accent);
+  --ui-control-menu: var(--panel);
+  --ui-control-active-bg: var(--panel-2);
+  --ui-control-on: var(--accent);
 }
 
 * { box-sizing: border-box; }
@@ -154,3 +168,47 @@ button.quiet { padding: 8px 12px; border-color: var(--line); background: transpa
   .password-row { align-items: stretch; flex-direction: column; }
   .topbar { margin-bottom: 48px; }
 }
+
+/* ── Manyfold connect ──────────────────────────────────────────────────── */
+.manyfold { margin: 40px 0 8px; padding-top: 24px; border-top: 1px solid var(--line); }
+.manyfold > .lede { color: var(--muted); max-width: 62ch; }
+
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  margin: 18px 0;
+}
+.agent-card { padding: 13px; border: 1px solid var(--line); background: var(--panel-2); }
+.agent-card strong { display: block; margin-bottom: 5px; }
+.agent-meta { display: block; color: var(--muted); font: 12px/1.4 system-ui, sans-serif; }
+.agent-description {
+  margin: 8px 0 10px;
+  color: var(--muted);
+  font: 12px/1.5 system-ui, sans-serif;
+  /* Descriptions come from the agent card and are capped at 240 characters
+     server-side, but they are still arbitrary text from another system. */
+  overflow-wrap: anywhere;
+}
+.agent-actions { display: flex; gap: 8px; }
+.dot.warn { background: var(--danger); }
+.empty { color: var(--muted); }
+
+.connect-pending {
+  margin: 16px 0;
+  padding: 13px;
+  border: 1px solid var(--accent);
+  background: var(--panel-2);
+}
+.connect-code { margin: 8px 0 4px; font-size: 15px; }
+.connect-code strong { letter-spacing: .18em; font-size: 19px; color: var(--accent); }
+.connect-hint { margin: 0 0 12px; color: var(--muted); font: 12px/1.5 system-ui, sans-serif; }
+.connect-link { color: var(--accent); }
+.connect-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.role-grid { display: grid; gap: 8px; margin-top: 20px; max-width: 460px; }
+.role-row { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 12px; }
+.role-label { color: var(--muted); font: 12px/1.4 system-ui, sans-serif; }
+/* The picker is a block in this layout, unlike the inline one on the main page. */
+.role-select { display: block; }
+.quiet.danger { color: var(--danger); }

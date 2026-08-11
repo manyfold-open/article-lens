@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+  # Validation-only on pull requests. The deploy job below is gated to pushes,
+  # so a PR can be checked before it is merged; without this, the first time CI
+  # ran on a change was after it had already reached production.
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -44,6 +50,7 @@ jobs:
   deploy:
     name: Deploy
     needs: validate
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production

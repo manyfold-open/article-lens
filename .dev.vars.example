@@ -1,3 +1,8 @@
-# Required only to unlock /settings and encrypt saved runtime configuration.
+# Required to unlock /settings, to encrypt saved runtime configuration, and to
+# encrypt the Manyfold agent credentials obtained through the connect flow.
+# Rotating it means reconnecting every agent.
 # Use a long, random value and keep the real .dev.vars file uncommitted.
+#
+# For local development also leave ENVIRONMENT unset (or set it to
+# 'development') so validateA2AUrl allows a loopback agent.
 ADMIN_SETTINGS_PASSWORD=replace-with-a-long-random-password

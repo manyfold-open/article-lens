@@ -27,9 +27,8 @@ must never be committed.
 `/settings` manages application-level values:
 
 - the six-digit application access passcode;
-- Manyfold API URL, source agent, and API token;
 - result `SPEC_VERSION`;
-- all six role-agent IDs.
+- the Manyfold connection: which agents are connected and which role each serves.
 
 Cloudflare assets, KV, Durable Objects, and Queue bindings stay in
 `wrangler.toml` and appear as read-only infrastructure in the UI.
@@ -43,10 +42,45 @@ Wrangler variables and secrets are bootstrap/fallback values. A saved setting
 overrides its environment equivalent for HTTP and Queue work.
 Clearing a saved field returns it to the environment fallback.
 
+## Connecting Manyfold agents
+
+A fresh deployment has no agents and serves local mock results. Analyses will
+look plausible and be entirely local, so do this before trusting any output.
+
+1. open `/settings` and sign in with `ADMIN_SETTINGS_PASSWORD`;
+2. click **Connect Manyfold agents**. A Manyfold authorization page opens and
+   the settings page shows a confirmation code;
+3. **check that Manyfold displays the same confirmation code.** That comparison
+   is the only anti-phishing check in this flow;
+4. tick the agents to share and choose how long the grant lasts. Prefer a
+   generous window: there is no refresh, and an expiring grant blocks new jobs;
+5. approve. The page picks up the credentials within a couple of seconds and
+   assigns the five roles;
+6. review the role assignments. One agent may serve several roles, but note
+   that five roles on one agent run slower against the same fixed 12-minute
+   budget. The page says so when that is the case.
+
+Agent bearers are AES-GCM sealed into `CACHE` and never reach the browser.
+
+There is no migration from the old `agt_*` settings. A peer id from the
+previous model and a connect agent id are different id spaces, so reusing the
+saved values would fail at run time with a misleading cause.
+
+### Reconnecting
+
+An authorization that has expired, been revoked on Manyfold, or is rejected by
+the agent cannot be refreshed from this side. `/settings` marks the agent
+unverified, `GET /api/health` reports it down, and new jobs are refused with
+`RECONNECT_REQUIRED` rather than being allowed to spend twelve minutes
+producing an all-fallback report. Re-running the connect flow and approving the
+same agent rotates its token in place.
+
 ### Password rotation
 
-Changing `ADMIN_SETTINGS_PASSWORD` changes both session signing and the settings
-encryption key. Before rotating it, ensure required values exist as Worker
+Changing `ADMIN_SETTINGS_PASSWORD` changes session signing, the settings
+encryption key, **and the key that agent credentials are sealed with**. After
+rotating it the stored credentials cannot be read and every agent must be
+connected again. Before rotating it, ensure required values exist as Worker
 secrets. After rotation, sign in to `/settings` and save all runtime values
 again. Undecryptable saved settings are ignored with a warning.
 
@@ -104,7 +138,7 @@ Bindings are declared in `wrangler.toml`:
 - `ANALYSIS_JOBS` — `AnalysisJob` Durable Objects;
 - `ANALYSIS_TASK_QUEUE` — producer for `mf-article-lens-analysis`;
 - Queue consumer — batch size 1, maximum concurrency 2;
-- `MF_API_URL`, `MF_AGENT_ID`, `AGENT_*`, and `SPEC_VERSION` bootstrap values.
+- `MANYFOLD_API_BASE_URL`, `ENVIRONMENT`, and `SPEC_VERSION` values.
 
 ## Production deployment
 
@@ -141,8 +175,9 @@ stop at `npm run check:worker`.
 
 ## Observability and safeguards
 
-- `GET /api/health` reports peer credential availability; `?live=1` forces a
-  refresh without starting model turns.
+- `GET /api/health` probes each connected agent with a non-billing `tasks/get`;
+  `?live=1` forces a refresh without starting model turns. It reports
+  `total: 0` when nothing is connected, which means mock mode, not health.
 - Keep Queue `max_concurrency` low until production latency, provider quotas,
   and backlog are measured.
 - Bump `SPEC_VERSION` after result-generation changes so stale KV results are

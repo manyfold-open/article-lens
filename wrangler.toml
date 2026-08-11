@@ -33,18 +33,23 @@ max_retries = 30
 max_concurrency = 2
 
 [vars]
-MF_API_URL = "https://api.manyfold.ai/api"
-MF_AGENT_ID = "agt_agp2f7i4zj44pj2niaiv2aryoy"
+# Origin only. The connect routes append /api/connect/a2a/... themselves, so
+# this deliberately does NOT carry the /api suffix the old MF_API_URL had.
+# Renaming the variable rather than reusing MF_API_URL keeps that shift loud:
+# the old value here would produce a 404 that is tedious to diagnose.
+MANYFOLD_API_BASE_URL = "https://api.manyfold.ai"
+# 'production' turns on the https-only and private-address checks that every
+# agent-supplied rpcUrl is validated against. Leave it unset for local dev so a
+# loopback agent is reachable.
+ENVIRONMENT = "production"
 SPEC_VERSION = "15"
-AGENT_SUMMARIZER = "agt_agp2f7ggfv7lxpheoveiawvk6q"
-AGENT_CONTEXT = "agt_agp2f7i7bry43ju3omvwtnngie"
-AGENT_SYNTHESIZER = "agt_agp2f7jbwvyp5gkigkqxggzuay"
-AGENT_COMMENT_MAP = "agt_agp2f7jd5zzdjhuggdiimhrui4"
-AGENT_JARGON = "agt_agp2f7jgjn7txo663jeetsxcwu"
-AGENT_COMMENT_REDUCE = "agt_agp2f7jilj42lobuzbjov7urzq"
 
+# Agents are no longer configured here. They arrive through the Manyfold
+# connect handshake: open /settings, click Connect, approve on Manyfold, and
+# assign the five roles. Until an agent is connected the app serves mock
+# results. See docs/operations.md.
+#
 # Bootstrap /settings with:
 #   npx wrangler secret put ADMIN_SETTINGS_PASSWORD --config wrangler.toml
-# Runtime values above are initial/fallback defaults. After login, /settings
-# stores encrypted overrides in CACHE. MF_API_TOKEN can be entered there, or
-# retained as a Wrangler secret for bootstrap/fallback compatibility.
+# That password now also encrypts stored agent credentials, so rotating it
+# requires reconnecting the agents.

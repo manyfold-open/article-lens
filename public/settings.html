@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <title>Article Lens · Settings</title>
+  <link rel="stylesheet" href="/controls.css">
   <link rel="stylesheet" href="/settings.css">
 </head>
 <body>
@@ -39,6 +40,40 @@
       </div>
 
       <div id="warning" class="warning hidden" role="alert"></div>
+
+      <section class="manyfold" id="manyfold">
+        <p class="eyebrow">MANYFOLD</p>
+        <h2>Connected agents</h2>
+        <p class="lede">
+          Article Lens calls agents you authorize on Manyfold. Until at least one
+          is connected and assigned, analyses return local mock results.
+        </p>
+
+        <div id="connect-banner" class="warning hidden" role="alert"></div>
+
+        <!-- The confirmation code is the only anti-phishing check in this flow:
+             it must be visible here so it can be compared against Manyfold's
+             own page before anything is approved. -->
+        <div id="connect-pending" class="connect-pending hidden">
+          <p>Approve this on Manyfold, then keep this tab open.</p>
+          <p class="connect-code">Confirmation code <strong id="connect-code"></strong></p>
+          <p class="connect-hint">Check that Manyfold shows the same code before approving.</p>
+          <div class="connect-actions">
+            <a id="connect-open" class="connect-link" target="_blank" rel="noopener noreferrer">Open the Manyfold authorization page</a>
+            <button id="connect-cancel" class="quiet" type="button">Cancel</button>
+          </div>
+        </div>
+
+        <div id="agents" class="agent-grid"></div>
+
+        <div class="connect-actions">
+          <button id="connect-start" type="button">Connect Manyfold agents</button>
+          <p id="connect-message" class="message" role="status"></p>
+        </div>
+
+        <div id="roles" class="role-grid"></div>
+      </section>
+
       <form id="settings-form">
         <div id="fields" class="field-grid"></div>
         <div class="actions">
@@ -55,6 +90,9 @@
       </section>
     </section>
   </main>
+  <!-- controls.js must run before settings.js: the role pickers are upgraded
+       through window.UiControls, which it defines. -->
+  <script src="/controls.js" defer></script>
   <script src="/settings.js" defer></script>
 </body>
 </html>

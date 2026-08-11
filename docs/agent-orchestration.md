@@ -10,7 +10,7 @@ and deployment, see [Operations](./operations.md).
 
 - A2A transport admits at most four concurrent calls per Worker isolate.
 - Peer-token minting is single-flight and cached until shortly before expiry.
-- Normal peer calls get up to two attempts; only transient failures retry.
+- Normal agent calls get up to two attempts; only transient failures retry.
 - `message/stream` carries Task status and artifacts in one SSE subrequest.
 - A disconnected accepted Task gets at most seven sparse `tasks/get` recovery
   checks; its prompt is not submitted a second time.
@@ -27,7 +27,7 @@ and deployment, see [Operations](./operations.md).
   a real result.
 - `sum` and `ctx` are critical. Their fallback on the first durable attempt
   triggers one whole-workflow retry.
-- Unless the time budget, not the peer, caused it. A budget-limited fallback
+- Unless the time budget, not the agent, caused it. A budget-limited fallback
   finishes the run degraded instead of retrying, because the retry would reach
   the same wall. This is what an over-subscribed graph (debate plus replicas
   plus high effort) now costs: one degraded role, not a doubled wait.

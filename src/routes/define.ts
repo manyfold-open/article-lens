@@ -1,6 +1,7 @@
 import { parseLoose } from '../crew/json'
 import { callMfAgent } from '../crew/mf'
 import { mockDefineTerm } from '../crew/mock'
+import { isMockMode } from '../connect'
 import { jsonResponse } from '../http'
 import type { Env } from '../schema'
 
@@ -16,7 +17,7 @@ export async function handleDefine(request: Request, env: Env): Promise<Response
   }
   if (!term) return jsonResponse({ error: 'term required' }, 400)
 
-  if (!env.MF_API_TOKEN) return jsonResponse(mockDefineTerm(term, context))
+  if (isMockMode(env)) return jsonResponse(mockDefineTerm(term, context))
 
   try {
     const prompt = `You are the Jargon agent, explaining technical terms in plain language for tech and HN readers.

@@ -9,6 +9,7 @@ import {
   isAdminSettingsPath,
   resolveRuntimeEnv,
 } from './admin/settings'
+import { handleAdminConnect, isAdminConnectPath } from './admin/connect-routes'
 import { handleAnalyze, handleAnalysisStatus, handleCreateAnalysis } from './routes/analyze'
 import { handleDefine } from './routes/define'
 import { handleFrontPage } from './routes/frontpage'
@@ -24,6 +25,11 @@ export default {
 
     if (isAdminSettingsPath(url.pathname)) {
       return handleAdminSettings(request, env)
+    }
+    // Ahead of the access gate and of resolveRuntimeEnv: connecting an agent is
+    // how the app leaves mock mode, so it must work before any of that resolves.
+    if (isAdminConnectPath(url.pathname)) {
+      return handleAdminConnect(request, env)
     }
     if (url.pathname === '/settings' || url.pathname === '/settings/') {
       return env.ASSETS.fetch(request)

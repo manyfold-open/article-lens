@@ -4,6 +4,7 @@ import { coerceLegacyJargon, coerceLegacyResult, coerceLegacyShared } from '../c
 import { buildWorkflowPlan } from '../crew/graph'
 import { detectItemType, extractArticle, extractFromUrl } from '../extract'
 import { hashString } from '../hash'
+import { credentialReadiness, isMockMode } from '../connect'
 import { fetchHNItem, parseHNUrl, searchHNByUrl } from '../hn'
 import type { Env, GraphConfig, HNItem, HNLensResult, ItemType, SSEEvent } from '../schema'
 import { createSSEStream, sseResponse } from '../stream'
@@ -52,8 +53,37 @@ function markLocalFallback(result: HNLensResult, reason: string): void {
   ]))
 }
 
+/**
+ * How long a credential must still be good for before a job may be queued.
+ *
+ * Covers the 12-minute orchestration budget plus queue lead time and one
+ * durable retry. Connect tokens last days, so this normally passes; it exists
+ * so a lapsing credential fails as a reconnect prompt instead of quietly
+ * spending twelve minutes producing an all-fallback report.
+ */
+const RECONNECT_HORIZON_MS = 30 * 60_000
+
+function reconnectBlock(env: Env): { message: string } | null {
+  // Nothing connected at all is not an error: that is mock mode, which is a
+  // legitimate way to run the app.
+  if (isMockMode(env)) return null
+  const readiness = credentialReadiness(env.A2A, RECONNECT_HORIZON_MS)
+  if (readiness.ok) return null
+  const critical = readiness.roles.filter(role => CRITICAL_RESULT_AGENTS.has(role.role) && !role.ok)
+  if (!critical.length) return null
+  return { message: readiness.message }
+}
+
 export async function handleAnalyze(url: URL, env: Env): Promise<Response> {
   const { emit, stream, close } = createSSEStream()
+  const blocked = reconnectBlock(env)
+  if (blocked) {
+    const { emit: emitError, stream: errorStream, close: closeError } = createSSEStream()
+    emitError({ event: 'error', kind: 'reconnect_required', message: blocked.message })
+    closeError()
+    close()
+    return sseResponse(errorStream)
+  }
   const job = await startAnalysisJob(env, url.search, 'sse')
   ;(async () => {
     let cursor = 0
@@ -95,6 +125,10 @@ export async function handleCreateAnalysis(request: Request, env: Env): Promise<
     body = await request.json() as typeof body
   } catch {
     return Response.json({ error: 'invalid JSON body' }, { status: 400 })
+  }
+  const blocked = reconnectBlock(env)
+  if (blocked) {
+    return Response.json({ error: blocked.message, code: 'RECONNECT_REQUIRED' }, { status: 503 })
   }
   const supplied = [body.id !== undefined, !!body.url, !!body.text].filter(Boolean).length
   if (supplied !== 1) {
@@ -162,7 +196,7 @@ export async function runAnalysisRequest(
   const cachedShared = coerceLegacyShared(parseCachedJson(await cacheGet(env, sharedKey)))
   const cachedJargon = coerceLegacyJargon(parseCachedJson(await cacheGet(env, jargonKey)))
   let result: HNLensResult
-  if (env.MF_API_TOKEN) {
+  if (!isMockMode(env)) {
     try {
       result = await orchestrateAnalysis(item, articleText, itemType, env, emit, {
         kbTerms: knownTerms,
@@ -184,7 +218,7 @@ export async function runAnalysisRequest(
     }
   } else {
     result = await mockOrchestrate(item, articleText, itemType, emit)
-    markLocalFallback(result, 'MF_API_TOKEN is not configured.')
+    markLocalFallback(result, 'No Manyfold agents are connected.')
   }
 
   // A fallback the run's own time budget caused is excluded: a second attempt
@@ -192,7 +226,7 @@ export async function runAnalysisRequest(
   // would wait twice for the same degraded report. It stays uncached either way.
   const criticalFallbacks = (result.flags.fallback_agents ?? []).filter(agent =>
     CRITICAL_RESULT_AGENTS.has(agent) && !result.flags.agent_sources?.[agent]?.budget_limited)
-  if (env.MF_API_TOKEN && criticalFallbacks.length && !policy.allowCriticalFallback) {
+  if (!isMockMode(env) && criticalFallbacks.length && !policy.allowCriticalFallback) {
     // Escape to the queue worker so AnalysisJob can schedule the second durable
     // attempt. Non-critical sections may degrade without restarting the run.
     throw new Error(`Critical agents used fallback output: ${criticalFallbacks.join(', ')}.`)

@@ -50,7 +50,7 @@ src/
     analyze.ts         input resolution, job APIs, and cache orchestration
     frontpage.ts       GET /api/frontpage
     define.ts          POST /api/define
-    health.ts          GET /api/health and on-demand peer checks
+    health.ts          GET /api/health and on-demand agent probes
   crew/
     orchestrator.ts    application-owned multi-agent DAG
     mf.ts              Manyfold token mint + A2A message/stream client
@@ -88,7 +88,7 @@ report re-rendered, which made the report look like it was still loading after i
 had finished.
 
 `/api/translate` is gone with it. It was not a lookup: it called the Summariser
-peer over A2A, so every uncached article paid a second hosted-agent round trip
+agent over A2A, so every uncached article paid a second hosted-agent round trip
 before the reader could read the report in English. Two further faults died with
 it — the request capped at 80 strings with no chunking, so a long report silently
 left the overflow untranslated, and the response was accepted all-or-nothing, so
@@ -137,7 +137,7 @@ Manyfold recovery is layered:
 3. on the first job attempt, a fallback from a critical agent (`sum` or `ctx`)
    stops downstream work and schedules the second durable attempt;
 4. except when that fallback was caused by the time budget rather than by the
-   peer. Those calls are reported as `budget_limited` in `agent_sources`, and
+   agent. Those calls are reported as `budget_limited` in `agent_sources`, and
    they do not schedule a retry: a second attempt gets the same 12 minutes and
    would exhaust them the same way, making the reader wait twice for the same
    degraded report;
@@ -150,8 +150,8 @@ fixes. `agent_sources` distinguishes them:
 | Field | Meaning | Fix |
 |---|---|---|
 | `budget_limited` | the role ran out of its own time slice | rebalance the stage reserves |
-| `output_unparseable` | the peer answered, but the output could not be parsed | see below |
-| neither | transport, timeout, or an offline sandbox | the peer or the network |
+| `output_unparseable` | the agent answered, but the output could not be parsed | see below |
+| neither | transport, timeout, or an offline sandbox | the agent or the network |
 
 `output_unparseable` carries its own classification, because a cut-off answer
 and a malformed one are not the same problem: `truncated` means the role wrote
@@ -344,47 +344,85 @@ the input state with an explicit message.
 
 ## Manyfold A2A
 
-`src/crew/mf.ts` calls each role peer in three steps:
+Agents are authorized through the Manyfold **connect** handshake, not
+configured as ids. `src/connect.ts` runs it:
 
-1. mint a short-lived peer token from
-   `MF_API_URL/agent-self/a2a/peers/{targetAgentId}/token?agentId={sourceAgentId}`;
-2. send JSON-RPC A2A `message/stream` and aggregate Task status plus artifact
-   updates from its SSE response;
-3. only when that stream ends after the Task was accepted, recover the same
-   Task with at most seven sparse `tasks/get` checks. Never resubmit the prompt
-   merely because an accepted Task's stream disconnected.
+1. `POST {MANYFOLD_API_BASE_URL}/api/connect/a2a/start` returns a device code, a
+   confirmation code, and an authorization URL;
+2. the operator approves on Manyfold's own page, ticking which agents to share
+   and choosing how many days the grant lasts;
+3. `POST {MANYFOLD_API_BASE_URL}/api/connect/a2a/poll` returns one
+   single-target External client bearer per approved agent, exactly once.
 
-The source identity is `MF_AGENT_ID`; peer targets are the six `AGENT_*`
-settings. `MF_API_TOKEN` is the source identity's runtime secret and needs
-`a2a:read`. Each target agent must grant that source identity peer access.
+The device code and the agent bearers are AES-GCM sealed into `CACHE` under the
+`connect` purpose and never reach the browser. Each `rpcUrl` Manyfold returns is
+checked by `validateA2AUrl` before anything is stored: it must be https, carry
+no userinfo, and not resolve to a private or link-local host. Every outbound
+A2A request also sets `redirect: 'manual'`. Together those stop a spoofed or
+compromised handshake response from replaying a bearer to another host.
 
-Credential minting is single-flight per peer, so concurrent fan-out does not
-stampede the token endpoint. The Worker admits at most four A2A calls per
-isolate, below Cloudflare's six simultaneous outbound-connection limit.
+There are five roles: `sum`, `ctx`, `synth`, `jargon`, `comments`. `/settings`
+maps each to a connected agent; one agent may serve several.
+`resolveRuntimeEnv` flattens that map back onto `env.AGENT_*`, so the
+orchestrator reads the same fields it always did.
+
+`src/a2a.ts` speaks the protocol and nothing else; `src/crew/mf.ts` holds the
+policy. One call is:
+
+1. JSON-RPC A2A `message/stream`, aggregating Task status and artifact updates
+   from the SSE response;
+2. only if that stream ends after the Task was accepted, recover the same Task
+   with at most seven sparse `tasks/get` checks. Never resubmit the prompt
+   merely because an accepted Task's stream disconnected — the turn is already
+   being billed.
+
+`messageId` is derived from the call id rather than generated per attempt, so a
+transport retry cannot buy a second turn.
+
+The Worker admits at most four A2A calls per isolate, below Cloudflare's six
+simultaneous outbound-connection limit, and at most two against any single
+agent. The per-agent limit exists because connect makes it normal for several
+roles to share one agent, which the previous model made impossible. Permits are
+taken per-agent first and global second: the other order lets calls queued
+behind one saturated agent hold every global permit and stall an agent that
+still has capacity. The value of 2 is provisional — `scripts/probe-agent-concurrency.mjs`
+measures the real answer, and it bills real turns, so it is run by hand.
 
 Free Workers allow 50 external subrequests per invocation. Each orchestration
-therefore gives all A2A calls one shared 30-request application budget and
-reserves the other 20 for article resolution and other upstream work. The
-normal path costs one stream per agent plus a token mint when the peer
-credential is not cached, instead of one `tasks/get` request per second. Budget
-exhaustion is an explicit agent failure, so the fallback/retry policy runs
-before Cloudflare starts rejecting unrelated fetches. See Cloudflare's
+gives all A2A calls one shared 30-request budget and reserves the other 20 for
+article resolution and other upstream work. A call now costs one subrequest on
+the happy path; under the old peer-mint model it cost two. Budget exhaustion is
+an explicit agent failure, so the fallback/retry policy runs before Cloudflare
+starts rejecting unrelated fetches. See Cloudflare's
 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
 and [Wrangler limits configuration](https://developers.cloudflare.com/workers/wrangler/configuration/#limits).
 
 Calls default to two attempts with bounded exponential backoff and `Retry-After`
 support. HTTP 408/409/425/429, 5xx, network errors, timeouts, and temporary
 runtime failures retry; invalid requests and permanent protocol errors fail
-fast. A peer HTTP 401 invalidates only the short-lived peer token before
-retrying. Once a remote Task has been accepted, an application timeout does
-not submit a duplicate: the exact Task is canceled best-effort and the
-role/workflow fallback policy decides the next step. Calls use a 240-second
-per-attempt budget, based on observed hosted-agent first-token latency.
+fast. Calls use a 240-second per-attempt budget, based on observed hosted-agent
+first-token latency.
 
-Comments are ranked and token-capped locally, then sent to the reduce peer in
-one call. The previous 8–12 peer map fan-out paid the hosted runtime startup
-latency repeatedly and could exhaust the Queue invocation before verdict and
-synthesis ran.
+A credential problem is terminal, not retryable. An HTTP 401 used to invalidate
+a short-lived minted token and retry; a connect bearer is issued once, so
+there is nothing to refresh. The agent is marked unverified for `/settings` and
+the call throws `ReconnectRequiredError`, which `analysis-task.ts` recognises by
+identity so the queue's 30 retries cannot hammer a revoked credential for hours.
+A job whose critical roles hold a credential expiring within 30 minutes is
+refused before it is queued, rather than spending twelve minutes producing an
+all-fallback report.
+
+Once a remote Task has been accepted, an application timeout does not submit a
+duplicate: the exact Task is canceled best-effort and the role/workflow fallback
+policy decides the next step.
+
+Comments are ranked and token-capped locally, then sent to the reduce agent in
+one call. The previous 8–12 map fan-out paid the hosted runtime startup latency
+repeatedly and could exhaust the Queue invocation before verdict and synthesis
+ran.
+
+With no agents connected the app runs in mock mode and serves local fallback
+results. That is the state immediately after a fresh deploy.
 
 ## Analysis graph
 
