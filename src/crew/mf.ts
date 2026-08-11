@@ -53,9 +53,33 @@ const MAX_CONCURRENT_A2A_CALLS = 4
 // run by hand against staging, never in CI.
 const MAX_CONCURRENT_PER_AGENT = 2
 // message/stream normally needs one external subrequest per agent. If a stream
-// is interrupted after the Task was accepted, use a small, sparse recovery
-// schedule instead of returning to one tasks/get request per second.
-const RECOVERY_POLL_DELAYS_MS = [0, 2_000, 5_000, 10_000, 20_000, 40_000, 60_000]
+// is interrupted after the Task was accepted, recover with a backoff instead of
+// returning to one tasks/get request per second.
+//
+// The schedule is bounded by the DEADLINE, not by a request count. An earlier
+// version used a fixed seven-delay list, which covered only ~137s after a break
+// however much budget was left: a stream that died 30s into a 240s turn was
+// cancelled at 167s while the agent was still working. Backing off to a 30s
+// beat keeps the subrequest cost low (a 240s budget spends at most ~10 requests
+// against the old loop's 240) without ever giving up early.
+const RECOVERY_FIRST_DELAY_MS = 2_000
+const RECOVERY_MAX_DELAY_MS = 30_000
+// Backstop so a pathological deadline cannot exhaust the shared subrequest
+// budget on recovery alone.
+const RECOVERY_MAX_REQUESTS = 16
+
+/** The delay before recovery request `attempt`. Exported so its shape is testable. */
+export function recoveryDelayMs(attempt: number): number {
+  if (attempt <= 0) return 0
+  return Math.min(RECOVERY_MAX_DELAY_MS, RECOVERY_FIRST_DELAY_MS * (2 ** (attempt - 1)))
+}
+
+/** Total wall time recovery can cover after a stream breaks. */
+export function recoveryCoverageMs(): number {
+  let total = 0
+  for (let attempt = 0; attempt < RECOVERY_MAX_REQUESTS; attempt++) total += recoveryDelayMs(attempt)
+  return total
+}
 
 interface TraceContext {
   agent: AgentName
@@ -246,8 +270,10 @@ async function recoverTask(
   requestBudget?: A2ASubrequestBudget,
 ): Promise<Record<string, unknown>> {
   let previousState = initialState
-  for (const delay of RECOVERY_POLL_DELAYS_MS) {
+  for (let attempt = 0; attempt < RECOVERY_MAX_REQUESTS; attempt++) {
     if (Date.now() >= deadline) break
+    // First check is immediate; the task may already be finished.
+    const delay = recoveryDelayMs(attempt)
     if (delay > 0) {
       await new Promise(resolve => setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))))
     }

@@ -360,3 +360,19 @@ test('a rejected token ends the call instead of retrying a credential nothing ca
   assert.equal(manyfold.isReconnectRequiredError(error), true);
   assert.match(error.message, /Reconnect it on \/settings/);
 });
+
+test('recovery can outlast the longest call budget, not just a fixed request count', () => {
+  // Recovery follows a Task the agent already accepted and is already billing.
+  // An earlier fixed seven-delay schedule covered only ~137s however much
+  // budget was left, so a stream dying 30s into a 240s turn was cancelled at
+  // 167s while the agent was still working. The window must be bounded by the
+  // deadline, not by the request count.
+  assert.equal(manyfold.recoveryDelayMs(0), 0, 'the first check must be immediate');
+  const delays = [1, 2, 3, 4, 5, 6, 10].map(manyfold.recoveryDelayMs);
+  assert.ok(delays[0] < delays[1] && delays[1] < delays[2], 'recovery must back off');
+  assert.ok(Math.max(...delays) <= 30_000, 'backoff must stay on a 30s beat');
+  assert.ok(
+    manyfold.recoveryCoverageMs() >= 240_000,
+    `recovery covers ${manyfold.recoveryCoverageMs()}ms, less than the 240s default call budget`,
+  );
+});
