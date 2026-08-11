@@ -1,3 +1,4 @@
+import { isReconnectRequiredError } from '../crew/mf'
 import type { Env, HNLensResult, SSEEvent } from '../schema'
 import { runAnalysisRequest } from '../routes/analyze'
 import type { AnalysisClaim, AnalysisQueueMessage } from './analysis-job'
@@ -9,6 +10,10 @@ function sleep(milliseconds: number): Promise<void> {
 }
 
 function isRetryable(error: unknown): boolean {
+  // Checked by identity, not by pattern: with max_retries = 30 on the queue, a
+  // revoked or expired authorization would otherwise be re-attempted for hours,
+  // and no number of retries can re-issue a credential only the operator can.
+  if (isReconnectRequiredError(error)) return false
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase()
   if (/\b(400|401|403|404|invalid input|validation|schema|permission)\b/.test(message)) return false
   return true

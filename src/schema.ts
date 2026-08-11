@@ -173,7 +173,7 @@ export interface SSEError  {
   event: 'error'
   agent?: AgentName
   message: string
-  kind?: 'sandbox_unavailable' | 'agent_error' | 'orchestration_error'
+  kind?: 'sandbox_unavailable' | 'agent_error' | 'orchestration_error' | 'reconnect_required'
 }
 export interface SSEAgentTrace {
   event: 'agent_trace'
@@ -293,13 +293,6 @@ export interface Env {
   /** 'production' turns on the https-only and private-address checks in validateA2AUrl. */
   ENVIRONMENT?: string
   SPEC_VERSION: string
-  // Peer-mint era configuration. Removed once src/crew/mf.ts and the mock-mode
-  // switches move over to the connect runtime; kept until then so the tree
-  // typechecks at every commit in this series.
-  MF_API_TOKEN?: string
-  MF_API_URL?: string
-  MF_AGENT_ID?: string
-  AGENT_COMMENT_MAP?: string
   // Agent ids resolved from the connect role map by resolveRuntimeEnv. They are
   // plain strings so the orchestrator keeps reading env.AGENT_* unchanged; only
   // their provenance changed, from wrangler.toml vars to connected agents.
