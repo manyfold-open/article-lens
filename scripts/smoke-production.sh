@@ -4,6 +4,13 @@
 set -uo pipefail
 BASE="${1:-https://mf-article-lens.netmind-ai.workers.dev}"
 ACCESS_PASSCODE="${ARTICLE_ACCESS_PASSCODE:-}"
+# Whether the deployment is expected to enforce the visitor access gate.
+# The gate is currently bypassed on purpose (see "Temporarily disable the
+# access-code gate"), and this script used to assert unconditionally that it
+# redirected, so every deploy since then has been red on a check that was
+# simply out of date. Stating the expectation here keeps the assertion strict
+# in both directions: flip this to 1 in the same commit that restores the gate.
+ACCESS_GATE_ENFORCED="${ACCESS_GATE_ENFORCED:-0}"
 fails=0
 pass(){ echo "  ✓ $1"; }
 fail(){ echo "  ✗ $1"; fails=$((fails+1)); }
@@ -11,7 +18,15 @@ fail(){ echo "  ✗ $1"; fails=$((fails+1)); }
 echo "smoke: $BASE"
 
 gate=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' "$BASE/")
-echo "$gate" | grep -qE '^302 .*/access\?next=' && pass "access: gate enabled" || fail "access: expected redirect ($gate)"
+if [ "$ACCESS_GATE_ENFORCED" = "1" ]; then
+  echo "$gate" | grep -qE '^302 .*/access\?next=' \
+    && pass "access: gate enforced" \
+    || fail "access: expected a redirect to /access ($gate)"
+else
+  echo "$gate" | grep -qE '^200 ' \
+    && pass "access: gate bypassed as configured" \
+    || fail "access: expected 200 while the gate is bypassed ($gate)"
+fi
 
 access_status=$(curl -sS --max-time 30 "$BASE/api/access/status")
 if echo "$access_status" | grep -q '"configured":true' \
@@ -49,7 +64,10 @@ df=$(curl -s --max-time 60 -b "$cookie_jar" -X POST "$BASE/api/define" -H 'Conte
 echo "$df" | grep -q '"explain"' && pass "define: returns explain" || fail "define: bad ($df)"
 
 # 3. health snapshot
-hb=$(curl -s --max-time 90 -b "$cookie_jar" "$BASE/api/health")
+# ?live=1 is load-bearing. /api/health serves a cached snapshot, so a deploy
+# that dropped every agent still reported the previous run's healthy counts and
+# this gate passed against state that no longer existed.
+hb=$(curl -s --max-time 120 -b "$cookie_jar" "$BASE/api/health?live=1")
 up=$(echo "$hb" | grep -oE '"up":[0-9]+' | grep -oE '[0-9]+' | head -1)
 total=$(echo "$hb" | grep -oE '"total":[0-9]+' | grep -oE '[0-9]+' | head -1)
 echo "  health: up=${up:-?}/${total:-?}"
